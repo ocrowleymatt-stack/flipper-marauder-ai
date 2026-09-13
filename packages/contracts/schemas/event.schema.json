@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-vnext.local/schemas/event.json",
+  "title": "Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "sequence", "occurredAt", "correlationId", "projectId", "type", "payload"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1 },
+    "projectId": { "type": "string", "minLength": 1 },
+    "jobId": { "type": "string" },
+    "type": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+:[a-z][a-z0-9._-]+$" },
+    "payload": { "type": "object" },
+    "provenance": { "$ref": "./provenance.schema.json" }
+  }
+}

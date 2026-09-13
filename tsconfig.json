@@ -1,0 +1,21 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/contracts" },
+    { "path": "packages/plugin-sdk" },
+    { "path": "packages/provider-spi" },
+    { "path": "packages/storage" },
+    { "path": "packages/eval" },
+    { "path": "services/nexus" },
+    { "path": "services/broker" },
+    { "path": "services/edge" },
+    { "path": "dungeons/investigation" },
+    { "path": "dungeons/writing" },
+    { "path": "dungeons/research" },
+    { "path": "dungeons/website-studio" },
+    { "path": "dungeons/music" },
+    { "path": "dungeons/quantum" },
+    { "path": "dungeons/device-marauder" },
+    { "path": "apps/shell" }
+  ]
+}

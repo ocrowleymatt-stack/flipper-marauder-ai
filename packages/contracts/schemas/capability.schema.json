@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-vnext.local/schemas/capability.json",
+  "title": "Capability",
+  "description": "Attenuated grant. Roles and groups do not belong on this object.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "issuer",
+    "subject",
+    "action",
+    "resource",
+    "notBefore",
+    "expiresAt",
+    "caveats",
+    "proof"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "issuer": { "type": "string", "minLength": 1 },
+    "subject": { "type": "string", "minLength": 1 },
+    "action": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]*:[a-z][a-z0-9._-]*$"
+    },
+    "resource": { "type": "string", "minLength": 1 },
+    "notBefore": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "caveats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string" },
+          "value": {}
+        }
+      }
+    },
+    "proof": { "type": "string", "minLength": 1 }
+  },
+  "not": {
+    "anyOf": [
+      { "required": ["roles"] },
+      { "required": ["groups"] },
+      { "required": ["role"] },
+      { "required": ["authentikGroups"] }
+    ]
+  }
+}

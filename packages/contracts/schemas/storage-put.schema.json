@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-vnext.local/schemas/storage-put.json",
+  "title": "StoragePutRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bytesBase64", "provenance", "mediaType"],
+  "properties": {
+    "bytesBase64": { "type": "string", "minLength": 1 },
+    "mediaType": { "type": "string", "minLength": 1 },
+    "provenance": { "$ref": "./provenance.schema.json" }
+  },
+  "not": {
+    "anyOf": [
+      { "required": ["path"] },
+      { "required": ["filesystemPath"] },
+      { "required": ["filename"] }
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "atlas-vnext",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Atlas vNext clean-room rebuild — design gate skeleton",
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "dungeons/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "node --import tsx --test tests/architecture/*.test.ts tests/contracts/*.test.ts packages/contracts/test/*.test.ts services/nexus/test/*.test.ts services/broker/test/*.test.ts",
+    "typecheck": "tsc -b --pretty",
+    "lint": "tsc -b --pretty",
+    "build": "tsc -b --pretty"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2"
+  }
+}

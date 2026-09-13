@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-vnext.local/schemas/job.json",
+  "title": "Job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "projectId",
+    "type",
+    "status",
+    "idempotencyKey",
+    "createdAt",
+    "updatedAt",
+    "correlationId"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "projectId": { "type": "string", "minLength": 1 },
+    "type": { "type": "string", "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9._-]*$" },
+    "status": {
+      "type": "string",
+      "enum": ["queued", "leased", "running", "suspended", "completed", "failed", "cancelled"]
+    },
+    "idempotencyKey": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "minLength": 1 },
+    "leaseOwner": { "type": "string" },
+    "leaseExpiresAt": { "type": "string", "format": "date-time" },
+    "checkpoint": { "$ref": "./storage-address.schema.json" },
+    "input": { "$ref": "./storage-address.schema.json" },
+    "result": { "$ref": "./storage-address.schema.json" },
+    "error": { "type": "string" },
+    "progress": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}

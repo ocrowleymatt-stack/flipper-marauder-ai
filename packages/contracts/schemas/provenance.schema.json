@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-vnext.local/schemas/provenance.json",
+  "title": "Provenance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "retrievedAt", "method", "evidentialStatus"],
+  "properties": {
+    "source": { "type": "string", "minLength": 1 },
+    "retrievedAt": { "type": "string", "format": "date-time" },
+    "method": {
+      "type": "string",
+      "enum": ["http", "tool", "model", "human", "cas", "device", "derived"]
+    },
+    "evidentialStatus": {
+      "type": "string",
+      "enum": ["primary", "secondary", "intelligence_lead", "derived", "unavailable"]
+    },
+    "contentAddress": { "$ref": "./storage-address.schema.json" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

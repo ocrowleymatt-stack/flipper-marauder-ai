@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-vnext.local/schemas/execute-request.json",
+  "title": "BrokerExecuteRequest",
+  "description": "The only legal side-effect entry. Role/group fields are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["intent"],
+  "properties": {
+    "intent": { "$ref": "./execution-intent.schema.json" }
+  }
+}

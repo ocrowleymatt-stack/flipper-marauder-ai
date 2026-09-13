@@ -1,0 +1,68 @@
+{
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "dungeons/*",
+    "apps/*"
+  ],
+  "nexus": {
+    "package": "@atlas-vnext/nexus",
+    "src": "services/nexus/src",
+    "maxProdLines": 500,
+    "maxFiles": 8,
+    "allowedDependencies": ["@atlas-vnext/contracts"]
+  },
+  "packages": {
+    "@atlas-vnext/contracts": { "mayDependOn": [] },
+    "@atlas-vnext/plugin-sdk": { "mayDependOn": ["@atlas-vnext/contracts"] },
+    "@atlas-vnext/provider-spi": { "mayDependOn": ["@atlas-vnext/contracts"] },
+    "@atlas-vnext/storage": { "mayDependOn": ["@atlas-vnext/contracts"] },
+    "@atlas-vnext/eval": { "mayDependOn": ["@atlas-vnext/contracts"] },
+    "@atlas-vnext/nexus": { "mayDependOn": ["@atlas-vnext/contracts"] },
+    "@atlas-vnext/broker": {
+      "mayDependOn": [
+        "@atlas-vnext/contracts",
+        "@atlas-vnext/plugin-sdk",
+        "@atlas-vnext/provider-spi",
+        "@atlas-vnext/storage"
+      ]
+    },
+    "@atlas-vnext/edge": { "mayDependOn": ["@atlas-vnext/contracts"] },
+    "@atlas-vnext/shell": { "mayDependOn": ["@atlas-vnext/contracts"] },
+    "@atlas-vnext/dungeon-investigation": {
+      "mayDependOn": ["@atlas-vnext/contracts", "@atlas-vnext/plugin-sdk"]
+    },
+    "@atlas-vnext/dungeon-writing": {
+      "mayDependOn": ["@atlas-vnext/contracts", "@atlas-vnext/plugin-sdk"]
+    },
+    "@atlas-vnext/dungeon-research": {
+      "mayDependOn": ["@atlas-vnext/contracts", "@atlas-vnext/plugin-sdk"]
+    },
+    "@atlas-vnext/dungeon-website-studio": {
+      "mayDependOn": ["@atlas-vnext/contracts", "@atlas-vnext/plugin-sdk"]
+    },
+    "@atlas-vnext/dungeon-music": {
+      "mayDependOn": ["@atlas-vnext/contracts", "@atlas-vnext/plugin-sdk"]
+    },
+    "@atlas-vnext/dungeon-quantum": {
+      "mayDependOn": ["@atlas-vnext/contracts", "@atlas-vnext/plugin-sdk"]
+    },
+    "@atlas-vnext/dungeon-device-marauder": {
+      "mayDependOn": ["@atlas-vnext/contracts", "@atlas-vnext/plugin-sdk"]
+    }
+  },
+  "forbiddenDependencyNames": [
+    "atlas-mountain",
+    "@atlas/shared",
+    "@atlas/nexus",
+    "@atlas-mountain/nexus"
+  ],
+  "forbiddenImportSubstrings": [
+    "atlas-mountain",
+    "/atlas-mountain/",
+    "@atlas/shared",
+    "services/nexus/src/providers"
+  ],
+  "brokerOnlyPackages": ["@atlas-vnext/provider-spi"],
+  "dungeonPackagePrefix": "@atlas-vnext/dungeon-"
+}

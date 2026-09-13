@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-vnext.local/schemas/storage-address.json",
+  "title": "ContentAddress",
+  "description": "Content-addressed blob locator. Path-based locators are illegal at the boundary.",
+  "type": "string",
+  "pattern": "^cas:sha256:[0-9a-f]{64}$"
+}

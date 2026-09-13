@@ -1,0 +1,14 @@
+{
+  "maxProdLines": 500,
+  "maxFiles": 8,
+  "forbiddenIdentifiers": [
+    "configureProviders",
+    "FailoverProviderAdapter",
+    "jobStore",
+    "createJob",
+    "runpod",
+    "openai",
+    "anthropic",
+    "ollama"
+  ]
+}

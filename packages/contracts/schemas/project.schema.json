@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-vnext.local/schemas/project.json",
+  "title": "Project",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "tenantId", "name", "createdAt", "settingsSchemaVersion", "settings"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "tenantId": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "settingsSchemaVersion": { "type": "integer", "minimum": 1 },
+    "settings": { "type": "object" }
+  }
+}

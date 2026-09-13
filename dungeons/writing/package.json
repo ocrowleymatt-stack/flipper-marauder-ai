@@ -1,0 +1,11 @@
+{
+  "name": "@atlas-vnext/dungeon-writing",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": { "types": "./src/index.ts", "import": "./src/index.ts" } },
+  "dependencies": {
+    "@atlas-vnext/contracts": "0.0.0",
+    "@atlas-vnext/plugin-sdk": "0.0.0"
+  }
+}

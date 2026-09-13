@@ -1,0 +1,104 @@
+openapi: 3.1.0
+info:
+  title: Atlas vNext Edge API
+  version: 0.0.0
+  description: |
+    Stub OpenAPI for the design gate. Implementations land in later gates.
+    Schemas live in packages/contracts/schemas/.
+servers:
+  - url: /v1
+paths:
+  /intents:
+    post:
+      summary: Resolve a target through Nexus and hand off to the broker
+      operationId: createIntent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/execution-intent.schema.json
+      responses:
+        "202":
+          description: Accepted; subscribe to project events
+  /jobs:
+    post:
+      summary: Enqueue a durable job
+      operationId: enqueueJob
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/job.schema.json
+  /jobs/{id}:
+    get:
+      summary: Job snapshot (prefer event replay for progress)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Snapshot
+          content:
+            application/json:
+              schema:
+                $ref: ../schemas/job.schema.json
+  /projects/{id}/events:
+    get:
+      summary: SSE replay from Last-Event-ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: text/event-stream
+  /storage:
+    post:
+      summary: Put bytes; returns a content address
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/storage-put.schema.json
+      responses:
+        "201":
+          description: Stored
+  /storage/{address}:
+    get:
+      summary: Get bytes by content address
+      parameters:
+        - in: path
+          name: address
+          required: true
+          schema:
+            $ref: ../schemas/storage-address.schema.json
+      responses:
+        "200":
+          description: Bytes
+  /capabilities/grants:
+    post:
+      summary: Human grant that resumes a suspended job
+      responses:
+        "201":
+          description: Granted
+  /health:
+    get:
+      summary: Liveness
+      responses:
+        "200":
+          description: OK
+  /doctor:
+    get:
+      summary: Sanitised readiness (no secrets)
+      responses:
+        "200":
+          description: Doctor report

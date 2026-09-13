@@ -1,0 +1,22 @@
+{
+  "name": "@atlas/execution",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@atlas/contracts": "0.1.0"
+  },
+  "devDependencies": {
+    "@atlas/nexus": "0.1.0",
+    "@atlas/testing": "0.1.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

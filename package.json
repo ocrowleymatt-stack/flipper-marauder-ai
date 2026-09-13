@@ -1,0 +1,27 @@
+{
+  "name": "atlas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Atlas vNext: local-first AI workbench. Thin Nexus router, separate execution, plugin dungeons.",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "platform/*",
+    "packages/*",
+    "dungeons/*",
+    "runtimes/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspace @atlas/contracts --workspace @atlas/nexus --workspace @atlas/execution && bash ops/backup/check-restore-contract.sh && bash ops/deploy/check-deploy-contract.sh",
+    "test:nexus": "npm run test --workspace @atlas/nexus --workspace @atlas/execution"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

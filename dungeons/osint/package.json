@@ -1,0 +1,7 @@
+{
+  "name": "@atlas/dungeon-osint",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Stub. Domain logic does not belong in Nexus.",
+  "type": "module"
+}

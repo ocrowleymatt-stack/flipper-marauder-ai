@@ -1,0 +1,5 @@
+{
+  "// note": "Solution-style root config. It owns no files; `tsc -b` walks the references below in dependency order.",
+  "files": [],
+  "references": [{ "path": "./packages/contracts" }]
+}

@@ -1,0 +1,26 @@
+{
+  "// note": [
+    "Typechecks test sources. Deliberately NOT part of the `tsc -b` solution:",
+    "test files live outside each package's rootDir, and a composite project",
+    "cannot both keep `rootDir: src` and own files above it. Cross-package",
+    "imports here resolve through the built declarations in dist/, exactly as a",
+    "real consumer would see them, which is why `typecheck` runs `tsc -b` first."
+  ],
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "noEmit": true
+  },
+  "include": [
+    "packages/*/test/**/*.ts",
+    "apps/*/test/**/*.ts",
+    "modules/*/test/**/*.ts",
+    "tests/architecture/src/**/*.ts",
+    "tests/architecture/test/**/*.ts",
+    "vitest.config.ts"
+  ],
+  "exclude": ["**/node_modules/**", "**/dist/**", "tests/architecture/fixtures/**"]
+}

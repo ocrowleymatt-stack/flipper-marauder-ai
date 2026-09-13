@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+pnpm-lock.yaml
+packages/contracts/schema/
+docs/
+README.md
+ARCHITECTURE.md
+tests/architecture/fixtures/
+*.tsbuildinfo

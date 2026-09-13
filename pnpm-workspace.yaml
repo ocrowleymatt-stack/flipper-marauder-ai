@@ -1,0 +1,10 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+  - 'modules/*'
+  - 'tests/*'
+
+# pnpm 10 blocks lifecycle scripts by default. esbuild (via vitest) needs its
+# install script to place the platform binary; nothing else in the tree does.
+onlyBuiltDependencies:
+  - esbuild

@@ -1,0 +1,40 @@
+{
+  "name": "atlas-vnext",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Atlas vNext — clean-room rebuild. Monorepo skeleton, contract surface, and architecture enforcement.",
+  "packageManager": "pnpm@10.33.3",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
+    "clean": "tsc -b --clean",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run --project unit",
+    "test:watch": "vitest --project unit",
+    "test:arch": "vitest run --project arch",
+    "contracts:generate": "pnpm --filter @atlas/contracts run generate",
+    "contracts:check": "pnpm --filter @atlas/contracts run check",
+    "depcruise": "depcruise apps packages modules tests --config .dependency-cruiser.cjs",
+    "depcruise:graph": "depcruise apps packages modules --config .dependency-cruiser.cjs --output-type dot",
+    "ci": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run contracts:check && pnpm run test:arch"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.20.2",
+    "dependency-cruiser": "^18.2.0",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.0",
+    "vitest": "^3.2.7"
+  }
+}

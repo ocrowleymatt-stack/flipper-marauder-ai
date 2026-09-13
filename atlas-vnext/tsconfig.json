@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node"],
+    "paths": {
+      "@atlas-vnext/contracts": ["./packages/contracts/src/index.ts"],
+      "@atlas-vnext/nexus": ["./platform/nexus/src/index.ts"],
+      "@atlas-vnext/execution": ["./platform/execution/src/index.ts"]
+    }
+  },
+  "include": [
+    "packages/**/*.ts",
+    "platform/**/*.ts",
+    "dungeons/**/*.ts",
+    "tests/**/*.ts",
+    "vitest.config.ts"
+  ]
+}

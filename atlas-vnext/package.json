@@ -1,0 +1,27 @@
+{
+  "name": "atlas-vnext",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Atlas vNext design-gate: contracts, thin Nexus, execution interfaces, and architecture-boundary tests.",
+  "workspaces": [
+    "packages/*",
+    "platform/*",
+    "dungeons/*"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:boundaries": "vitest run tests/architecture",
+    "test:nexus": "vitest run platform/nexus",
+    "test:execution": "vitest run platform/execution",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

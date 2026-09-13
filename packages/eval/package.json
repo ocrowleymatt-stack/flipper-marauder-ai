@@ -1,0 +1,9 @@
+{
+  "name": "@atlas/eval",
+  "version": "0.0.0-design-gate",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@atlas/contracts": "0.0.0-design-gate"
+  }
+}

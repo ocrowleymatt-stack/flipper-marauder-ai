@@ -1,0 +1,11 @@
+{
+  "name": "@atlas/domain-website-studio",
+  "version": "0.0.0-design-gate",
+  "private": true,
+  "type": "module",
+  "description": "Website Studio plugin boundary; no functionality yet.",
+  "dependencies": {
+    "@atlas/contracts": "0.0.0-design-gate",
+    "@atlas/plugin-sdk": "0.0.0-design-gate"
+  }
+}

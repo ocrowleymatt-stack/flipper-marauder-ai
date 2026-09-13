@@ -1,0 +1,11 @@
+{
+  "name": "@atlas/domain-investigation",
+  "version": "0.0.0-design-gate",
+  "private": true,
+  "type": "module",
+  "description": "Reference domain for proving the plugin boundary; no functionality yet.",
+  "dependencies": {
+    "@atlas/contracts": "0.0.0-design-gate",
+    "@atlas/plugin-sdk": "0.0.0-design-gate"
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas.local/contracts/v1",
+  "title": "Atlas vNext cross-boundary contracts",
+  "$defs": {
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer", "sources", "createdAt", "correlationId", "derivationIds", "evidenceStatus"],
+      "properties": {
+        "producer": {
+          "type": "object",
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": { "enum": ["provider", "tool", "job", "plugin", "user"] },
+            "id": { "type": "string", "minLength": 1 },
+            "version": { "type": "string" }
+          }
+        },
+        "sources": { "type": "array", "items": { "type": "object", "required": ["uri"] } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "correlationId": { "type": "string", "minLength": 1 },
+        "derivationIds": { "type": "array", "items": { "type": "string" } },
+        "evidenceStatus": { "enum": ["observed", "reported", "inferred", "generated", "unverified"] }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectId", "tenantId", "name", "createdAt", "updatedAt", "version"],
+      "properties": {
+        "projectId": { "type": "string", "minLength": 1 },
+        "tenantId": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "job": {
+      "type": "object",
+      "required": [
+        "jobId", "idempotencyKey", "jobType", "handlerVersion", "tenantId",
+        "projectId", "correlationId", "requestedBy", "requiredCapabilities",
+        "state", "input", "attempt", "createdAt", "updatedAt"
+      ],
+      "properties": {
+        "jobId": { "type": "string", "minLength": 1 },
+        "idempotencyKey": { "type": "string", "minLength": 1 },
+        "jobType": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$" },
+        "handlerVersion": { "type": "string", "minLength": 1 },
+        "tenantId": { "type": "string", "minLength": 1 },
+        "projectId": { "type": "string", "minLength": 1 },
+        "correlationId": { "type": "string", "minLength": 1 },
+        "requestedBy": { "type": "string", "minLength": 1 },
+        "requiredCapabilities": { "type": "array", "items": { "type": "string" } },
+        "state": { "enum": ["queued", "leased", "running", "suspended", "succeeded", "failed", "cancelled", "expired"] },
+        "input": {},
+        "attempt": { "type": "integer", "minimum": 0 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lease": { "type": "object", "required": ["owner", "expiresAt", "heartbeatAt"] },
+        "suspension": { "type": "object", "required": ["kind", "requestId", "since"] }
+      }
+    },
+    "event": {
+      "type": "object",
+      "required": ["eventId", "eventType", "occurredAt", "tenantId", "projectId", "correlationId", "producer", "payload"],
+      "properties": {
+        "eventId": { "type": "string", "minLength": 1 },
+        "eventType": {
+          "enum": [
+            "job.state.changed", "job.progress", "permission.requested",
+            "permission.decided", "artifact.published", "tool.completed"
+          ]
+        },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "tenantId": { "type": "string", "minLength": 1 },
+        "projectId": { "type": "string", "minLength": 1 },
+        "correlationId": { "type": "string", "minLength": 1 },
+        "jobId": { "type": "string" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "producer": { "type": "object", "required": ["id", "version"] },
+        "payload": {},
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "digest", "size", "mediaType", "provenance"],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "size": { "type": "integer", "minimum": 0 },
+        "mediaType": { "type": "string", "minLength": 1 },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "capabilityGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grantId", "principalId", "tenantId", "capabilities", "constraints", "issuedAt"],
+      "properties": {
+        "grantId": { "type": "string", "minLength": 1 },
+        "principalId": { "type": "string", "minLength": 1 },
+        "tenantId": { "type": "string", "minLength": 1 },
+        "capabilities": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$" } },
+        "constraints": { "type": "object" },
+        "issuedAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@atlas/domain-music",
+  "version": "0.0.0-design-gate",
+  "private": true,
+  "type": "module",
+  "description": "Music plugin boundary; no functionality yet.",
+  "dependencies": {
+    "@atlas/contracts": "0.0.0-design-gate",
+    "@atlas/plugin-sdk": "0.0.0-design-gate"
+  }
+}

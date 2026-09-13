@@ -1,0 +1,15 @@
+{
+  "name": "@atlas/broker",
+  "version": "0.0.0-design-gate",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@atlas/contracts": "0.0.0-design-gate",
+    "@atlas/plugin-sdk": "0.0.0-design-gate",
+    "@atlas/provider-spi": "0.0.0-design-gate",
+    "@atlas/storage": "0.0.0-design-gate"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

@@ -6,10 +6,12 @@ its test *cases*, but no file is copied wholesale and no legacy module boundary
 is treated as authoritative. The governing question for every design choice is:
 *what is the smallest boring structure that preserves the behaviour?*
 
-Companion documents: `docs/CAPABILITY-CENSUS.md` (what exists and what to
-keep), `docs/DOMAIN-BOUNDARIES.md` (who owns what), `docs/STORAGE-MODEL.md`
-(how state persists), `docs/JOBS-AND-EVENTS.md` (how background work runs),
-`docs/NEXUS-CONTRACT.md` (the router/broker contract + test cases),
+Companion documents: `docs/REPOSITORY-AUDIT.md` (exact audit scope and
+non-Mountain discoveries), `docs/CAPABILITY-CENSUS.md` (what exists),
+`docs/PORT-REDESIGN-DISCARD.md` (explicit decisions),
+`docs/DOMAIN-BOUNDARIES.md` (who owns what), `docs/STORAGE-MODEL.md` (how
+state persists), `docs/JOBS-AND-EVENTS.md` (how background work runs),
+`docs/NEXUS-CONTRACT.md` (the router/broker contract + test cases), and
 `docs/MIGRATION-PLAN.md` (how we get there).
 
 ---
@@ -170,8 +172,14 @@ atlas-vnext/
     plugin-sdk/       # dungeon/skill/tool plugin contract + UI contract types
     storage/          # content-addressed store + durable-state idiom
     eval/             # routing/eval harness (new scope)
+  domains/
+    investigation/    # reference plugin; isolated behind contracts + plugin-sdk
+    writing/ quantum/ music/ website-studio/
   tests/
     nexus-contract/   # contract tests (node:test scaffold, see §8)
+    contracts/        # schema invariants
+    architecture/     # dependency/import boundary enforcement
+  architecture-boundaries.json
   deploy/
     hetzner/ runpod/  # ONE transactional deployer + canary + verify
 ```
@@ -209,6 +217,10 @@ tested restore (including key escrow — the census's sharpest gap).
   `docs/MIGRATION-PLAN.md`).
 - **Contract gates as tests.** Every `check-*contract.mjs` shell ritual becomes
   a runnable test or it dies.
+- **Architecture boundary tests.** `architecture-boundaries.json` is executable
+  policy: Nexus has only the contracts dependency; domains may depend only on
+  contracts and plugin-sdk; broker cannot depend on Nexus; vendor/domain/
+  storage implementation imports are forbidden from Nexus.
 - **Evaluation harness** (`packages/eval`) for routing intent classification —
   the keyword heuristics are not ported without measurement.
 

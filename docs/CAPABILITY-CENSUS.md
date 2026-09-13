@@ -1,17 +1,18 @@
 # Atlas vNext — Capability Census
 
-Behavioural reference: `ocrowleymatt-stack/atlas-mountain` (local checkout at
-`../atlas-mountain`, branch `main` @ `5cc7a96`), inspected read-only. Atlas
-Mountain is a **behavioural reference, not an architectural template**: this
-census records *what works and what must be preserved*, so vNext can re-derive
-clean boundaries instead of copying files.
+Behavioural reference: `ocrowleymatt-stack/atlas-mountain`, branch `main` at
+`5cc7a96`, from a prior read-only local audit. Atlas Mountain was not reachable
+from the current run, so this retained evidence was not silently presented as
+a fresh checkout. Atlas Mountain is a **behavioural reference, not an
+architectural template**: this census records *what works and what must be
+preserved*, so vNext can re-derive clean boundaries instead of copying files.
 
-Second workspace root examined: `flipper-marauder-ai` is **this** repository
-(Atlas vNext, greenfield, `README.md` only at census time). No other local
-repositories exist — `/agent` contains only `repos/atlas-mountain` and
-`repos/flipper-marauder-ai`. Caspa (the separate Writing application) is **not**
-locally present; everything known about it comes from references inside
-atlas-mountain. No network access to GitHub was assumed or required.
+`flipper-marauder-ai` is **this** repository (Atlas vNext, greenfield,
+`README.md` only at census time) and is the only repository under `/workspace`.
+The current run also audited every repository exposed by the GitHub owner,
+including Caspa, ocrowley-commons, Life-os, Shakespeare-, craigs-navigator,
+TheBigBrother, handsy-ios, and the empty handy-ios. Exact refs and the important
+capabilities found outside Atlas Mountain are in `REPOSITORY-AUDIT.md`.
 
 Legend for the **Verdict** column used in every section:
 
@@ -176,7 +177,12 @@ unless stated otherwise.
 
 **Where it lives (local).** Writing Dungeon is the largest in-repo domain: `services/nexus/src/writing/` (15 files: `commission-store`, `commission-runner`, `commission-prompt`, `headless-worker`, `section-store`, `stylometry`, `claim-ledger`, `factuality-gate`, `evidence-library`, `research-policy`, `reader-journey`, `reader-state`, `production-specs`, `publication-lock`) + tools (`writing-commission`, `writing-sections`, `writing-bulk`, `writing-analysis`, `writing-style`, `writing-psychology`) + dungeon plugin (`dungeons/writing.ts`) + desktop `features/writing/` + skill `skills/writing-dungeon/`. Migrations `0013/0014`.
 
-**Caspa (external).** Not locally present. Per `docs/PROJECT_STATUS.md` + `docs/COMPUTE_FABRIC.md`: Caspa is a separate repo/app holding the *literary intelligence*; it already consumes the Nexus recovery fabric; direction is to keep Caspa-specific craft while removing duplicated infrastructure/routing.
+**Caspa (external).** The separate repository was audited read-only at
+`55ea40911eee5e62d568f0e22f9c74fab1279229`. It contains the literary
+intelligence plus checkpointed commission jobs, publication QA holds, result
+checksums, and a Nexus recovery client. These confirm the direction already
+described by Mountain: keep Caspa-specific craft while removing duplicated
+infrastructure/routing. See `REPOSITORY-AUDIT.md` for direct source paths.
 
 **Strongest implementation.** The durable ideas: commissions as long-running jobs (`commission-store` + `headless-worker`), claim ledger + factuality gate (every assertion traceable), evidence library, publication lock. These are provenance-before-prose — directly aligned with vNext's provenance requirement.
 
@@ -186,7 +192,7 @@ unless stated otherwise.
 
 **Tests worth preserving.** `writing-commission*.test.ts`, `writing-sections.test.ts`, `writing-bulk.test.ts`, `writing-evidence.test.ts`, `writing-stylometry.test.ts`, `writing-headless-worker.test.ts`, `claim-ledger.test.ts`, `publication-lock.test.ts`, `production-specs.test.ts`, `reader-journey-audit.test.ts`, `reader-state.test.ts`.
 
-**Verdict: Port (provenance constructs) / Redesign (execution onto durable jobs).** Claim ledger, factuality gate, evidence library and publication lock become vNext project-level primitives; commission execution moves onto the single durable-job substrate. No Caspa code is copied (none is local); the interface direction is that Caspa later consumes vNext jobs/events like it consumes the recovery fabric today.
+**Verdict: Port (provenance constructs) / Redesign (execution onto durable jobs).** Claim ledger, factuality gate, evidence library and publication lock become vNext project-level primitives; commission execution moves onto the single durable-job substrate. No Caspa code is copied; the interface direction is that Caspa later consumes vNext jobs/events like it consumes the recovery fabric today.
 
 ---
 

@@ -1,0 +1,9 @@
+{
+  "name": "@atlas/contracts",
+  "version": "0.0.0-design-gate",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

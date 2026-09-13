@@ -1,0 +1,12 @@
+{
+  "name": "@atlas/plugin-sdk",
+  "version": "0.0.0-design-gate",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@atlas/contracts": "0.0.0-design-gate"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

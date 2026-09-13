@@ -4,9 +4,16 @@
   "private": true,
   "description": "Atlas vNext — greenfield rebuild. Atlas Mountain is a behavioural reference, not an architectural template.",
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*",
+    "domains/*"
+  ],
   "scripts": {
-    "test": "node --test tests/nexus-contract/contract.test.mjs",
-    "test:contract": "node --test tests/nexus-contract/contract.test.mjs"
+    "test": "node --test tests/**/*.test.mjs",
+    "test:architecture": "node --test tests/architecture/*.test.mjs",
+    "test:contracts": "node --test tests/contracts/*.test.mjs tests/nexus-contract/*.test.mjs"
   },
   "engines": {
     "node": ">=22"

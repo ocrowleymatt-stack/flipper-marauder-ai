@@ -11,8 +11,12 @@ increments after it.
 ## 0. Design gate (this change — complete when merged)
 
 - [x] Repository census (`docs/CAPABILITY-CENSUS.md`)
+- [x] Exact repository audit and non-Mountain findings (`docs/REPOSITORY-AUDIT.md`)
+- [x] Port/redesign/discard matrix (`docs/PORT-REDESIGN-DISCARD.md`)
 - [x] Architecture + boundaries + storage + jobs/events + Nexus contract (this set)
-- [x] Nexus contract test scaffold (`tests/nexus-contract/`, dependency-free)
+- [x] Monorepo package skeleton and cross-boundary contract types/schemas
+- [x] Nexus, schema, and architecture-boundary test scaffolds (dependency-free)
+- [x] CI gate for all design-gate tests
 - Rule from here on: every port moves **cases first, code second** — the
   legacy test expectation lands in the owning vNext package before any
   implementation, and passes against doubles where the module does not exist yet.

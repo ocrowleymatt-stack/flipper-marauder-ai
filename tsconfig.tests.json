@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "noEmit": true,
+    "customConditions": ["atlas-source"]
+  },
+  "include": [
+    "apps/*/src/**/*.test.ts",
+    "platform/*/src/**/*.test.ts",
+    "dungeons/*/src/**/*.test.ts",
+    "runtimes/*/src/**/*.test.ts",
+    "packages/*/src/**/*.test.ts",
+    "scripts/**/*.test.ts",
+    "vitest.config.ts"
+  ]
+}

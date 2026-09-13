@@ -1,0 +1,22 @@
+{
+  "name": "@atlas/testing",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dependency-free test helpers: fakeClock, collect, deferred.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "atlas-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.. --project packages packages/testing"
+  }
+}

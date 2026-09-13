@@ -1,0 +1,22 @@
+{
+  "name": "@atlas/platform-observability",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Traces, metrics, structured logs and evaluation hooks. Leaf package that every other platform package may depend on.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "atlas-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.. --project platform platform/observability"
+  }
+}

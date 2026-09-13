@@ -1,0 +1,22 @@
+{
+  "name": "@atlas/platform-execution",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Execution broker: runs tool calls, shell, browser and device actions under explicit capability grants, isolated from model routing.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "atlas-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.. --project platform platform/execution"
+  }
+}

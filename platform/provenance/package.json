@@ -1,0 +1,22 @@
+{
+  "name": "@atlas/platform-provenance",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Records and queries `Provenance` for every artifact: inputs, models, tool calls, jobs and edits.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "atlas-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.. --project platform platform/provenance"
+  }
+}

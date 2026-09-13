@@ -1,0 +1,22 @@
+{
+  "name": "@atlas/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Typed client that apps use to talk to the platform. Speaks only in `@atlas/contracts` types.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "atlas-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.. --project packages packages/sdk"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@atlas/dungeon-website",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Website building workflows: site models, pages, generation and deployment requests.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "atlas-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.. --project dungeons dungeons/website"
+  }
+}

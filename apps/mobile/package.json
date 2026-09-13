@@ -1,0 +1,22 @@
+{
+  "name": "@atlas/app-mobile",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Mobile shell: a thin client that talks to a running Atlas platform over the SDK.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "atlas-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.. --project apps apps/mobile"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "atlas-vnext",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Atlas vNext monorepo.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.14 <23",
+    "npm": ">=10.9"
+  },
+  "workspaces": [
+    "apps/*",
+    "platform/*",
+    "dungeons/*",
+    "runtimes/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json && tsc -p tsconfig.tests.json",
+    "lint": "oxlint .",
+    "test": "vitest run",
+    "boundaries": "node scripts/check-boundaries.mjs",
+    "check": "npm run boundaries && npm run typecheck && npm run lint && npm run test && npm run build",
+    "clean": "tsc -b tsconfig.json --clean"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "oxlint": "^1.82.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

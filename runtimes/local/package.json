@@ -1,0 +1,22 @@
+{
+  "name": "@atlas/runtime-local",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local machine runtime adapter: processes, filesystem paths, local model servers (e.g. Ollama).",
+  "type": "module",
+  "exports": {
+    ".": {
+      "atlas-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.. --project runtimes runtimes/local"
+  }
+}

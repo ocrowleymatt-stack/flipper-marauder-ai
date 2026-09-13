@@ -1,0 +1,22 @@
+{
+  "name": "@atlas/app-web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Browser UI shell for Atlas: pages, navigation and presentation of platform state.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "atlas-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run --root ../.. --project apps apps/web"
+  }
+}

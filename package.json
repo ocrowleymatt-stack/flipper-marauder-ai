@@ -1,0 +1,20 @@
+{
+  "name": "atlas-vnext",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Atlas vNext - Greenfield Rebuild",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run --workspaces --if-present build",
+    "test": "npm run --workspaces --if-present test && node --test test/boundary/architecture-boundary.test.mjs",
+    "lint": "node scripts/lint-boundaries.mjs",
+    "check": "npm run lint && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "typescript": "^5.8.2"
+  }
+}

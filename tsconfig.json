@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "files": [],
+  "references": [
+    { "path": "./packages/core-contracts" },
+    { "path": "./packages/policy-provenance" },
+    { "path": "./packages/storage-cas" },
+    { "path": "./packages/execution-broker" },
+    { "path": "./packages/nexus-router" },
+    { "path": "./packages/dungeon-creative" },
+    { "path": "./packages/dungeon-osint" },
+    { "path": "./packages/dungeon-knowledge" }
+  ]
+}

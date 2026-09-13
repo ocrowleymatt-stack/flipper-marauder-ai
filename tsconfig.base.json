@@ -8,6 +8,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "skipLibCheck": true,
+    "types": ["node"],
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "verbatimModuleSyntax": true,

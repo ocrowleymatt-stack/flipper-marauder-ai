@@ -4,6 +4,7 @@ import { NexusRouter } from '@atlas/nexus';
 import { contractRegistry } from '@atlas/testing';
 
 import { ExecutionBroker } from '../src/broker.js';
+import type { BrokerEvent } from '../src/broker.js';
 import { FakeAdapter, FailingAdapter, PartialThenFailAdapter, TransientThenOkAdapter } from '../src/fakes.js';
 
 describe('Execution contract: failover without a second answer', () => {
@@ -22,7 +23,7 @@ describe('Execution contract: failover without a second answer', () => {
       { baseDelayMs: 0, sleep: async () => undefined },
     );
 
-    const events = [];
+    const events: BrokerEvent[] = [];
     for await (const event of broker.execute({ decision, prompt: 'hello' })) events.push(event);
 
     const texts = events.filter((event) => event.type === 'text');
@@ -50,7 +51,7 @@ describe('Execution contract: failover without a second answer', () => {
       { baseDelayMs: 0 },
     );
 
-    const events = [];
+    const events: BrokerEvent[] = [];
     await expect(async () => {
       for await (const event of broker.execute({ decision, prompt: 'hello' })) events.push(event);
     }).rejects.toMatchObject({ classifiedAs: 'abrupt_end' });
@@ -77,7 +78,7 @@ describe('Execution contract: failover without a second answer', () => {
       { baseDelayMs: 0, sleep: async () => undefined },
     );
 
-    const events = [];
+    const events: BrokerEvent[] = [];
     for await (const event of broker.execute({ decision, prompt: 'hello' })) events.push(event);
 
     expect(events.some((event) => event.type === 'retry')).toBe(true);
@@ -116,7 +117,7 @@ describe('Execution contract: failover without a second answer', () => {
     const broker = new ExecutionBroker([
       new FakeAdapter('openai', 'gpt-code', [{ type: 'tool_call', call }]),
     ]);
-    const events = [];
+    const events: BrokerEvent[] = [];
     for await (const event of broker.execute({ decision, prompt: 'write' })) events.push(event);
     expect(events.filter((event) => event.type === 'tool_call')).toEqual([
       { type: 'tool_call', call, providerId: 'openai', modelId: 'gpt-code' },

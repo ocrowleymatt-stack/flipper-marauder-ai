@@ -13,6 +13,7 @@
     "@atlas/contracts": "0.1.0"
   },
   "devDependencies": {
+    "@types/node": "^22.13.10",
     "typescript": "^5.9.2"
   }
 }

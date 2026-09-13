@@ -16,6 +16,7 @@
   "devDependencies": {
     "@atlas/nexus": "0.1.0",
     "@atlas/testing": "0.1.0",
+    "@types/node": "^22.13.10",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
   }

@@ -15,6 +15,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm install
+      - run: npm run typecheck --workspace @atlas/contracts --workspace @atlas/nexus --workspace @atlas/execution --workspace @atlas/testing
       - run: npm test
       - run: bash ops/backup/check-restore-contract.sh
       - run: bash ops/deploy/check-deploy-contract.sh

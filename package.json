@@ -13,7 +13,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspace @atlas/contracts --workspace @atlas/nexus --workspace @atlas/execution --workspace @atlas/testing",
     "test": "npm run test --workspace @atlas/contracts --workspace @atlas/nexus --workspace @atlas/execution && bash ops/backup/check-restore-contract.sh && bash ops/deploy/check-deploy-contract.sh",
     "test:nexus": "npm run test --workspace @atlas/nexus --workspace @atlas/execution"
   },
@@ -21,6 +21,7 @@
     "node": ">=22"
   },
   "devDependencies": {
+    "@types/node": "^22.13.10",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
   }

@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.atlas.dev/1.0.0/ModuleManifest.schema.json",
+  "title": "ModuleManifest",
+  "x-atlas-contract-version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*$",
+      "description": "Globally unique module id, e.g. `device.transport`."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-.]+)?(?:\\+[0-9A-Za-z-.]+)?$",
+      "description": "The module’s own version."
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-.]+)?(?:\\+[0-9A-Za-z-.]+)?$",
+      "description": "Version of @atlas/contracts the module was built against. The host refuses incompatible majors."
+    },
+    "sdkVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-.]+)?(?:\\+[0-9A-Za-z-.]+)?$",
+      "description": "Version of the @atlas/module-sdk interface the module implements."
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "entrypoint": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "Module-relative path or specifier the host imports to obtain the module definition."
+    },
+    "isolation": {
+      "type": "string",
+      "enum": [
+        "in-process",
+        "worker-thread",
+        "subprocess"
+      ]
+    },
+    "requiredCapabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Resource selector, e.g. `project`, `job`, `module:device.transport`, or `*`."
+          },
+          "actions": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "write",
+                "execute",
+                "admin",
+                "*"
+              ]
+            }
+          },
+          "constraints": {
+            "description": "Additional narrowing predicates, e.g. `{ projectId: \"...\" }`. Attenuation may add but never remove constraints.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "resource",
+          "actions"
+        ],
+        "additionalProperties": false,
+        "description": "One grant: what may be done to what, under which constraints."
+      },
+      "description": "Everything the module may ever ask to do. The host mints an attenuated token from exactly this set and nothing wider."
+    },
+    "declaredCommands": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 128,
+        "pattern": "^[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*$",
+        "description": "Dotted command name, e.g. `project.create` or `device.transport.scan`."
+      },
+      "description": "Command types this module claims. Two modules may not claim the same type."
+    },
+    "declaredEvents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "project.created",
+          "project.updated",
+          "project.archived",
+          "job.enqueued",
+          "job.leased",
+          "job.started",
+          "job.succeeded",
+          "job.failed",
+          "job.retry_scheduled",
+          "job.cancelled",
+          "job.lease_expired",
+          "step.started",
+          "step.progress",
+          "step.completed",
+          "step.failed",
+          "artifact.produced",
+          "artifact.referenced"
+        ]
+      },
+      "description": "Event types this module emits. The host rejects emissions outside this set."
+    },
+    "metadata": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {},
+      "description": "Free-form, JSON-serialisable annotations. Never load-bearing for control flow."
+    }
+  },
+  "required": [
+    "id",
+    "version",
+    "contractVersion",
+    "sdkVersion",
+    "displayName",
+    "entrypoint",
+    "isolation",
+    "requiredCapabilities",
+    "declaredCommands",
+    "declaredEvents"
+  ],
+  "additionalProperties": false,
+  "description": "Everything the host needs to know about a module before running any of its code."
+}

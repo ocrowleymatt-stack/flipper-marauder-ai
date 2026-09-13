@@ -1,0 +1,57 @@
+{
+  "contractVersion": "1.0.0",
+  "jsonSchemaTarget": "draft-2020-12",
+  "generatedBy": "@atlas/contracts — pnpm contracts:generate",
+  "schemas": [
+    {
+      "name": "BlobRef",
+      "file": "BlobRef.schema.json",
+      "sha256": "da1b08df58fb26644db23e2e64742157ab9e357ecf1d9493f0b6e6e434526c29"
+    },
+    {
+      "name": "CapabilityToken",
+      "file": "CapabilityToken.schema.json",
+      "sha256": "0abce7d047d37d0772d8c7244f0fab0096377a3cbba227579fcd0444f7498a91"
+    },
+    {
+      "name": "Command",
+      "file": "Command.schema.json",
+      "sha256": "dba3db731e11220e6616742a2856bbbf816583adaebdcd2333ad48d99fcedfd3"
+    },
+    {
+      "name": "CommandAcceptance",
+      "file": "CommandAcceptance.schema.json",
+      "sha256": "f068e06d23f4280d8fca3e128bb23364719a19960d641014c64ec6b59adc340e"
+    },
+    {
+      "name": "Event",
+      "file": "Event.schema.json",
+      "sha256": "be2b265003d0d5e709526d0a41a850a69c3107752f53d4fe66a25f121d1716bf"
+    },
+    {
+      "name": "Job",
+      "file": "Job.schema.json",
+      "sha256": "b35ba50e76a2f8f06bb8ad53fce59c11cafc3f18741cdccc546258ae0b28e96b"
+    },
+    {
+      "name": "JobClaimRequest",
+      "file": "JobClaimRequest.schema.json",
+      "sha256": "7301926b433882f3793084250e526f853e7751debfce0e0b83a9df03b8315e4f"
+    },
+    {
+      "name": "ModuleManifest",
+      "file": "ModuleManifest.schema.json",
+      "sha256": "15cbbd1026ae7218f02f5c7dae9d142b42f135aa6bee7e9a5d764462ecf27c40"
+    },
+    {
+      "name": "Project",
+      "file": "Project.schema.json",
+      "sha256": "c5e03c3e326e8ca9594c1145fd8f9166c781fe49502a8c20c474b4f7ee1c8e2a"
+    },
+    {
+      "name": "ProvenanceRecord",
+      "file": "ProvenanceRecord.schema.json",
+      "sha256": "f42192f2c2537412860d5c1621b10ab6d10a39cd25f39d0e767503a9b0b3d4be"
+    }
+  ]
+}

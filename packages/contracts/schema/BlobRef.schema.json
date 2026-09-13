@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.atlas.dev/1.0.0/BlobRef.schema.json",
+  "title": "BlobRef",
+  "x-atlas-contract-version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Multihash-style content address. The only way to name bytes in Atlas."
+    },
+    "sizeBytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "mediaType": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "description": "IANA media type of the addressed bytes."
+    }
+  },
+  "required": [
+    "address",
+    "sizeBytes",
+    "mediaType"
+  ],
+  "additionalProperties": false,
+  "description": "A reference to immutable bytes held in content-addressed storage."
+}

@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.atlas.dev/1.0.0/CapabilityToken.schema.json",
+  "title": "CapabilityToken",
+  "x-atlas-contract-version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+      "description": "RFC 4122 UUID."
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-.]+)?(?:\\+[0-9A-Za-z-.]+)?$",
+      "description": "Version of the Atlas contract surface this record was produced under."
+    },
+    "subject": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "module",
+            "system"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false,
+      "description": "The bearer this token was minted for."
+    },
+    "audience": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*$",
+      "description": "The component permitted to accept this token."
+    },
+    "scopes": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Resource selector, e.g. `project`, `job`, `module:device.transport`, or `*`."
+          },
+          "actions": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "write",
+                "execute",
+                "admin",
+                "*"
+              ]
+            }
+          },
+          "constraints": {
+            "description": "Additional narrowing predicates, e.g. `{ projectId: \"...\" }`. Attenuation may add but never remove constraints.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "resource",
+          "actions"
+        ],
+        "additionalProperties": false,
+        "description": "One grant: what may be done to what, under which constraints."
+      }
+    },
+    "issuedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "description": "RFC 3339 / ISO 8601 timestamp."
+    },
+    "notBefore": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "description": "RFC 3339 / ISO 8601 timestamp."
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "description": "RFC 3339 / ISO 8601 timestamp."
+    },
+    "parentId": {
+      "description": "Set when this token was produced by attenuating another.",
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+    },
+    "proof": {
+      "type": "object",
+      "properties": {
+        "alg": {
+          "type": "string",
+          "enum": [
+            "hs256",
+            "ed25519"
+          ]
+        },
+        "keyId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*$",
+          "description": "Identifies the key so tokens survive key rotation."
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "description": "base64url signature over the canonical token body."
+        }
+      },
+      "required": [
+        "alg",
+        "keyId",
+        "value"
+      ],
+      "additionalProperties": false,
+      "description": "Cryptographic proof that the token body was minted by a trusted authority."
+    }
+  },
+  "required": [
+    "id",
+    "contractVersion",
+    "subject",
+    "audience",
+    "scopes",
+    "issuedAt",
+    "expiresAt",
+    "proof"
+  ],
+  "additionalProperties": false,
+  "description": "A bearer capability. Possession is authority; there is no ambient permission table."
+}

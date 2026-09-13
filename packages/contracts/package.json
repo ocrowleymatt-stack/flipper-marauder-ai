@@ -1,0 +1,28 @@
+{
+  "name": "@atlas/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Single source of truth for Atlas vNext: zod schemas plus emitted JSON Schema. Imports nothing internal.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema/*": "./schema/*"
+  },
+  "files": [
+    "dist",
+    "schema"
+  ],
+  "scripts": {
+    "generate": "tsc -b . && node ./dist/tools/generate-schemas.js --write",
+    "check": "tsc -b . && node ./dist/tools/generate-schemas.js --check"
+  },
+  "dependencies": {
+    "zod": "^4.6.4"
+  }
+}

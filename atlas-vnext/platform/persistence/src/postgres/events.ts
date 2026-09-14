@@ -56,6 +56,13 @@ export function createEventBus(tx: PgTx, actor: PersistenceActor | null, clock: 
         );
         const streamRow = stream.rows[0];
         if (!streamRow) throw new Error(`Event stream ${event.channel} missing after insert.`);
+        if (event.idempotencyKey) {
+          const existing = await tx.query<EventRow>(
+            'SELECT * FROM events WHERE tenant_id = $1 AND idempotency_key = $2',
+            [tenantId, event.idempotencyKey],
+          );
+          if (existing.rows[0]) return mapEvent(existing.rows[0]);
+        }
         const seq = Number(streamRow.next_seq) + 1;
         await tx.query('UPDATE event_streams SET next_seq = $3 WHERE stream_id = $1 AND tenant_id = $2', [
           event.channel,
@@ -65,39 +72,27 @@ export function createEventBus(tx: PgTx, actor: PersistenceActor | null, clock: 
         const eventId = event.eventId ?? `evt_${randomUUID()}`;
         const timestamp = clock();
         const retainedUntil = REQUIRED_EVENT_TYPES.has(event.type) ? '9999-12-31T00:00:00.000Z' : null;
-        try {
-          const inserted = await tx.query<EventRow>(
-            `INSERT INTO events (
-               id, stream_id, seq, type, payload, tenant_id, workspace_id, conversation_id, job_id, idempotency_key, created_at, retained_until
-             ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12)
-             RETURNING *`,
-            [
-              eventId,
-              event.channel,
-              seq,
-              event.type,
-              JSON.stringify(event.payload ?? {}),
-              tenantId,
-              event.workspaceId ?? actor?.workspaceId ?? null,
-              event.conversationId ?? null,
-              event.jobId ?? null,
-              event.idempotencyKey ?? null,
-              timestamp,
-              retainedUntil,
-            ],
-          );
-          return mapEvent(inserted.rows[0]!);
-        } catch (err) {
-          const code = (err as { code?: string }).code;
-          if (code === '23505' && event.idempotencyKey) {
-            const existing = await tx.query<EventRow>(
-              'SELECT * FROM events WHERE tenant_id = $1 AND idempotency_key = $2',
-              [tenantId, event.idempotencyKey],
-            );
-            if (existing.rows[0]) return mapEvent(existing.rows[0]);
-          }
-          throw err;
-        }
+        const inserted = await tx.query<EventRow>(
+          `INSERT INTO events (
+             id, stream_id, seq, type, payload, tenant_id, workspace_id, conversation_id, job_id, idempotency_key, created_at, retained_until
+           ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12)
+           RETURNING *`,
+          [
+            eventId,
+            event.channel,
+            seq,
+            event.type,
+            JSON.stringify(event.payload ?? {}),
+            tenantId,
+            event.workspaceId ?? actor?.workspaceId ?? null,
+            event.conversationId ?? null,
+            event.jobId ?? null,
+            event.idempotencyKey ?? null,
+            timestamp,
+            retainedUntil,
+          ],
+        );
+        return mapEvent(inserted.rows[0]!);
       });
       emit(recorded);
       return recorded;

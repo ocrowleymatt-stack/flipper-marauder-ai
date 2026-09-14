@@ -63,26 +63,28 @@ export class PostgresJobStore implements JobStore {
   constructor(private readonly tx: PgTx) {}
 
   async insert(record: JobRecord): Promise<JobRecord> {
-    try {
-      const inserted = await this.tx.query<JobRow>(
-        `INSERT INTO jobs (
-           id, tenant_id, workspace_id, project_id, dungeon, type, status, priority, current_stage,
-           progress_ratio, checkpoint, retry_count, max_retries, lease_owner, lease_until,
-           idempotency_key, cancel_requested, trace_id, failure_reason, created_at, updated_at, started_at, completed_at
-         ) VALUES (
-           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$21,$22,$23
-         )
-         RETURNING *`,
-        jobParams(record),
-      );
-      return mapJob(inserted.rows[0]!);
-    } catch (err) {
-      if (isUniqueViolation(err) && record.idempotencyKey && record.tenantId) {
-        const existing = await this.findByIdempotency(record.tenantId, record.idempotencyKey);
-        if (existing) return existing;
-      }
-      throw err;
+    if (record.idempotencyKey && record.tenantId) {
+      const existing = await this.findByIdempotency(record.tenantId, record.idempotencyKey);
+      if (existing) return existing;
     }
+    const inserted = await this.tx.query<JobRow>(
+      `INSERT INTO jobs (
+         id, tenant_id, workspace_id, project_id, dungeon, type, status, priority, current_stage,
+         progress_ratio, checkpoint, retry_count, max_retries, lease_owner, lease_until,
+         idempotency_key, cancel_requested, trace_id, failure_reason, created_at, updated_at, started_at, completed_at
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$21,$22,$23
+       )
+       ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+       RETURNING *`,
+      jobParams(record),
+    );
+    if (inserted.rows[0]) return mapJob(inserted.rows[0]);
+    if (record.idempotencyKey && record.tenantId) {
+      const existing = await this.findByIdempotency(record.tenantId, record.idempotencyKey);
+      if (existing) return existing;
+    }
+    throw new Error(`Job ${record.id} insert did not return a row.`);
   }
 
   async findByIdempotency(tenantId: string, key: string): Promise<JobRecord | null> {

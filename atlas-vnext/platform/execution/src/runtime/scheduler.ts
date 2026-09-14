@@ -177,11 +177,14 @@ export class RuntimeScheduler {
   }
 
   private async tryAcquire(job: RuntimeJobRequest): Promise<RunPodLease | null> {
-    this.enqueue(job);
+    const queued = this.enqueue(job);
     if (this.runtime.lease && this.runtime.lease.jobId !== job.id) {
-      this.event('queued', 'RunPod busy; job waiting_runtime without starting another pod.', {
-        jobId: job.id,
-      });
+      if (queued) {
+        this.event('queued', 'RunPod busy; job waiting_runtime without starting another pod.', {
+          jobId: job.id,
+        });
+        await this.persist('queued');
+      }
       return null;
     }
     if (this.runtime.lease && this.runtime.lease.jobId === job.id) {
@@ -325,15 +328,16 @@ export class RuntimeScheduler {
     return lease;
   }
 
-  private enqueue(job: RuntimeJobRequest): void {
-    if (this.runtime.lease?.jobId === job.id) return;
-    if (this.runtime.queue.some((item) => item.id === job.id)) return;
+  private enqueue(job: RuntimeJobRequest): boolean {
+    if (this.runtime.lease?.jobId === job.id) return false;
+    if (this.runtime.queue.some((item) => item.id === job.id)) return false;
     this.runtime.queue.push({
       id: job.id,
       profile: job.profile,
       enqueuedAt: this.clock.iso(),
       status: 'waiting_runtime',
     });
+    return true;
   }
 
   private async maybeIdleStop(reason: string): Promise<void> {

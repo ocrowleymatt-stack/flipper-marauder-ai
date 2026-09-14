@@ -21,7 +21,18 @@ class ManualClock implements RuntimeClock {
 
   async sleep(ms: number, signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) throw new Error('Execution aborted.');
-    this.current += ms;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.current += ms;
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, 1);
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new Error('Execution aborted.'));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
   }
 
   advance(ms: number): void {
@@ -31,7 +42,9 @@ class ManualClock implements RuntimeClock {
 
 function harness(overrides: { idleShutdownSeconds?: number; client?: MemoryRunPodClient; store?: MemoryRuntimeStateStore } = {}) {
   const client = overrides.client ?? new MemoryRunPodClient();
-  client.seed({ id: 'pod-shared', desiredStatus: 'EXITED' });
+  if (!client.pods.has('pod-shared')) {
+    client.seed({ id: 'pod-shared', desiredStatus: 'EXITED' });
+  }
   const clock = new ManualClock();
   const observer = new RuntimeObserver();
   const store = overrides.store ?? new MemoryRuntimeStateStore();
@@ -141,8 +154,8 @@ describe('RunPod shared runtime scheduler', () => {
     client.seed({ id: 'pod-shared', desiredStatus: 'RUNNING' });
     const persisted = emptyRuntime('2026-09-14T00:00:00.000Z', 'pod-shared');
     persisted.state = 'idle';
-    persisted.idleSince = '2026-01-01T00:00:00.000Z';
-    persisted.startedAt = '2026-01-01T00:00:00.000Z';
+    persisted.idleSince = '2000-01-01T00:00:00.000Z';
+    persisted.startedAt = '2000-01-01T00:00:00.000Z';
     const store = new MemoryRuntimeStateStore(persisted);
     const { scheduler } = harness({ client, store, idleShutdownSeconds: 1 });
     const recovered = await scheduler.reconcile();

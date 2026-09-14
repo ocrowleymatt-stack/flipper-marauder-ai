@@ -1,5 +1,5 @@
 const SECRET_PATTERN =
-  /(sk-[a-zA-Z0-9_-]{8,}|Bearer\s+\S+|x-api-key["'\s:=]+[^\s"']+|AIza[0-9A-Za-z_-]{20,}|venice[_-]?api[_-]?key["'\s:=]+[^\s"']+)/gi;
+  /(sk-[a-zA-Z0-9_-]{8,}|xai-[a-zA-Z0-9_-]{8,}|Bearer\s+\S+|x-api-key["'\s:=]+[^\s"']+|AIza[0-9A-Za-z_-]{20,}|venice[_-]?api[_-]?key["'\s:=]+[^\s"']+)/gi;
 
 const HEADER_PATTERN = /(authorization|x-api-key|x-goog-api-key|api-key)\s*[:=]\s*("?)[^"\s]+/gi;
 

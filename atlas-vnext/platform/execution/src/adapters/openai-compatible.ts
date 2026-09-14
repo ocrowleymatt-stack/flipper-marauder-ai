@@ -74,7 +74,11 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
     if (response.status >= 400) {
       const text = await readAllText(response.stream);
-      throw new ProviderHttpError(httpFailure(this.providerId, response.status, text));
+      const failure = httpFailure(this.providerId, response.status, text);
+      if (apiKey) {
+        failure.message = failure.message.split(apiKey).join('[redacted]');
+      }
+      throw new ProviderHttpError(failure);
     }
 
     const toolCalls = new OpenAIToolCallAssembler();

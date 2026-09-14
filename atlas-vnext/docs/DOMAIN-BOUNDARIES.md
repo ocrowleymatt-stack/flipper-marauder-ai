@@ -48,14 +48,15 @@ Dungeons may call Nexus (route) and the Execution **broker** (run). They may not
 
 ## Conversation domain (`platform/conversation`)
 
-Owns conversation, message, and execution records. Does not import Nexus or execution adapters. The host injects a capability router and a model executor.
+Owns conversation, message, and execution records (the chat-turn slice). Does not import Nexus or execution adapters. The host injects a capability router and a model executor. Chat is one surface; jobs, artefact metadata, and workspaces are platform-owned and are not required to pass through conversation.
 
 ## Flow
 
 ```text
 UI  →  host (composition root)
-    →  conversation runtime
+    →  conversation runtime          (simple-chat surface)
          →  Nexus.resolve(alias) → RouteDecision
          →  ExecutionBroker.execute(decision)
          →  durable conversations / messages / executions / events
+    →  jobs / artefacts / workspaces (first-class; not chat-only)
 ```

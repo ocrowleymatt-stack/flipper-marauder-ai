@@ -10,7 +10,7 @@ See also: [BORING-CORE.md](./docs/BORING-CORE.md), [CAPABILITY-CENSUS.md](./docs
 
 ## 1. Principles
 
-1. Durable projects are authoritative; chat is ephemeral.
+1. Durable workspaces/projects and artefacts are authoritative. Chat is one surface, not a linear-chat product and not the only durable result.
 2. Durable jobs own long-running work (status, checkpoint, lease, retry, cancel, trace, structured failure).
 3. Progress is event-driven (SSE first), not polling loops.
 4. Files live in content-addressed storage (CAS). PostgreSQL stores hashes and metadata only.
@@ -74,3 +74,4 @@ flipper-marauder-ai/
 - CAS blobs: later. Never file bytes or base64 in relational rows. `artefact_metadata` stores identity, tenancy, type, version lineage, creator/execution provenance, timestamps, and `content_hash` as a future CAS pointer.
 - Local/dev may use the JSON `FileDocument` store. Production cannot; missing PostgreSQL fails closed.
 - SQLite is not a second product database.
+- **Workbench constraint:** this layer must not assume conversation-only or linear-chat-only products. Conversations belong to workspaces; artefacts, jobs, and (later) files are first-class. Do not implement Workbench UI or copy Mountain UI architecture here.

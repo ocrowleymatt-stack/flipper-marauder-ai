@@ -34,6 +34,7 @@ export interface PrincipalRecord {
   updatedAt: string;
 }
 
+/** Durable workspace container. First-class named Project objects come later; conversations are one child, not the only one. */
 export interface WorkspaceRecord {
   id: string;
   urn: string;
@@ -58,6 +59,10 @@ export interface RuntimeLeaseRecord {
   updatedAt: string;
 }
 
+/**
+ * First-class durable result metadata (not a chat message).
+ * Version/parent lineage is here; blob bytes are not (future CAS via contentHash).
+ */
 export interface ArtefactMetadata {
   id: string;
   urn: string;
@@ -119,6 +124,7 @@ export interface ArtefactMetadataStore {
   get(actor: PersistenceActor, id: string): Promise<ArtefactMetadata | null>;
 }
 
+/** Tenant-scoped handles. Conversations/messages/executions are the chat-turn slice; jobs and artefacts are not required to pass through chat. */
 export interface ActorBoundPersistence {
   actor: PersistenceActor;
   conversations: ConversationRepository;

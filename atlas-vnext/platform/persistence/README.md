@@ -2,7 +2,9 @@
 
 PostgreSQL is the production-capable metadata store. Conversation ports, the job engine, and the event bus stay adapter-free; `platform/persistence` owns SQL, pools, and migrations.
 
-This tranche is durability, restart safety, transactional correctness, and tenant/workspace isolation. It is not Files/CAS, Dungeon migration, Caspa, Nexus/Execution redesign, or UI work.
+This tranche is durability, restart safety, transactional correctness, and tenant/workspace isolation. It is not Files/CAS, Dungeon migration, Caspa, Nexus/Execution redesign, Workbench UI, or a Mountain UI clone.
+
+Product direction (constraint, not UI work): Atlas vNext is a progressive Workbench — simple chat when the task is simple; persistent workspace/artefact surfaces when work is substantial. Persistence already supports that without implementing it. Chat is one surface. Messages are not the only durable result. Conversations belong to workspaces; they are not the only workspace child. First-class Project objects come later on top of `workspaces`. See [docs/PERSISTENCE.md](../../docs/PERSISTENCE.md).
 
 ## Inventory (pre-change)
 
@@ -11,7 +13,8 @@ This tranche is durability, restart safety, transactional correctness, and tenan
 | Conversations / messages / executions | JSON `FileDocument` + in-memory maps | Same ports; PostgreSQL + memory kernels |
 | Jobs | Transition table only | Restart-safe engine + `SELECT … FOR UPDATE SKIP LOCKED` |
 | Events | In-process `MemoryEventBus` / file log | Durable per-stream seq, replay, idempotent append |
-| Projects / workspaces | Interface stub | Tenant-scoped workspace rows (manifest hash pointer only) |
+| Projects / workspaces | Interface stub | Tenant-scoped workspace rows (manifest hash pointer). Conversations, jobs, and artefacts may belong to a workspace; conversations are not the only child. First-class Project objects later. |
+| Artefact metadata / provenance | Interface stubs | Versioned `artefact_metadata` + provenance rows (hashes only). Durable results are not required to be chat messages. |
 | Behaviour posture | In-process `TenantBehaviourStore` | Durable per-tenant row; still not Authority |
 | Runtime leases | RunPod file store (unchanged) | Optional PG `runtime_leases` metadata; scheduler semantics unchanged |
 | JSON file store | Local/dev conversation document | Still local/dev; not a second production architecture |
@@ -25,14 +28,21 @@ This tranche is durability, restart safety, transactional correctness, and tenan
 - Blobs are not stored in PostgreSQL. `artefact_metadata` is identity + tenant/workspace + type + version/parent lineage + creator/execution/job provenance + timestamps + `content_hash` (future CAS pointer). No file bytes.
 
 ```text
-apps/host  →  ConversationRuntime (ports)
+apps/host  →  ConversationRuntime (current simple-chat surface; not the product shell)
            →  PlatformPersistence.forActor(tenant)
+                ├ workspaces          (durable container; first-class Projects later)
                 ├ conversations / messages / executions
-                ├ jobs (leases, checkpoints)
-                ├ events (seq + replay)
-                ├ workspaces / behaviour / provenance stubs
-                └ runtime_leases (metadata only)
+                │                     (one workspace child; chat-turn records only)
+                ├ jobs / checkpoints / attempts
+                │                     (resumable long-running work; not chat-bound)
+                ├ artefact_metadata   (first-class durable results; hash pointer only)
+                ├ provenance          (artefact lineage stubs; not a second chat log)
+                ├ events              (per-stream seq + replay; conversation or job)
+                ├ behaviour
+                └ runtime_leases      (metadata only)
 ```
+
+Do not add tables or docs that force every artefact through `messages`, or that treat the conversation list as the workspace.
 
 ## Schema ownership
 

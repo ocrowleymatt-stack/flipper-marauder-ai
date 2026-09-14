@@ -21,12 +21,12 @@ Does not own: route policy, UI, project/CAS writes, dungeon modules.
 | Package | Owns |
 |---|---|
 | `projects` | Authoritative project records + current manifest pointer |
-| `storage` | CAS blobs + manifests; never in-DB binaries |
+| `storage` | CAS blobs + manifests; never in-DB binaries; retention bounds stub |
 | `jobs` | Shared state machine, checkpoints, leases |
 | `events` | SSE fan-out |
 | `provenance` | Artefact lineage |
-| `permissions` | Capability scopes; default deny |
-| `observability` | Route/attempt traces |
+| `permissions` | Capability scopes; default deny; Behaviour ≠ Authority stubs |
+| `observability` | Route/attempt traces including rejects |
 | `flags` | Feature flags |
 | `conversation` | Conversation, message, and execution state |
 | `persistence` | Local/dev durable metadata adapter |

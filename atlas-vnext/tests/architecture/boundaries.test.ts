@@ -222,4 +222,16 @@ describe('architecture boundary graph', () => {
     });
     expect(report.violations.some((v) => v.rule === 'apps-no-secrets')).toBe(true);
   });
+
+  it('keeps Mountain-compat Behaviour stubs in permissions, not Nexus', () => {
+    const report = analyzeGraph(root);
+    expect(report.modules.some((m) => m.relPath === 'platform/permissions/src/behaviour.ts')).toBe(true);
+    expect(report.modules.some((m) => m.relPath === 'platform/storage/src/retention.ts')).toBe(true);
+    expect(
+      report.modules
+        .filter((m) => m.layer === 'nexus')
+        .every((m) => m.specifiers.every((specifier) => !specifier.includes('behaviour') && !specifier.includes('permissions'))),
+    ).toBe(true);
+    expect(report.violations, JSON.stringify(report.violations, null, 2)).toEqual([]);
+  });
 });

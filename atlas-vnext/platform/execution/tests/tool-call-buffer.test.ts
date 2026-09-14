@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { OpenAIToolCallAssembler, AnthropicToolCallAssembler, GeminiFunctionCallAssembler } from '@atlas-vnext/execution';
 
 describe('OpenAI tool-call argument assembly', () => {
-  it('does not parse argument fragments as complete JSON/calls', () => {
+  it('mountain-compat: does not parse argument fragments as complete JSON/calls', () => {
     const assembler = new OpenAIToolCallAssembler();
     assembler.ingest([
       { index: 0, id: 'call_1', function: { name: 'lookup', arguments: '{"q":"' } },

@@ -32,7 +32,7 @@ describe('Execution broker (transport, retry, streaming)', () => {
     expect(breaker.isOpen()).toBe(false);
   });
 
-  it('fails over to the next candidate before visible text', async () => {
+  it('mountain-compat: fails over to the next candidate before visible text', async () => {
     const broker = new ExecutionBroker(1);
     const failing: ProviderAdapter = {
       providerId: 'openai',
@@ -56,7 +56,7 @@ describe('Execution broker (transport, retry, streaming)', () => {
     expect(chunks).toEqual([{ type: 'text', text: 'recovered' }]);
   });
 
-  it('does not start a second answer after visible text', async () => {
+  it('mountain-compat: does not start a second answer after visible text', async () => {
     const broker = new ExecutionBroker(1);
     broker.register({
       providerId: 'openai',
@@ -122,7 +122,7 @@ describe('Execution broker (transport, retry, streaming)', () => {
     expect(chunks).toEqual([{ type: 'text', text: 'ok' }]);
   });
 
-  it('buffers tool calls until the stream completes', async () => {
+  it('mountain-compat: buffers tool calls until the stream completes', async () => {
     const broker = new ExecutionBroker(1);
     broker.register({
       providerId: 'openai',
@@ -165,7 +165,7 @@ describe('Execution broker (transport, retry, streaming)', () => {
     expect(chunks.filter((chunk) => chunk.type === 'text')).toEqual([{ type: 'text', text: 'fallback' }]);
   });
 
-  it('retries the same candidate before failover and records both attempts', async () => {
+  it('mountain-compat: retries the same candidate before failover and records both attempts', async () => {
     const broker = new ExecutionBroker(2);
     let calls = 0;
     broker.register({
@@ -214,7 +214,7 @@ describe('Execution broker (transport, retry, streaming)', () => {
     expect(chunks).toEqual([{ type: 'text', text: 'local' }]);
   });
 
-  it('treats reasoning deltas as visible output and refuses a second provider', async () => {
+  it('mountain-compat: treats reasoning deltas as visible output and refuses a second provider', async () => {
     const broker = new ExecutionBroker(1);
     broker.register({
       providerId: 'openai',

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { rejectedCandidateSchema, routingDelegationSchema } from './mountain-compat.ts';
 
 /**
  * Atlas vNext shared contracts.
@@ -87,6 +88,10 @@ export const routeDecisionSchema = z.object({
   decisionReason: z.string(),
   traceId: z.string(),
   evaluatedAt: z.string(),
+  /** Ranking rejects (privacy, health, requirements) — not only the winner. */
+  rejectedCandidates: z.array(rejectedCandidateSchema).optional(),
+  /** How the chain was produced. `auto` / `power_pod` are not alias-table lookups. */
+  delegation: routingDelegationSchema.optional(),
 });
 export type RouteDecision = z.infer<typeof routeDecisionSchema>;
 
@@ -129,6 +134,8 @@ export const capabilityScopeSchema = z.enum([
   'deployment.promote',
   'secrets.use',
   'device.control',
+  'compute.allocate',
+  'admin.configure',
 ]);
 export type CapabilityScope = z.infer<typeof capabilityScopeSchema>;
 
@@ -141,6 +148,8 @@ export const DANGEROUS_CAPABILITY_SCOPES: readonly CapabilityScope[] = [
   'deployment.promote',
   'secrets.use',
   'device.control',
+  'compute.allocate',
+  'admin.configure',
 ];
 
 export const permissionDecisionSchema = z.enum(['ALLOW', 'ASK', 'DENY']);
@@ -518,3 +527,5 @@ export const conversationSnapshotSchema = z.object({
   executions: z.array(executionRecordSchema),
 });
 export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema>;
+
+export * from './mountain-compat.ts';

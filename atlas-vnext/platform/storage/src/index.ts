@@ -17,3 +17,6 @@ export class StorageNotImplementedError extends Error {
     this.name = 'StorageNotImplementedError';
   }
 }
+
+export { RetentionGuard, RetentionLimitError, BoundedWorkspaceIndex } from './retention.ts';
+export type { RetentionKind } from './retention.ts';

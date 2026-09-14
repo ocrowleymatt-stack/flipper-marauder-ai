@@ -1,3 +1,4 @@
+import { DEFAULT_ATTEMPTS_PER_CANDIDATE, MAX_ATTEMPTS_PER_CANDIDATE } from '@atlas-vnext/contracts';
 import { SECRET_KEYS } from './secrets.ts';
 
 export type ForgeProtocol = 'openai' | 'ollama';
@@ -56,7 +57,10 @@ export function readExecutionConfig(env: Record<string, string | undefined> = pr
   const requestedMaxPods = readPositiveInt(env.RUNPOD_MAX_ACTIVE_PODS, DEFAULTS.runpodMaxActivePods);
   return {
     timeoutMs: readPositiveInt(env.ATLAS_PROVIDER_TIMEOUT_MS, DEFAULTS.timeoutMs),
-    attemptsPerCandidate: readPositiveInt(env.ATLAS_PROVIDER_ATTEMPTS, DEFAULTS.attemptsPerCandidate),
+    attemptsPerCandidate: Math.min(
+      readPositiveInt(env.ATLAS_PROVIDER_ATTEMPTS, DEFAULT_ATTEMPTS_PER_CANDIDATE),
+      MAX_ATTEMPTS_PER_CANDIDATE,
+    ),
     ollamaBaseUrl: trimSlash(env.ATLAS_OLLAMA_URL ?? env.OLLAMA_HOST ?? DEFAULTS.ollamaBaseUrl),
     openaiBaseUrl: trimSlash(env.ATLAS_OPENAI_BASE_URL ?? DEFAULTS.openaiBaseUrl),
     anthropicBaseUrl: trimSlash(env.ATLAS_ANTHROPIC_BASE_URL ?? DEFAULTS.anthropicBaseUrl),

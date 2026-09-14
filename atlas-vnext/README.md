@@ -23,6 +23,7 @@ Default runtime is **live** adapters. Missing keys mark that provider unavailabl
 ## What this tree contains
 
 - Architecture review, capability census, domain/storage/job/nexus docs
+- Mountain behavioural compatibility contracts (`docs/MOUNTAIN-COMPAT.md`, `tests/compat`)
 - Shared contracts (`packages/contracts`)
 - Thin Nexus router (`platform/nexus`)
 - Execution broker + production adapters (`platform/execution`)
@@ -44,6 +45,7 @@ npm run typecheck
 npm test
 npm run test:boundaries
 npm run test:providers
+npm run test:compat
 npm run build
 ```
 

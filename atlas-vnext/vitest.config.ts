@@ -27,6 +27,9 @@ export default defineConfig({
       '@atlas-vnext/persistence': resolve(root, 'platform/persistence/src/index.ts'),
       '@atlas-vnext/provenance': resolve(root, 'platform/provenance/src/index.ts'),
       '@atlas-vnext/jobs': resolve(root, 'platform/jobs/src/index.ts'),
+      '@atlas-vnext/permissions': resolve(root, 'platform/permissions/src/index.ts'),
+      '@atlas-vnext/observability': resolve(root, 'platform/observability/src/index.ts'),
+      '@atlas-vnext/storage': resolve(root, 'platform/storage/src/index.ts'),
     },
   },
 });

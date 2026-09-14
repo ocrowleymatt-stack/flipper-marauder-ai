@@ -1,6 +1,6 @@
 # Atlas vNext Architecture
 
-Greenfield rebuild. Atlas Mountain is a **behavioural** reference, not a folder template.
+Greenfield rebuild. Atlas Mountain is a **behavioural** reference, not a folder template. Externally meaningful Mountain semantics are locked by [docs/MOUNTAIN-COMPAT.md](./docs/MOUNTAIN-COMPAT.md) (contracts + tests), not by copying Mountain's tree.
 
 This document describes the target system. The design-gate tree lives entirely under `atlas-vnext/` inside `flipper-marauder-ai`. It does not inherit Atlas Mountain’s `services/nexus`, turbo `apps/desktop` + `services/*` workspace, or nginx `/v12` compatibility surface. It also does **not** inherit the unrelated Java/Spring Boot `lystrosaurus/atlas-mountain` stub.
 

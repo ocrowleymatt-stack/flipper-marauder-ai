@@ -49,3 +49,13 @@ export class DefaultDenyGate implements PermissionGate {
 function grantKey(scope: CapabilityScope, projectId: string): string {
   return `${projectId}::${scope}`;
 }
+
+export {
+  TenantBehaviourStore,
+  TenantIsolationError,
+  BehaviourPolicyError,
+  authorityBoundary,
+  behaviourGrantsNoAuthority,
+  composeBehaviourPrompt,
+} from './behaviour.ts';
+export type { AuthorityGate } from './behaviour.ts';

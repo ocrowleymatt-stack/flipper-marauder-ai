@@ -21,6 +21,7 @@ import {
   MAX_KEEP_WARM_SECONDS,
   MAX_RUNTIME_EVENTS,
   type ProviderAdapter,
+  type RunPodPod,
   type RuntimeClock,
 } from '@atlas-vnext/execution';
 
@@ -545,7 +546,7 @@ describe('RunPod failover and unrelated providers', () => {
 
   it('startup failure is structured, finite, and does not create a second pod', async () => {
     class BoomStart extends MemoryRunPodClient {
-      async startPod(id: string) {
+      async startPod(id: string): Promise<RunPodPod> {
         this.startCalls.push(id);
         throw new Error('start refused');
       }
@@ -562,7 +563,7 @@ describe('RunPod failover and unrelated providers', () => {
 
   it('keeps Atlas alive when the RunPod API is unavailable', async () => {
     class DownApi extends MemoryRunPodClient {
-      async listPods() {
+      async listPods(): Promise<RunPodPod[]> {
         throw new Error('RunPod API unavailable');
       }
     }

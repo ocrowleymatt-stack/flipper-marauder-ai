@@ -37,7 +37,7 @@ The local file metadata store is **not** final; Phase 2 still owes PostgreSQL.
 
 ## Phase 4 — first dungeon (this PR)
 
-Caspa/Writing: durable documents, unified writing operations, Behaviour composition, selected-file context, Authority, Workbench mount. Behaviour ported; Caspa UI/routers/GoldPipeline not copied.
+- [x] Caspa/Writing: durable documents, unified writing operations, Behaviour composition, selected-file context, Authority, Workbench mount. Behaviour ported; Caspa UI/routers/GoldPipeline not copied.
 
 ## Phase 5 — OSINT
 

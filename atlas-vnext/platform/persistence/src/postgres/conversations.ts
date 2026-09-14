@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { UuidIdFactory, type ConversationRepository, type ExecutionRepository, type MessageRepository, type ProvenanceWriter } from '@atlas-vnext/conversation';
 import type { Conversation, ExecutionRecord, Message, ProvenanceRecord } from '@atlas-vnext/contracts';
 import { logPlatform } from '@atlas-vnext/observability';
@@ -317,7 +318,7 @@ export function createConversationRepos(tx: PgTx, actor: PersistenceActor, clock
          ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18::jsonb,NULL)
          ON CONFLICT (id) DO NOTHING`,
         [
-          `prv_${entry.artefactId}`,
+          `prv_${randomUUID()}`,
           owner.tenantId,
           entry.artefactId,
           entry.projectId,

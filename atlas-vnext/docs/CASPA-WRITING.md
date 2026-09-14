@@ -75,4 +75,24 @@ One `POST /api/documents/:id/generate` with `operation`: create, rewrite, shorte
 
 ## Migration status
 
-See the table in this PR’s report and [WRITING-MODEL.md](./WRITING-MODEL.md). Acceptance is a useful durable secure platform-native Writing dungeon E2E, not historical Caspa parity.
+Acceptance is a useful durable secure platform-native Writing dungeon E2E, **not** historical Caspa parity.
+
+| Historical item | Classification | Notes |
+|---|---|---|
+| Caspa PG manuscript identity + immutable revisions + `VERSION_CONFLICT` | **MIGRATED** | `documents` / `document_versions` + `stale_revision` / HTTP 409 |
+| One Book Project (documents belong to a project) | **MIGRATED** | tenant + `platform/projects`; no parallel Caspa workspace tree |
+| Selected-file grounding / no dump-all | **MIGRATED** | `restrictFileIds` into platform `ContextService` |
+| Craft / writing instructions | **MIGRATED** | composed Behaviour layers, not GoldPipeline |
+| Job provenance / artefact lineage | **MIGRATED** | platform provenance rows; UI renders only |
+| Server-side permission checks | **MIGRATED** | `AuthorityEngine` actor+tenant+resource+action |
+| Caspa routers / unifiedRouter / llmRouter / failover | **DROPPED** | Nexus + Execution; Caspa expresses requirements only |
+| Caspa product UI / Shakespeare Gemini studio | **DROPPED** | Workbench mount + Caspa surface, not a Word clone |
+| Parallel writing DBs (Caspa PG + Shakespeare + AM folders + commons literary) | **DROPPED** | one documents table + CAS |
+| GoldPipeline / PlotArchitect / ChapterStructure as copied services | **DROPPED** | behavioural lessons only |
+| StoryBible / claim ledger / stylometry | **DEFERRED** | not required for first-slice E2E |
+| Long-running commission job runner | **DEFERRED** | this slice uses conversation/execution spine |
+| Google Docs-style live collab | **DROPPED** | optimistic concurrency, not OT/CRDT |
+| Embeddings as primary retriever | **DEFERRED** | lexical `platform/context` |
+| Historical Caspa nginx/Authentik/Firebase identity | **SUPERSEDED** | platform auth + Authority |
+
+See [WRITING-MODEL.md](./WRITING-MODEL.md) and [WHAT-WE-DELIBERATELY-DID-NOT-PORT.md](./WHAT-WE-DELIBERATELY-DID-NOT-PORT.md).

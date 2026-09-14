@@ -35,7 +35,7 @@ function decision(): RouteDecision {
   };
 }
 
-async function makeWriting(stream: (prompt: string) => AsyncGenerator<StreamChunk>) {
+async function makeWriting(stream: (prompt: string) => AsyncGenerator<StreamChunk>, capture?: { target?: string; systemPrompt?: string }) {
   const dir = mkdtempSync(join(tmpdir(), 'caspa-unit-'));
   dirs.push(dir);
   const persistence = await openMemoryPersistence();
@@ -53,9 +53,15 @@ async function makeWriting(stream: (prompt: string) => AsyncGenerator<StreamChun
     executions: stores.executions,
     provenance: stores.provenance,
     events: new MemoryEventBus(),
-    router: { resolve: () => decision() },
+    router: {
+      resolve: (target: string) => {
+        if (capture) capture.target = target;
+        return decision();
+      },
+    },
     executor: {
       async *execute(_routed, execContext, observer) {
+        if (capture) capture.systemPrompt = execContext.systemPrompt ?? '';
         observer?.onAttempt({
           index: 1,
           provider: 'mock',
@@ -227,5 +233,90 @@ describe('Caspa writing service', () => {
     expect(composed.precedence[0]).toBe('capabilityPolicy');
     expect(composed.precedence.at(-1)).toBe('requestInstructions');
     expect(writingRouteRequirements({ operation: 'shorten', contentChars: 10, selectedFileCount: 0 }).target).toBe('nexus/fast');
+  });
+
+  it('grounds provenance on selected files only and does not dump the project', async () => {
+    const capture: { target?: string; systemPrompt?: string } = {};
+    const { writing, actor, project, files } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'grounded chapter' };
+    }, capture);
+    const selected = await files.ingest(actor, {
+      projectId: project.id,
+      path: 'brief.md',
+      bytes: new TextEncoder().encode('The copper kettle is canonical.'),
+    });
+    await files.ingest(actor, {
+      projectId: project.id,
+      path: 'unused.md',
+      bytes: new TextEncoder().encode('secret unused notes'),
+    });
+    for (let i = 0; i < 16; i += 1) {
+      if (!(await files.processNextJob(actor, 'caspa-test'))) break;
+    }
+    const created = await writing.create(actor, { projectId: project.id, title: 'Grounded' });
+    for await (const _event of writing.generate(actor, created.id, {
+      operation: 'create',
+      instruction: 'Use the brief.',
+      expectedRevision: created.revision,
+      fileIds: [selected.id],
+    })) {
+      // drain
+    }
+    const provenance = await writing.provenance(actor, created.id);
+    expect(
+      provenance.some((entry) => entry.sourceInputs.includes(selected.id) || entry.sourceInputs.includes(selected.contentHash)),
+    ).toBe(true);
+    expect(provenance.some((entry) => entry.capability === 'writing')).toBe(true);
+    expect(capture.systemPrompt).toContain('The copper kettle is canonical.');
+    expect(capture.systemPrompt).not.toContain('secret unused notes');
+  });
+
+  it('hides documents from another tenant even with write grants', async () => {
+    const { writing, actor, project, persistence, authority } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'ok' };
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'Private' });
+    await persistence.ensureTenant({ id: 'tenant_b', name: 'B' });
+    await persistence.ensurePrincipal({ id: 'principal_b', displayName: 'B' });
+    const other = { tenantId: 'tenant_b', principalId: 'principal_b' };
+    authority.grantMembership(other.principalId, other.tenantId);
+    authority.grantTo({ principalId: other.principalId, tenantId: other.tenantId, capability: 'artifact.write' });
+    await expect(writing.get(other, created.id)).rejects.toMatchObject({ message: 'Permission denied.' });
+  });
+
+  it('interrupts in-flight documents on restart without promoting the draft', async () => {
+    const { writing, actor, project, persistence } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'ok' };
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'In flight' });
+    await persistence.forActor(actor).documents.update(actor, created.id, {
+      status: 'streaming',
+      expectedRevision: created.revision,
+    });
+    await persistence.recoverOnStart();
+    const after = await writing.get(actor, created.id);
+    expect(after.status).toBe('failed');
+    expect(after.failure?.code).toBe('interrupted');
+    expect(after.currentVersion).toBe(0);
+    expect(after.content).toBe('');
+  });
+
+  it('routes through Nexus aliases, never a provider list', async () => {
+    const capture: { target?: string } = {};
+    const { writing, actor, project } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'ok' };
+    }, capture);
+    const created = await writing.create(actor, { projectId: project.id, title: 'Route' });
+    for await (const _event of writing.generate(actor, created.id, {
+      operation: 'create',
+      instruction: 'Write a long reasoned chapter about copper.',
+      expectedRevision: created.revision,
+    })) {
+      // drain
+    }
+    expect(capture.target).toBe('nexus/reason');
+    expect(capture.target).not.toMatch(/openai|anthropic|runpod/i);
+    const after = await writing.get(actor, created.id);
+    expect(after.status).toBe('committed');
   });
 });

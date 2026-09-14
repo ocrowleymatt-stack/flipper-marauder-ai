@@ -224,6 +224,18 @@ describe('Caspa writing dungeon host', () => {
     expect(rename.status).toBe(404);
     const del = await fetch(`${url}/api/documents/${document.id}`, { method: 'DELETE', headers: headersB });
     expect(del.status).toBe(404);
+    const stealFile = await fetch(`${url}/api/documents/${document.id}/generate`, {
+      method: 'POST',
+      headers: headersB,
+      body: JSON.stringify({
+        operation: 'rewrite',
+        instruction: 'steal file',
+        expectedRevision: document.revision,
+        fileIds: ['fil_guessed'],
+      }),
+    });
+    const stealFrames = await readSse(stealFile);
+    expect(stealFrames.some((frame) => frame.event === 'error')).toBe(true);
   });
 
   it('requires CSRF and does not treat button presence as Authority', async () => {
@@ -315,5 +327,59 @@ describe('Caspa writing dungeon host', () => {
       sourceInputs: string[];
     }>;
     expect(provenance.some((entry) => entry.sourceInputs.includes(file.id) || entry.sourceInputs.includes(file.contentHash))).toBe(true);
+  });
+
+  it('reloads the committed document from the server and continues as a revision', async () => {
+    const { url } = await startCaspa();
+    const session = await bootstrap(url);
+    const project = (await (
+      await fetch(`${url}/api/projects`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({ name: 'Reload' }),
+      })
+    ).json()) as { id: string };
+    const created = (await (
+      await fetch(`${url}/api/projects/${project.id}/documents`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({ title: 'Durable' }),
+      })
+    ).json()) as { id: string; revision: number };
+    await readSse(
+      await fetch(`${url}/api/documents/${created.id}/generate`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({
+          operation: 'create',
+          instruction: 'Write a paragraph.',
+          expectedRevision: created.revision,
+        }),
+      }),
+    );
+    const first = (await (await fetch(`${url}/api/documents/${created.id}`, { headers: { cookie: session.cookie } })).json()) as {
+      currentVersion: number;
+      revision: number;
+      content: string;
+      status: string;
+    };
+    expect(first.status).toBe('committed');
+    expect(first.currentVersion).toBe(1);
+    expect(first.content.length).toBeGreaterThan(0);
+    await readSse(
+      await fetch(`${url}/api/documents/${created.id}/generate`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({
+          operation: 'continue',
+          instruction: 'Add a sentence.',
+          expectedRevision: first.revision,
+        }),
+      }),
+    );
+    const continued = (await (await fetch(`${url}/api/documents/${created.id}`, { headers: { cookie: session.cookie } })).json()) as {
+      currentVersion: number;
+    };
+    expect(continued.currentVersion).toBe(2);
   });
 });

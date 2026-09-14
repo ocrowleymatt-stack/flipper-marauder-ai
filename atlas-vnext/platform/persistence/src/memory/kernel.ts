@@ -425,9 +425,6 @@ export class MemoryPersistence implements PlatformPersistence {
   private provenanceWriter(actor: PersistenceActor): ProvenanceWriter {
     return {
       record: async (entry) => {
-        if (this.provenance.some((item) => item.tenantId === actor.tenantId && item.entry.artefactId === entry.artefactId)) {
-          return;
-        }
         this.provenance.push({ tenantId: actor.tenantId, entry: { ...entry } });
       },
       forJob: async (jobId) =>

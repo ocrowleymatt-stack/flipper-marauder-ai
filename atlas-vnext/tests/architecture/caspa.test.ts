@@ -70,6 +70,18 @@ describe('Caspa architecture boundaries', () => {
     expect(open.decision).toBe('DENY');
   });
 
+  it('does not own a second Nexus, Execution, auth, or secrets package', () => {
+    const pkg = JSON.parse(readFileSync(join(root, 'dungeons/writing/package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>;
+    };
+    const deps = Object.keys(pkg.dependencies ?? {});
+    expect(deps).not.toContain('@atlas-vnext/nexus');
+    expect(deps).not.toContain('@atlas-vnext/execution');
+    expect(deps).not.toContain('@atlas-vnext/auth');
+    expect(deps).not.toContain('@atlas-vnext/secrets');
+    expect(deps).not.toContain('@atlas-vnext/storage');
+  });
+
   it('expresses Nexus requirements without naming providers', () => {
     const requirements = writingRouteRequirements({
       operation: 'restructure',

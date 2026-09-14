@@ -8,6 +8,13 @@ export interface ExecutionContext {
     description: string;
     inputSchema: Record<string, unknown>;
   }>;
+  priorToolResults?: Array<{
+    callId: string;
+    toolId: string;
+    status: string;
+    resultRef?: string | null;
+    output?: unknown;
+  }>;
   signal?: AbortSignal;
   traceId?: string;
 }

@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@atlas-vnext/auth": "*",
     "@atlas-vnext/contracts": "*",
     "@atlas-vnext/conversation": "*",
     "@atlas-vnext/execution": "*",
@@ -14,7 +15,10 @@
     "@atlas-vnext/context": "*",
     "@atlas-vnext/nexus": "*",
     "@atlas-vnext/persistence": "*",
+    "@atlas-vnext/permissions": "*",
+    "@atlas-vnext/plugins": "*",
     "@atlas-vnext/projects": "*",
-    "@atlas-vnext/storage": "*"
+    "@atlas-vnext/storage": "*",
+    "@atlas-vnext/tools": "*"
   }
 }

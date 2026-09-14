@@ -33,6 +33,10 @@ export default defineConfig({
       '@atlas-vnext/storage': resolve(root, 'platform/storage/src/index.ts'),
       '@atlas-vnext/files': resolve(root, 'platform/files/src/index.ts'),
       '@atlas-vnext/context': resolve(root, 'platform/context/src/index.ts'),
+      '@atlas-vnext/auth': resolve(root, 'platform/auth/src/index.ts'),
+      '@atlas-vnext/tools': resolve(root, 'platform/tools/src/index.ts'),
+      '@atlas-vnext/plugins': resolve(root, 'platform/plugins/src/index.ts'),
+      '@atlas-vnext/secrets': resolve(root, 'platform/secrets/src/index.ts'),
     },
   },
 });

@@ -71,12 +71,39 @@ export interface ModelExecutor {
       systemPrompt?: string;
       signal?: AbortSignal;
       traceId?: string;
+      priorToolResults?: Array<{
+        callId: string;
+        toolId: string;
+        status: string;
+        resultRef?: string | null;
+        output?: unknown;
+      }>;
     },
     observer?: {
       onAttempt(attempt: Pick<ExecutionAttempt, 'index' | 'provider' | 'model' | 'outcome' | 'error' | 'emittedVisibleOutput'>): void;
       onSelected?(selection: { provider: string; model: string }): void;
     },
   ): AsyncGenerator<StreamChunk>;
+}
+
+export interface ToolOrchestrator {
+  handleCall(input: {
+    tenantId: string;
+    principalId: string;
+    workspaceId?: string | null;
+    conversationId: string;
+    executionId: string;
+    provider?: string | null;
+    model?: string | null;
+    call: import('@atlas-vnext/contracts').ToolCallRequest;
+  }): Promise<{
+    invocationId: string;
+    toolId: string;
+    status: string;
+    reason?: string;
+    resultRef?: string | null;
+    output?: unknown;
+  }>;
 }
 
 export interface ConversationClock {

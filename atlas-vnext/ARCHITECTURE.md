@@ -62,7 +62,7 @@ flipper-marauder-ai/
 ├── README.md
 └── atlas-vnext/
     ├── packages/contracts
-    ├── platform/{nexus,execution,conversation,persistence,projects,jobs,events,storage,files,context,provenance,permissions,observability,flags}
+    ├── platform/{nexus,execution,conversation,persistence,projects,jobs,events,storage,files,context,provenance,permissions,observability,flags,auth,tools,plugins,secrets}
     ├── dungeons/{writing,investigation,research,website,osint,music}
     ├── apps/{web,host}
     └── tests/architecture

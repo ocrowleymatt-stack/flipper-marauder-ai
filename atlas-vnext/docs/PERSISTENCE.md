@@ -31,6 +31,6 @@ Rules this tranche must not violate:
 - Do **not** copy Mountain UI architecture into persistence or the host.
 - UI is out of this tranche.
 
-Deferred: Tools, Dungeon migration, Caspa, production cutover, replacing the RunPod file runtime store, Workbench UI, OCR, embeddings as the primary retriever.
+Deferred: Dungeon migration, Caspa, production cutover, replacing the RunPod file runtime store, Workbench UI, OCR, embeddings as the primary retriever.
 
 See [FILES-AND-CONTEXT.md](./FILES-AND-CONTEXT.md).

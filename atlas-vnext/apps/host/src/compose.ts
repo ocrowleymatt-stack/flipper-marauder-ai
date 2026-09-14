@@ -1,6 +1,13 @@
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { ProviderHealth } from '@atlas-vnext/contracts';
-import { ConversationRuntime } from '@atlas-vnext/conversation';
+import { ConversationRuntime, type ToolOrchestrator } from '@atlas-vnext/conversation';
+import {
+  AuthService,
+  MemoryDirectoryStore,
+  MemorySessionStore,
+  userPrincipal,
+} from '@atlas-vnext/auth';
 import {
   createExecutionPlane,
   EnvSecretStore,
@@ -21,11 +28,21 @@ import {
   type PersistenceConfig,
   type PlatformPersistence,
 } from '@atlas-vnext/persistence';
+import { AuthorityEngine } from '@atlas-vnext/permissions';
 import { FilesService } from '@atlas-vnext/files';
 import { ContextService } from '@atlas-vnext/context';
 import { ProjectService } from '@atlas-vnext/projects';
+import { PluginRegistry, registerMockEchoPlugin } from '@atlas-vnext/plugins';
 import { openFilesystemCas, type CasStore } from '@atlas-vnext/storage';
+import {
+  MemoryToolApprovalStore,
+  MemoryToolInvocationStore,
+  PLATFORM_TOOL_CATALOGUE,
+  ToolEngine,
+  ToolRegistry,
+} from '@atlas-vnext/tools';
 import { MODEL_CATALOGUE } from './catalogue.ts';
+import { ShutdownController, readOperationalLimits, type HealthProbe } from './ops.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
@@ -43,6 +60,14 @@ export interface Spine {
   availableRuntimes: string[];
   scheduler: RuntimeScheduler | null;
   runtimeSnapshot: () => RuntimeSnapshot | null;
+  tools: ToolEngine;
+  auth: AuthService;
+  authority: AuthorityEngine;
+  plugins: PluginRegistry;
+  shutdown: ShutdownController;
+  healthProbe: HealthProbe;
+  tenantId: string;
+  principalId: string;
   close: () => Promise<void>;
 }
 
@@ -62,11 +87,14 @@ export interface ComposeOptions {
 /**
  * Composition root. Apps/UI never import adapters; this host wires
  * Nexus (WHERE) to Execution (HOW) and the conversation domain (WHAT).
+ * Tool execution does not own RunPod lifecycle.
  */
 export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   const mode: ExecutionMode = options.mode ?? 'live';
   const env = options.env ?? (mode === 'live' ? process.env : {});
   const persistenceConfig = options.persistence ?? readPersistenceConfig(env);
+  const limits = readOperationalLimits(env);
+  const shutdown = new ShutdownController();
 
   const registry = new NexusRegistry();
   for (const model of MODEL_CATALOGUE) {
@@ -111,16 +139,118 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   let context: ContextService | null = null;
   let cas: CasStore | null = null;
   let runtime: ConversationRuntime;
+  const tenantId = persistenceConfig.defaultTenantId ?? (persistenceConfig.production ? '' : 'tenant_local');
+  const principalId = env.ATLAS_PRINCIPAL_ID?.trim() || (tenantId ? `principal_${tenantId}` : 'principal_local');
+
+  const authority = new AuthorityEngine();
+  authority.grantMembership(principalId, tenantId);
+  for (const cap of [
+    'conversation.read',
+    'conversation.write',
+    'project.read',
+    'file.read',
+    'artifact.read',
+    'tool.invoke.readonly',
+    'tool.invoke',
+  ] as const) {
+    authority.grantTo({ principalId, tenantId, capability: cap });
+  }
+
+  const toolRegistry = new ToolRegistry();
+  const plugins = new PluginRegistry();
+  for (const definition of PLATFORM_TOOL_CATALOGUE) {
+    if (definition.pluginId) continue;
+    toolRegistry.register(definition);
+  }
+  registerMockEchoPlugin(plugins, toolRegistry);
+
+  const toolInvocations = new MemoryToolInvocationStore();
+  const toolApprovals = new MemoryToolApprovalStore();
+  const directory = new MemoryDirectoryStore();
+  const sessions = new MemorySessionStore();
+  await directory.putTenantMembership({
+    principalId,
+    tenantId: tenantId || 'tenant_local',
+    role: 'member',
+    capabilities: [],
+    createdAt: new Date().toISOString(),
+  });
+  const authOptions = {
+    production: persistenceConfig.production,
+    secret: env.ATLAS_SESSION_SECRET,
+    allowedOrigins: (env.ATLAS_ALLOWED_ORIGINS ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean),
+    sessionTtlMs: limits.sessionTtlMs,
+  };
+  let auth = new AuthService({
+    sessions,
+    directory,
+    ...authOptions,
+  });
+
+  const jailRoot = env.ATLAS_TOOL_JAIL?.trim() || join(tmpdir(), 'atlas-tool-jail', tenantId);
+  let tools: ToolEngine;
+
+  const makeOrchestrator = (engine: ToolEngine): ToolOrchestrator => ({
+    async handleCall(input) {
+      const result = await engine.invoke(
+        { tenantId: input.tenantId, principalId: input.principalId, workspaceId: input.workspaceId },
+        {
+          toolId: input.call.toolId,
+          arguments: input.call.arguments,
+          callId: input.call.id,
+          conversationId: input.conversationId,
+          executionId: input.executionId,
+          provider: input.provider,
+          model: input.model,
+        },
+      );
+      return {
+        invocationId: result.invocation.id,
+        toolId: result.invocation.toolId,
+        status: result.invocation.status,
+        reason: result.invocation.failureReason?.message,
+        resultRef: result.invocation.resultRef ?? null,
+        output: result.output,
+      };
+    },
+  });
 
   if (persistenceConfig.mode === 'postgres' || persistenceConfig.mode === 'memory') {
     persistence = await openPlatformPersistence(persistenceConfig);
-    const tenantId = persistenceConfig.defaultTenantId;
-    if (!tenantId) {
+    if (!persistenceConfig.defaultTenantId) {
       await persistence.close();
       throw new PersistenceConfigError('PostgreSQL/memory host mode requires ATLAS_TENANT_ID.');
     }
     await persistence.ensureTenant({ id: tenantId, name: tenantId });
-    const bound = persistence.forActor({ tenantId });
+    await persistence.ensurePrincipal({ id: principalId, displayName: principalId });
+    const bound = persistence.forActor({ tenantId, principalId });
+    await bound.directory.putTenantMembership({
+      principalId,
+      tenantId,
+      role: 'member',
+      capabilities: [],
+      createdAt: new Date().toISOString(),
+    });
+    auth = new AuthService({
+      sessions: bound.sessions,
+      directory: bound.directory,
+      ...authOptions,
+    });
+    tools = new ToolEngine({
+      registry: toolRegistry,
+      invocations: bound.toolInvocations,
+      approvals: bound.toolApprovals,
+      authority,
+      jobs: bound.jobs,
+      events: bound.events,
+      limits,
+      jailRoot,
+      env,
+      pluginEnabled: (id) => plugins.enabled(id),
+    });
     runtime = new ConversationRuntime({
       conversations: bound.conversations,
       messages: bound.messages,
@@ -131,14 +261,27 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       executor: plane.broker,
       availableRuntimes: plane.available,
       unitOfWork: persistence,
+      toolOrchestrator: makeOrchestrator(tools),
+      principalId,
     });
     await persistence.recoverOnStart();
+    await tools.reconcile();
     cas = await openFilesystemCas(options.casRoot ?? join(dirname(options.dataPath), 'cas'));
     files = new FilesService(persistence, cas);
     projects = new ProjectService(persistence);
     context = new ContextService(persistence);
   } else {
     store = openDurableStore(options.dataPath);
+    tools = new ToolEngine({
+      registry: toolRegistry,
+      invocations: toolInvocations,
+      approvals: toolApprovals,
+      authority,
+      limits,
+      jailRoot,
+      env,
+      pluginEnabled: (id) => plugins.enabled(id),
+    });
     runtime = new ConversationRuntime({
       conversations: store.conversations,
       messages: store.messages,
@@ -148,9 +291,43 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       router,
       executor: plane.broker,
       availableRuntimes: plane.available,
+      toolOrchestrator: makeOrchestrator(tools),
+      principalId,
     });
     await runtime.recoverInFlight();
+    await tools.reconcile();
   }
+
+  const healthProbe: HealthProbe = {
+    live: () => true,
+    async dependencies() {
+      let postgres: 'ok' | 'error' | 'not_configured' = 'not_configured';
+      if (persistence?.mode === 'postgres') {
+        try {
+          await persistence.run(async () => undefined);
+          postgres = 'ok';
+        } catch {
+          postgres = 'error';
+        }
+      } else if (persistence?.mode === 'memory') {
+        postgres = 'not_configured';
+      }
+      let casHealth: 'ok' | 'error' | 'not_configured' = cas ? 'ok' : 'not_configured';
+      if (cas) {
+        try {
+          await cas.physicalBytes();
+        } catch {
+          casHealth = 'error';
+        }
+      }
+      return {
+        postgres,
+        cas: casHealth,
+        jobs: persistence ? 'ok' : 'not_configured',
+        runtimeScheduler: plane.scheduler ? 'ok' : 'not_configured',
+      };
+    },
+  };
 
   return {
     runtime,
@@ -168,9 +345,41 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     availableRuntimes: plane.available,
     scheduler: plane.scheduler,
     runtimeSnapshot: () => plane.runtimeSnapshot(),
+    tools,
+    auth,
+    authority,
+    plugins,
+    shutdown,
+    healthProbe,
+    tenantId,
+    principalId,
     close: async () => {
+      shutdown.begin();
+      tools.stopAccepting();
       plane.scheduler?.stopIdleWatch();
       await persistence?.close();
     },
   };
 }
+
+export function grantSideEffects(authority: AuthorityEngine, principalId: string, tenantId: string): void {
+  for (const cap of [
+    'filesystem.read',
+    'filesystem.write',
+    'file.write',
+    'tool.invoke.external_write',
+    'browser.read',
+    'browser.submit',
+    'network.public',
+    'shell.execute',
+    'code.execute',
+    'publish.external',
+    'admin.configure',
+    'project.write',
+    'artifact.write',
+  ] as const) {
+    authority.grantTo({ principalId, tenantId, capability: cap });
+  }
+}
+
+export { userPrincipal };

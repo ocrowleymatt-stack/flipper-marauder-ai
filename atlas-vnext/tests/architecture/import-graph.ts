@@ -18,6 +18,10 @@ export type Layer =
   | 'flags'
   | 'files'
   | 'context'
+  | 'auth'
+  | 'tools'
+  | 'plugins'
+  | 'secrets'
   | 'dungeon'
   | 'apps'
   | 'tests'
@@ -60,6 +64,10 @@ const PACKAGE_LAYER: Record<string, Layer> = {
   '@atlas-vnext/storage': 'storage',
   '@atlas-vnext/files': 'files',
   '@atlas-vnext/context': 'context',
+  '@atlas-vnext/auth': 'auth',
+  '@atlas-vnext/tools': 'tools',
+  '@atlas-vnext/plugins': 'plugins',
+  '@atlas-vnext/secrets': 'secrets',
   '@atlas-vnext/provenance': 'provenance',
   '@atlas-vnext/permissions': 'permissions',
   '@atlas-vnext/observability': 'observability',
@@ -144,6 +152,10 @@ const NEXUS_FORBIDDEN_LAYERS = new Set<Layer>([
   'flags',
   'files',
   'context',
+  'auth',
+  'tools',
+  'plugins',
+  'secrets',
 ]);
 
 const PLATFORM_LAYERS = new Set<Layer>([
@@ -157,6 +169,10 @@ const PLATFORM_LAYERS = new Set<Layer>([
   'flags',
   'files',
   'context',
+  'auth',
+  'tools',
+  'plugins',
+  'secrets',
   'nexus',
   'execution',
   'conversation',
@@ -176,6 +192,10 @@ export function classifyPath(relPath: string): { layer: Layer; dungeon?: string 
   if (normalised.startsWith('platform/storage/')) return { layer: 'storage' };
   if (normalised.startsWith('platform/files/')) return { layer: 'files' };
   if (normalised.startsWith('platform/context/')) return { layer: 'context' };
+  if (normalised.startsWith('platform/auth/')) return { layer: 'auth' };
+  if (normalised.startsWith('platform/tools/')) return { layer: 'tools' };
+  if (normalised.startsWith('platform/plugins/')) return { layer: 'plugins' };
+  if (normalised.startsWith('platform/secrets/')) return { layer: 'secrets' };
   if (normalised.startsWith('platform/provenance/')) return { layer: 'provenance' };
   if (normalised.startsWith('platform/permissions/')) return { layer: 'permissions' };
   if (normalised.startsWith('platform/observability/')) return { layer: 'observability' };
@@ -467,7 +487,7 @@ export function analyzeGraph(
       }
 
       if (mod.layer === 'execution') {
-        if (target.layer === 'nexus' || target.layer === 'dungeon') {
+        if (target.layer === 'nexus' || target.layer === 'dungeon' || target.layer === 'tools' || target.layer === 'plugins') {
           violations.push({
             rule: 'execution-no-policy-or-domain',
             file: mod.relPath,
@@ -539,6 +559,10 @@ function analyzePackageJson(root: string, overlays: Record<string, string>): Vio
     ['platform/storage/package.json', 'platform'],
     ['platform/files/package.json', 'platform'],
     ['platform/context/package.json', 'platform'],
+    ['platform/auth/package.json', 'platform'],
+    ['platform/tools/package.json', 'platform'],
+    ['platform/plugins/package.json', 'platform'],
+    ['platform/secrets/package.json', 'platform'],
     ['platform/provenance/package.json', 'platform'],
     ['platform/permissions/package.json', 'platform'],
     ['platform/observability/package.json', 'platform'],

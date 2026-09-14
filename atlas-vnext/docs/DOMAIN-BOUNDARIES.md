@@ -27,7 +27,11 @@ Does not own: route policy, UI, project/CAS writes, dungeon modules.
 | `jobs` | Shared state machine, checkpoints, leases |
 | `events` | SSE fan-out |
 | `provenance` | Artefact lineage |
-| `permissions` | Capability scopes; default deny; Behaviour ≠ Authority stubs |
+| `permissions` | Capability scopes; default deny; Behaviour ≠ Authority. Production `AuthorityEngine` is resource-scoped. |
+| `auth` | Principals, sessions, CSRF, membership. Caller tenant ids are claims, not membership. |
+| `tools` | Typed registry, transactional lifecycle, approval, idempotency, adapters. Not Nexus; not RunPod. |
+| `plugins` | Plugin identity/version/tools/Authority. Cannot bypass the central gate. |
+| `secrets` | Tenant-scoped vault + SecretStore port. Never in conversation/project/artefact data. |
 | `observability` | Route/attempt traces including rejects |
 | `flags` | Feature flags |
 | `conversation` | Conversation, message, and execution state |

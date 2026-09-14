@@ -4,19 +4,10 @@ Greenfield rebuild of Atlas.
 
 > Atlas Mountain is a behavioural reference, not an architectural template.
 
-This repository is intentionally starting from a clean architectural foundation. Existing Atlas-related repositories are reference sources for proven behaviour, contracts, tests and operational lessons; they are not to be copied wholesale.
+This repository is starting from a clean architectural foundation. Existing Atlas-related repositories are reference sources for proven behaviour, contracts, tests and operational lessons; they are not copied wholesale.
 
-Initial priorities:
+The **design gate** lives in [`atlas-vnext/`](atlas-vnext/README.md). Canonical branch: `cursor/atlas-vnext-design-gate-2e35`.
 
-- repository capability census
-- architecture and domain boundaries
-- durable projects and durable jobs
-- event-driven progress
-- content-addressed storage
-- explicit provenance
-- capability-based permissions
-- thin Nexus router plus separate execution broker
-- plugin-style Dungeons
-- built-in observability, evaluation, backup and transactional deployment
+Do not bulk-copy implementation from Atlas Mountain or other legacy repositories. Product implementation proceeds subsystem-by-subsystem after this gate.
 
-Do not bulk-copy implementation from Atlas Mountain or other legacy repositories before the design gate is complete.
+See [`atlas-vnext/docs/ARCHITECTURE-REVIEW.md`](atlas-vnext/docs/ARCHITECTURE-REVIEW.md).

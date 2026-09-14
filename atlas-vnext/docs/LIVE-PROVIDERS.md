@@ -19,7 +19,7 @@ Atlas talks to real models through **execution adapters**. Nexus still only rank
 
 - **Ollama** → local, always-available
 - **Forge** → private-hosted inference on Hetzner (OpenAI-compatible `/v1/chat/completions` or Ollama). Not RunPod lifecycle.
-- **RunPod** → one scarce on-demand GPU. `RUNPOD_MAX_ACTIVE_PODS` is clamped to 1. Idle shutdown via `RUNPOD_IDLE_SHUTDOWN_SECONDS` (default 120).
+- **RunPod** → one scarce on-demand GPU. `RUNPOD_MAX_ACTIVE_PODS` is clamped to 1. Idle shutdown via `RUNPOD_IDLE_SHUTDOWN_SECONDS` (default 120). Atlas never POST-creates extra pods. Keep-warm is deferred: `RuntimeScheduler.requestKeepWarm(seconds)` is a time-bounded override, not enabled at boot.
 - **OpenAI / Anthropic / Gemini / xAI / Venice** → public cloud
 
 Nexus ranks using `locality` (`local | private_cloud | public_cloud`) and `runtimeClass` (`always_available | private_hosted | on_demand | expensive_burst`). It does not open sockets or manage pods. Execution owns transport and RunPod lifecycle.
@@ -42,7 +42,9 @@ One abstraction: `SecretStore` / `EnvSecretStore` in `platform/execution`. Adapt
 | `RUNPOD_API_KEY` + `RUNPOD_POD_ID` | Existing single RunPod only; Atlas will not create a second pod |
 | `ATLAS_OLLAMA_URL` (optional, not a secret) | Ollama endpoint, default `http://127.0.0.1:11434` |
 
-Missing credentials mark the provider **unavailable**. The process still starts.
+Missing credentials mark the provider **unavailable**. The process still starts. A stopped RunPod is not a platform failure; unrelated cloud providers continue.
+
+Scheduler state is persisted at `ATLAS_RUNTIME_STATE_PATH` (host default: `.data/runtime.json`). In-memory state is tests-only.
 
 `ATLAS_USE_MOCK_PROVIDERS=1` forces in-process mocks for local UI work. Mocks are **not** the production path (`apps/host/src/main.ts` defaults to `live`).
 

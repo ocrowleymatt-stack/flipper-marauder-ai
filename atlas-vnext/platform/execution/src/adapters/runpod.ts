@@ -19,6 +19,7 @@ export interface RunPodAdapterOptions {
 /**
  * RunPod inference adapter. Owns lease/lifecycle via RuntimeScheduler.
  * Token generation uses the OpenAI-compatible adapter against the warm pod.
+ * Startup delay is expected; a stopped pod is not a platform failure.
  */
 export class RunPodAdapter implements ProviderAdapter {
   readonly providerId = 'runpod';
@@ -30,11 +31,19 @@ export class RunPodAdapter implements ProviderAdapter {
     const profile: RuntimeProfileId = profileForModel(model);
     yield {
       type: 'warning',
-      message: 'Job waiting_runtime for the shared RunPod.',
+      message: this.options.scheduler.waitingMessage(jobId),
       provider: this.providerId,
     };
-    const lease = await this.options.scheduler.acquire({ id: jobId, profile, signal: context.signal });
+    const lease = await this.options.scheduler.acquire({
+      id: jobId,
+      profile,
+      workloadType: 'inference',
+      requestedModel: model,
+      traceId: context.traceId ?? jobId,
+      signal: context.signal,
+    });
     try {
+      await this.options.scheduler.heartbeat(lease.id);
       const baseUrl =
         this.options.inferenceBaseUrl ?? this.options.scheduler.inferenceBaseUrl() ?? '';
       if (!baseUrl) {

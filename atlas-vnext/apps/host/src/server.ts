@@ -21,7 +21,7 @@ export interface HostOptions {
   health?: {
     mode: string;
     providers: Record<string, ProviderHealth>;
-    runtime?: RuntimeSnapshot | null;
+    runtime?: RuntimeSnapshot | null | (() => RuntimeSnapshot | null);
   };
 }
 
@@ -42,12 +42,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
 
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') {
+      const runtime =
+        typeof options.health?.runtime === 'function' ? options.health.runtime() : (options.health?.runtime ?? null);
       json(res, 200, {
         ok: true,
         service: 'atlas-vnext-host',
         mode: options.health?.mode ?? 'unknown',
         providers: options.health?.providers ?? {},
-        runtime: options.health?.runtime ?? null,
+        runtime,
       });
       return;
     }

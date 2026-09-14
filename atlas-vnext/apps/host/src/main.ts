@@ -17,9 +17,10 @@ const spine = await composeSpine({
 const server = createHost({
   runtime: spine.runtime,
   staticDir,
-  health: { mode: spine.mode, providers: spine.health, runtime: spine.runtimeSnapshot },
+  health: { mode: spine.mode, providers: spine.health, runtime: () => spine.runtimeSnapshot() },
 });
 const bound = await listen(server, port, '127.0.0.1');
+spine.scheduler?.startIdleWatch();
 console.log(`Atlas vNext conversation spine at ${bound.url}`);
 console.log(`Durable store: ${dataPath}`);
 console.log(`Execution mode: ${spine.mode}`);

@@ -6,6 +6,8 @@ import {
   EnvSecretStore,
   type ExecutionMode,
   type HttpTransport,
+  type RunPodClient,
+  type RuntimeScheduler,
   type RuntimeSnapshot,
   type SecretStore,
 } from '@atlas-vnext/execution';
@@ -22,7 +24,8 @@ export interface Spine {
   health: Record<string, ProviderHealth>;
   mode: ExecutionMode;
   availableRuntimes: string[];
-  runtimeSnapshot: RuntimeSnapshot | null;
+  scheduler: RuntimeScheduler | null;
+  runtimeSnapshot: () => RuntimeSnapshot | null;
 }
 
 export interface ComposeOptions {
@@ -33,6 +36,7 @@ export interface ComposeOptions {
   env?: Record<string, string | undefined>;
   transport?: HttpTransport;
   runtimeStatePath?: string | null;
+  runpodClient?: RunPodClient;
 }
 
 /**
@@ -56,6 +60,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     transport: options.transport,
     streamDelayMs: options.streamDelayMs,
     catalogue: MODEL_CATALOGUE,
+    runpodClient: options.runpodClient,
     runtimeStatePath:
       options.runtimeStatePath ?? (mode === 'live' ? join(dirname(options.dataPath), 'runtime.json') : null),
     health: {
@@ -98,6 +103,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     health: { ...plane.health },
     mode,
     availableRuntimes: plane.available,
-    runtimeSnapshot: plane.runtimeSnapshot(),
+    scheduler: plane.scheduler,
+    runtimeSnapshot: () => plane.runtimeSnapshot(),
   };
 }

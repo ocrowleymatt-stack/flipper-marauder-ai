@@ -35,7 +35,8 @@ export {
 export type { OpenAIToolCallDelta } from './tool-call-buffer.ts';
 export { sanitizeText, sanitizeUnknown } from './sanitize.ts';
 export { ProviderHttpError, httpFailure, connectionFailure, isRetryableError } from './errors.ts';
-export { RuntimeScheduler } from './runtime/scheduler.ts';
+export { RuntimeScheduler, waitingCopy } from './runtime/scheduler.ts';
+export type { RuntimeJobRequest, RuntimeSchedulerOptions } from './runtime/scheduler.ts';
 export { RuntimeObserver } from './runtime/observer.ts';
 export { HttpRunPodClient, MemoryRunPodClient } from './runtime/client.ts';
 export { FileRuntimeStateStore, MemoryRuntimeStateStore } from './runtime/store.ts';
@@ -43,10 +44,17 @@ export {
   RUNTIME_STATES,
   RUNTIME_PROFILES,
   RUNTIME_PROFILE_CATALOGUE,
+  LEASE_STATES,
+  RUNTIME_ACTIVITIES,
+  WAITING_REASONS,
   SystemRuntimeClock,
   emptyRuntime,
   profileForModel,
   profilesCompatible,
+  normalizeLease,
+  normalizeRuntime,
+  CREATE_POD_REFUSED_REASON,
+  SCALE_OUT_DISABLED_REASON,
 } from './runtime/types.ts';
 export type {
   RuntimeState,
@@ -61,4 +69,7 @@ export type {
   RuntimeSnapshot,
   RuntimeStateStore,
   QueuedRuntimeJob,
+  LeaseState,
+  RuntimeActivity,
+  WaitingReason,
 } from './runtime/types.ts';

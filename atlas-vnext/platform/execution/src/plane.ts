@@ -236,6 +236,7 @@ export function createExecutionPlane(options: ExecutionPlaneOptions): ExecutionP
       idleShutdownSeconds: config.runpodIdleShutdownSeconds,
       warmTimeoutMs: config.runpodWarmTimeoutMs,
       inferencePort: config.runpodInferencePort,
+      leaseTtlSeconds: config.runpodLeaseTtlSeconds,
     });
     const runpod = new RunPodAdapter({
       scheduler,

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ProviderHttpError, httpFailure } from '../errors.ts';
 import { readAllText, type HttpTransport } from '../transport.ts';
 import type { SecretStore } from '../secrets.ts';
-import type { RunPodClient, RunPodPod } from './types.ts';
+import { CREATE_POD_REFUSED_REASON, type RunPodClient, type RunPodPod } from './types.ts';
 
 export class HttpRunPodClient implements RunPodClient {
   constructor(
@@ -52,6 +52,10 @@ export class HttpRunPodClient implements RunPodClient {
     return parsePod(JSON.parse(response.body));
   }
 
+  async createPod(_spec?: unknown): Promise<RunPodPod> {
+    throw new Error(CREATE_POD_REFUSED_REASON);
+  }
+
   private async request(method: 'GET' | 'POST', path: string): Promise<{ status: number; body: string }> {
     const apiKey = this.options.secrets.get(this.options.secretName ?? 'RUNPOD_API_KEY');
     if (!apiKey) throw new Error('runpod is unavailable: missing credentials.');
@@ -86,9 +90,17 @@ export class MemoryRunPodClient implements RunPodClient {
   startCalls: string[] = [];
   stopCalls: string[] = [];
   createCalls = 0;
+  /** When false, startPod leaves the pod STARTING until `promote()`. */
+  promoteOnStart = true;
 
   seed(pod: RunPodPod): void {
     this.pods.set(pod.id, { ...pod });
+  }
+
+  promote(id: string): void {
+    const existing = this.pods.get(id);
+    if (!existing) return;
+    this.pods.set(id, { ...existing, desiredStatus: 'RUNNING' });
   }
 
   async getPod(id: string): Promise<RunPodPod | null> {
@@ -104,7 +116,7 @@ export class MemoryRunPodClient implements RunPodClient {
     this.startCalls.push(id);
     const existing = this.pods.get(id);
     if (!existing) throw new Error(`Unknown RunPod ${id}`);
-    const next = { ...existing, desiredStatus: 'RUNNING' };
+    const next = { ...existing, desiredStatus: this.promoteOnStart ? 'RUNNING' : 'STARTING' };
     this.pods.set(id, next);
     return { ...next };
   }
@@ -116,5 +128,10 @@ export class MemoryRunPodClient implements RunPodClient {
     const next = { ...existing, desiredStatus: 'EXITED' };
     this.pods.set(id, next);
     return { ...next };
+  }
+
+  async createPod(_spec?: unknown): Promise<RunPodPod> {
+    this.createCalls += 1;
+    throw new Error(CREATE_POD_REFUSED_REASON);
   }
 }

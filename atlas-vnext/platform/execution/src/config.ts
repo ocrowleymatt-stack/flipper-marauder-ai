@@ -23,6 +23,7 @@ export interface ExecutionConfig {
   runpodIdleShutdownSeconds: number;
   runpodMaxActivePods: number;
   runpodWarmTimeoutMs: number;
+  runpodLeaseTtlSeconds: number;
   runtimeStatePath: string | null;
 }
 
@@ -44,6 +45,7 @@ const DEFAULTS = {
   runpodIdleShutdownSeconds: 120,
   runpodMaxActivePods: 1,
   runpodWarmTimeoutMs: 180_000,
+  runpodLeaseTtlSeconds: 900,
 } as const;
 
 /**
@@ -75,6 +77,7 @@ export function readExecutionConfig(env: Record<string, string | undefined> = pr
     runpodIdleShutdownSeconds: readPositiveInt(env.RUNPOD_IDLE_SHUTDOWN_SECONDS, DEFAULTS.runpodIdleShutdownSeconds),
     runpodMaxActivePods: Math.min(1, requestedMaxPods),
     runpodWarmTimeoutMs: readPositiveInt(env.RUNPOD_WARM_TIMEOUT_MS, DEFAULTS.runpodWarmTimeoutMs),
+    runpodLeaseTtlSeconds: readPositiveInt(env.RUNPOD_LEASE_TTL_SECONDS, DEFAULTS.runpodLeaseTtlSeconds),
     runtimeStatePath: optionalText(env.ATLAS_RUNTIME_STATE_PATH),
   };
 }

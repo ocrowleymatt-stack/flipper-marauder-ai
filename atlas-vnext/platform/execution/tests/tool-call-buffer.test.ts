@@ -111,6 +111,20 @@ describe('Gemini functionCall assembly', () => {
     ]);
   });
 
+  it('matches nameless argument fragments by part index across parallel calls', () => {
+    const assembler = new GeminiFunctionCallAssembler();
+    assembler.ingest({ functionCall: { name: 'alpha' } }, 0);
+    assembler.ingest({ functionCall: { name: 'beta' } }, 1);
+    assembler.ingest({ functionCall: { args: '{"n":' } }, 0);
+    assembler.ingest({ functionCall: { args: '{"n":' } }, 1);
+    assembler.ingest({ functionCall: { args: '1}' } }, 0);
+    assembler.ingest({ functionCall: { args: '2}' } }, 1);
+    expect(assembler.finish('gemini')).toEqual([
+      { type: 'tool_call', call: { id: 'gcall:0', toolId: 'alpha', arguments: { n: 1 } } },
+      { type: 'tool_call', call: { id: 'gcall:1', toolId: 'beta', arguments: { n: 2 } } },
+    ]);
+  });
+
   it('keeps two separate calls to the same function name distinct', () => {
     const assembler = new GeminiFunctionCallAssembler();
     assembler.ingest({ functionCall: { name: 'lookup', args: { q: 'first', secret: 'only-call-1' } } }, 0);

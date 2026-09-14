@@ -330,9 +330,13 @@ export class GeminiFunctionCallAssembler {
     }
 
     const name = call.name?.trim();
-    if (!name && this.currentKey) {
-      const current = this.calls.get(this.currentKey);
-      if (current && !current.emitted) return current;
+    if (!name) {
+      const byPartIndex = this.unfinishedAtPartIndex(partIndex);
+      if (byPartIndex) return byPartIndex;
+      if (this.currentKey) {
+        const current = this.calls.get(this.currentKey);
+        if (current && !current.emitted) return current;
+      }
     }
 
     if (this.currentKey) {
@@ -349,6 +353,16 @@ export class GeminiFunctionCallAssembler {
     }
 
     return this.createBuffer(`part:${partIndex}:ord:${this.nextOrdinal}`, partIndex);
+  }
+
+  private unfinishedAtPartIndex(partIndex: number): GeminiBufferedTool | undefined {
+    let found: GeminiBufferedTool | undefined;
+    for (const buf of this.calls.values()) {
+      if (buf.emitted || buf.partIndex !== partIndex) continue;
+      if (this.isStructurallyComplete(buf)) continue;
+      if (!found || buf.ordinal > found.ordinal) found = buf;
+    }
+    return found;
   }
 
   private createBuffer(key: string, partIndex: number, providerId?: string): GeminiBufferedTool {

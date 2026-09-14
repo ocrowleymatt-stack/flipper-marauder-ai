@@ -33,6 +33,9 @@ export interface CasStore extends BlobStore {
    * Returns true when a file was removed.
    */
   unlink(sha256: string): Promise<boolean>;
+  /** Physical objects currently present in the adapter (disk or memory). */
+  listObjects(): Promise<CasStat[]>;
+  physicalBytes(): Promise<number>;
 }
 
 export interface ManifestStore {
@@ -54,6 +57,21 @@ export class CasNotFoundError extends Error {
     super(`CAS object sha256/${sha256} was not found.`);
     this.name = 'CasNotFoundError';
   }
+}
+
+/** Fail-closed CAS publish. Callers must not update metadata pointers after this error. */
+export class CasPublicationError extends Error {
+  readonly code: string;
+
+  constructor(message: string, options?: { cause?: unknown; code?: string }) {
+    super(message, options?.cause !== undefined ? { cause: options.cause } : undefined);
+    this.name = 'CasPublicationError';
+    this.code = options?.code ?? 'cas_publication_failed';
+  }
+}
+
+export function isDiskFullError(err: unknown): boolean {
+  return Boolean(err && typeof err === 'object' && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOSPC');
 }
 
 export function sha256Hex(bytes: Uint8Array): string {

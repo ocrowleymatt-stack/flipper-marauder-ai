@@ -1,15 +1,18 @@
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   assertSha256,
   casObjectRelPath,
+  isDiskFullError,
   sha256Hex,
   verifyBytes,
   type CasPutResult,
   type CasStat,
   type CasStore,
   CasNotFoundError,
+  CasPublicationError,
+  SHA256_HEX,
 } from './cas.ts';
 
 export interface FilesystemCasOptions {
@@ -53,8 +56,12 @@ export class FilesystemCas implements CasStore {
       return { sha256, sizeBytes: bytes.byteLength, deduplicated: true };
     }
     const tmpDir = join(this.root, 'tmp');
-    await mkdir(tmpDir, { recursive: true });
-    await mkdir(dirname(dest), { recursive: true });
+    try {
+      await mkdir(tmpDir, { recursive: true });
+      await mkdir(dirname(dest), { recursive: true });
+    } catch (err) {
+      this.rethrowPublish(err);
+    }
     const tmp = join(tmpDir, `${randomUUID()}.part`);
     try {
       await writeFile(tmp, bytes, { flag: 'wx' });
@@ -66,14 +73,14 @@ export class FilesystemCas implements CasStore {
           await rm(tmp, { force: true });
           return { sha256, sizeBytes: bytes.byteLength, deduplicated: true };
         }
-        throw err;
+        this.rethrowPublish(err);
       }
     } catch (err) {
       await rm(tmp, { force: true }).catch(() => undefined);
       if (await this.has(sha256)) {
         return { sha256, sizeBytes: bytes.byteLength, deduplicated: true };
       }
-      throw err;
+      this.rethrowPublish(err);
     }
     return { sha256, sizeBytes: bytes.byteLength, deduplicated: false };
   }
@@ -119,6 +126,49 @@ export class FilesystemCas implements CasStore {
       throw err;
     }
   }
+
+  async listObjects(): Promise<CasStat[]> {
+    return walkCasObjects(join(this.root, 'sha256'));
+  }
+
+  async physicalBytes(): Promise<number> {
+    const objects = await this.listObjects();
+    return objects.reduce((sum, item) => sum + item.sizeBytes, 0);
+  }
+
+  private rethrowPublish(err: unknown): never {
+    if (err instanceof CasPublicationError) throw err;
+    if (isDiskFullError(err)) {
+      throw new CasPublicationError('CAS publication failed: disk full. Metadata was not updated.', {
+        cause: err,
+        code: 'ENOSPC',
+      });
+    }
+    throw err;
+  }
+}
+
+async function walkCasObjects(dir: string): Promise<CasStat[]> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+  const out: CasStat[] = [];
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...(await walkCasObjects(full)));
+      continue;
+    }
+    if (entry.isFile() && SHA256_HEX.test(entry.name)) {
+      const info = await stat(full);
+      out.push({ sha256: entry.name, sizeBytes: info.size });
+    }
+  }
+  return out;
 }
 
 export async function openFilesystemCas(root: string): Promise<FilesystemCas> {

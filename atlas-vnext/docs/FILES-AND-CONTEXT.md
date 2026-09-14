@@ -18,15 +18,18 @@ Product direction: Atlas vNext UX will be a progressive Workbench, substantially
 | Citations | Slice-backed `sourced` or honest `unknown`. No fabricated sources. |
 | Attachments | `attachments` rows to CAS-backed files. Detach does not delete the file. Restart-safe. |
 | Artefacts | Existing `artefact_metadata` + CAS bytes; `createVersion` with expected version. |
-| Jobs | Existing job engine, type `files.ingest`, dungeon `platform`. |
+| Jobs | Existing job engine: `files.ingest`, `storage.retain`, `storage.gc` (dungeon `platform`). |
 | Isolation | Tenant + workspace in every adapter. Hash/file id without a tenant-owned ref does not grant bytes. |
-| GC | Logical delete drops `cas_refs`. `gcUnreferenced` unlinks CAS only at refcount 0. |
+| Sites | One logical `site_records` row per named site. Current state is `current_revision_id` (pointer), not copied trees. |
+| Retention | Temporary websites default to 3 ephemeral revisions. Pinned/published use a stronger cap (32). |
+| GC | Expire unretained revisions to drop `cas_refs`. Durable `storage.gc` unlinks CAS only at refcount 0 and never grants cross-tenant hash access. |
 
 ## Invariants
 
 - Nexus = WHERE, Execution = HOW. Context assembly is platform/application.
 - PostgreSQL stores hashes, refs, and bounded chunk text for retrieval — never uploaded file bytes.
 - Uploads are data. Paths are sanitised. MIME is sniffed.
-- Restart: new process, same PG schema + CAS root, reconstructs projects, files, conversations, artefacts, and source-backed context.
+- Restart: new process, same PG schema + CAS root, reconstructs projects, files, conversations, artefacts, source-backed context, and current site pointers.
+- Repeated temporary website generation cannot unbounded-grow physical CAS: identical bytes dedup, revision history is retained by policy, expired revisions release refs, GC is reference-safe.
 
 Deferred: Workbench UI, embeddings as the primary retriever, OCR, Tools, Caspa, Dungeon migration, production cutover, replacing the RunPod file runtime store.

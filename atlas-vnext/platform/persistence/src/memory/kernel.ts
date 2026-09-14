@@ -17,6 +17,7 @@ import { BehaviourPolicyError, TenantIsolationError } from '@atlas-vnext/permiss
 import { logPlatform } from '@atlas-vnext/observability';
 import { assertActor, sameWorkspace, type PersistenceActor } from '../actor.ts';
 import { createMemoryFileStores } from './files.ts';
+import { createMemorySiteStores } from './sites.ts';
 import { OwnershipError, PersistenceClosedError, ConflictError } from '../errors.ts';
 import type {
   ActorBoundPersistence,
@@ -71,6 +72,7 @@ export class MemoryPersistence implements PlatformPersistence {
   private readonly jobStore = new MemoryJobStore();
   private readonly jobs: DurableJobEngine;
   private readonly fileStores = createMemoryFileStores(() => this.clock());
+  private readonly siteStores = createMemorySiteStores(() => this.clock());
 
   constructor(private readonly clock: () => string = () => new Date().toISOString()) {
     this.jobs = createJobEngine({
@@ -112,6 +114,7 @@ export class MemoryPersistence implements PlatformPersistence {
       chunks: this.fileStores.chunks,
       attachments: this.fileStores.attachments,
       casRefs: this.fileStores.casRefs,
+      sites: this.siteStores.sites,
     };
   }
 

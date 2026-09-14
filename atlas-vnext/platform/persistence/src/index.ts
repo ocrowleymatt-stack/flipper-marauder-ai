@@ -29,6 +29,7 @@ export type {
 export type {
   AttachmentRecord,
   AttachmentStore,
+  CasCatalogStats,
   CasObjectRecord,
   CasRefKind,
   CasRefRecord,
@@ -45,6 +46,14 @@ export type {
   FileVersionRecord,
   FileVersionStore,
 } from './file-types.ts';
+export type {
+  SiteCounts,
+  SiteRecord,
+  SiteRetentionClass,
+  SiteRevisionEntry,
+  SiteRevisionRecord,
+  SiteStore,
+} from './site-types.ts';
 export { openPlatformPersistence } from './open.ts';
 export { openMemoryPersistence, MemoryPersistence } from './memory/kernel.ts';
 export { openPostgresPersistence, PostgresPersistence } from './postgres/kernel.ts';

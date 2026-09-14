@@ -5,6 +5,7 @@ import { ConflictError, OwnershipError } from '../errors.ts';
 import type {
   AttachmentRecord,
   AttachmentStore,
+  CasCatalogStats,
   CasObjectRecord,
   CasRefKind,
   CasRefRecord,
@@ -506,6 +507,20 @@ export function createFileStores(tx: PgTx, clock: () => string) {
       const count = await casRefs.refCount(sha256);
       return { sha256: row.sha256, sizeBytes: Number(row.size_bytes), createdAt: isoRequired(row.created_at), refCount: count };
     },
+    async getObject(sha256) {
+      const result = await tx.query<{ sha256: string; size_bytes: string | number; created_at: Date | string }>(
+        'SELECT sha256, size_bytes, created_at FROM cas_objects WHERE sha256 = $1',
+        [sha256],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      return {
+        sha256: row.sha256,
+        sizeBytes: Number(row.size_bytes),
+        createdAt: isoRequired(row.created_at),
+        refCount: await casRefs.refCount(sha256),
+      };
+    },
     async addRef(actor, input) {
       const scoped = assertActor(actor, 'add CAS ref');
       const now = clock();
@@ -542,6 +557,43 @@ export function createFileStores(tx: PgTx, clock: () => string) {
         `DELETE FROM cas_refs WHERE tenant_id = $1 AND kind = $2 AND owner_id = $3 AND sha256 = $4`,
         [scoped.tenantId, kind, ownerId, sha256],
       );
+    },
+    async removeRefsByOwner(actor, ownerId, kind) {
+      const scoped = assertActor(actor, 'remove CAS refs by owner');
+      const result = kind
+        ? await tx.query(
+            `DELETE FROM cas_refs WHERE tenant_id = $1 AND owner_id = $2 AND kind = $3`,
+            [scoped.tenantId, ownerId, kind],
+          )
+        : await tx.query(`DELETE FROM cas_refs WHERE tenant_id = $1 AND owner_id = $2`, [
+            scoped.tenantId,
+            ownerId,
+          ]);
+      return result.rowCount ?? 0;
+    },
+    async listRefsByOwner(actor, ownerId) {
+      const scoped = assertActor(actor, 'list CAS refs by owner');
+      const result = await tx.query<{
+        id: string;
+        sha256: string;
+        tenant_id: string;
+        workspace_id: string | null;
+        kind: string;
+        owner_id: string;
+        created_at: Date | string;
+      }>(`SELECT * FROM cas_refs WHERE tenant_id = $1 AND owner_id = $2 ORDER BY created_at`, [
+        scoped.tenantId,
+        ownerId,
+      ]);
+      return result.rows.map((row) => ({
+        id: row.id,
+        sha256: row.sha256,
+        tenantId: row.tenant_id,
+        workspaceId: row.workspace_id,
+        kind: row.kind as CasRefKind,
+        ownerId: row.owner_id,
+        createdAt: isoRequired(row.created_at),
+      }));
     },
     async refCount(sha256) {
       const result = await tx.query<{ n: string | number }>(
@@ -581,6 +633,27 @@ export function createFileStores(tx: PgTx, clock: () => string) {
         throw new ConflictError(`Cannot GC CAS object ${sha256} while ${count} refs remain.`);
       }
       await tx.query('DELETE FROM cas_objects WHERE sha256 = $1', [sha256]);
+    },
+    async stats(): Promise<CasCatalogStats> {
+      const catalog = await tx.query<{ object_count: string | number; catalog_bytes: string | number }>(
+        `SELECT COUNT(*)::int AS object_count, COALESCE(SUM(size_bytes), 0)::bigint AS catalog_bytes
+         FROM cas_objects`,
+      );
+      const unreferenced = await tx.query<{
+        unreferenced_count: string | number;
+        unreferenced_bytes: string | number;
+      }>(
+        `SELECT COUNT(*)::int AS unreferenced_count, COALESCE(SUM(o.size_bytes), 0)::bigint AS unreferenced_bytes
+         FROM cas_objects o
+         LEFT JOIN cas_refs r ON r.sha256 = o.sha256
+         WHERE r.id IS NULL`,
+      );
+      return {
+        objectCount: Number(catalog.rows[0]?.object_count ?? 0),
+        catalogBytes: Number(catalog.rows[0]?.catalog_bytes ?? 0),
+        unreferencedCount: Number(unreferenced.rows[0]?.unreferenced_count ?? 0),
+        unreferencedBytes: Number(unreferenced.rows[0]?.unreferenced_bytes ?? 0),
+      };
     },
   };
 

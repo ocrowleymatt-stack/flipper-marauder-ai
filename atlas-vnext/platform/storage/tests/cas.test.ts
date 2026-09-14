@@ -32,5 +32,8 @@ describe('CAS', () => {
     await expect(async () => cas.objectPath('../escape')).rejects.toThrow(CasHashError);
     expect(await cas.unlink(put.sha256)).toBe(true);
     expect(await cas.has(put.sha256)).toBe(false);
+    const again = await cas.put(bytes);
+    expect(await cas.physicalBytes()).toBe(bytes.byteLength);
+    expect(await cas.listObjects()).toEqual([{ sha256: again.sha256, sizeBytes: bytes.byteLength }]);
   });
 });

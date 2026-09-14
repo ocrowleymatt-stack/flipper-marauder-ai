@@ -18,6 +18,7 @@ The schema already supports, without prematurely implementing:
 | Resumable long-running work | `jobs`, `job_checkpoints`, `job_attempts` (leases, retry, cancel). Conversation `executions` are chat-turn records only. |
 | Versioned documents / artefacts | `artefact_metadata.version` + `parent_id` lineage + CAS content. |
 | Files, sources, provenance | CAS blobs + `files` / chunks / attachments + provenance rows. |
+| Generated sites / versioned website trees | `site_records` current-revision pointer + CAS-backed `site_revisions` (not copied `site-v2` trees). |
 | Contextual workbench surfaces | `ContextService` assembles source-backed slices with citations. UI is not in this tranche. |
 | Future Dungeons as thin product shells | Shared platform capabilities (jobs, artefacts, workspaces, files, events). No dungeon-owned databases. |
 

@@ -52,4 +52,14 @@ export class MemoryCas implements CasStore {
   async unlink(sha256: string): Promise<boolean> {
     return this.objects.delete(assertSha256(sha256));
   }
+
+  async listObjects(): Promise<CasStat[]> {
+    return [...this.objects.entries()].map(([sha256, bytes]) => ({ sha256, sizeBytes: bytes.byteLength }));
+  }
+
+  async physicalBytes(): Promise<number> {
+    let total = 0;
+    for (const bytes of this.objects.values()) total += bytes.byteLength;
+    return total;
+  }
 }

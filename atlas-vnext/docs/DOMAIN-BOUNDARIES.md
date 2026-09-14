@@ -22,7 +22,7 @@ Does not own: route policy, UI, project/CAS writes, dungeon modules.
 |---|---|
 | `projects` | Authoritative project records (named workspaces) + current manifest pointer |
 | `storage` | CAS blobs + manifests; never in-DB binaries; retention bounds |
-| `files` | Ingestion, extraction, chunking, attachments, textual artefacts |
+| `files` | Ingestion, extraction, chunking, attachments, textual artefacts, logical sites, bounded revision retention, storage jobs |
 | `context` | Lexical retrieval, budgeted context assembly, honest citations |
 | `jobs` | Shared state machine, checkpoints, leases |
 | `events` | SSE fan-out |

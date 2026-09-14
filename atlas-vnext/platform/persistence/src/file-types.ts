@@ -2,7 +2,21 @@ import type { PersistenceActor } from './actor.ts';
 
 export type FileStatus = 'active' | 'deleted';
 export type ExtractionStatus = 'pending' | 'succeeded' | 'failed';
-export type CasRefKind = 'file' | 'file_version' | 'extraction' | 'artefact' | 'chunk';
+export type CasRefKind =
+  | 'file'
+  | 'file_version'
+  | 'extraction'
+  | 'artefact'
+  | 'chunk'
+  | 'site_revision'
+  | 'site_entry';
+
+export interface CasCatalogStats {
+  objectCount: number;
+  catalogBytes: number;
+  unreferencedCount: number;
+  unreferencedBytes: number;
+}
 
 export interface ChunkLocator {
   path: string;
@@ -168,10 +182,14 @@ export interface AttachmentStore {
 
 export interface CasRefStore {
   ensureObject(sha256: string, sizeBytes: number): Promise<CasObjectRecord>;
+  getObject(sha256: string): Promise<CasObjectRecord | null>;
   addRef(actor: PersistenceActor, input: Omit<CasRefRecord, 'tenantId' | 'createdAt' | 'id'> & { id?: string }): Promise<CasRefRecord>;
   removeRef(actor: PersistenceActor, kind: CasRefKind, ownerId: string, sha256: string): Promise<void>;
+  removeRefsByOwner(actor: PersistenceActor, ownerId: string, kind?: CasRefKind): Promise<number>;
+  listRefsByOwner(actor: PersistenceActor, ownerId: string): Promise<CasRefRecord[]>;
   refCount(sha256: string): Promise<number>;
   hasTenantAccess(actor: PersistenceActor, sha256: string): Promise<boolean>;
   listUnreferenced(limit?: number): Promise<CasObjectRecord[]>;
   deleteObject(sha256: string): Promise<void>;
+  stats(): Promise<CasCatalogStats>;
 }

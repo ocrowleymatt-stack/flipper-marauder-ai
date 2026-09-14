@@ -38,6 +38,7 @@ apps/host  →  ConversationRuntime (current simple-chat surface; not the produc
                 │                     (resumable long-running work; not chat-bound)
                 ├ artefact_metadata   (first-class durable results; hash pointer only)
                 ├ files / chunks / attachments
+                ├ site_records / site_revisions (logical current site pointer)
                 ├ cas_objects / cas_refs (refcount; bytes stay in CAS)
                 ├ provenance          (artefact lineage; not a second chat log)
                 ├ events              (per-stream seq + replay; conversation or job)
@@ -60,6 +61,7 @@ Tables (see `platform/persistence/migrations/`):
 - `runtime_leases`
 - `provenance`, `artefact_metadata` (hashes/metadata only; no blobs)
 - `cas_objects`, `cas_refs`, `files`, `file_versions`, `extractions`, `chunks`, `attachments`
+- `site_records`, `site_revisions`, `site_revision_entries` (logical site + current revision pointer; no copied trees)
 
 IDs are opaque strings (`cnv_…`, `job_…`). Ownership is `(tenant_id)` plus optional `workspace_id`. Looking up by ID without a tenant fails closed.
 
@@ -71,9 +73,9 @@ IDs are opaque strings (`cnv_…`, `job_…`). Ownership is `(tenant_id)` plus o
 4. Failed SQL rolls back that migration and throws `MigrationError`. Data already committed is left intact; the bad version is not recorded.
 5. Migrations are additive. They must not `DROP SCHEMA` / `DROP DATABASE` or recreate the world.
 
-Empty database: apply 001 then 002. Repeat startup: both skipped.
+Empty database: apply 001…005. Repeat startup: all skipped.
 
-Upgrade fixture: apply frozen v1 SQL + `schema_migrations` row 1, then run the migrator (applies 002).
+Upgrade fixture: apply frozen v1 SQL + `schema_migrations` row 1, then run the migrator (applies 002–005).
 
 ## Transaction boundaries
 

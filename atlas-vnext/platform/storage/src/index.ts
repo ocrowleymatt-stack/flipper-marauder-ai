@@ -4,8 +4,10 @@ export {
   SHA256_HEX,
   CasHashError,
   CasNotFoundError,
+  CasPublicationError,
   assertSha256,
   casObjectRelPath,
+  isDiskFullError,
   sha256Hex,
   verifyBytes,
 } from './cas.ts';

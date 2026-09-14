@@ -10,9 +10,22 @@ import { FilesAccessError, IngestionError } from './errors.ts';
 import { EXTRACTOR_ID, EXTRACTOR_VERSION, extractBytes, estimateTokens } from './extract/index.ts';
 import { resolveMime, type AllowedMime } from './mime.ts';
 import { displayNameFromPath, sanitiseRelPath } from './path.ts';
+import {
+  DEFAULT_SITE_RETENTION,
+  SiteService,
+  STORAGE_JOB_GC,
+  STORAGE_JOB_RETAIN,
+  type SiteRetentionPolicy,
+} from './sites.ts';
 
 export const FILE_JOB_DUNGEON = 'platform';
 export const FILE_JOB_INGEST = 'files.ingest';
+export { STORAGE_JOB_DUNGEON, STORAGE_JOB_GC, STORAGE_JOB_RETAIN } from './sites.ts';
+
+export type FilesJobOutcome =
+  | FileRecord
+  | { kind: 'storage.retain'; expiredRevisionIds: string[] }
+  | { kind: 'storage.gc'; reclaimed: string[] };
 
 export interface IngestInput {
   projectId: string;
@@ -23,11 +36,16 @@ export interface IngestInput {
 }
 
 export class FilesService {
+  readonly sites: SiteService;
+
   constructor(
     private readonly persistence: PlatformPersistence,
     private readonly cas: CasStore,
     private readonly clock: () => string = () => new Date().toISOString(),
-  ) {}
+    policy: SiteRetentionPolicy = DEFAULT_SITE_RETENTION,
+  ) {
+    this.sites = new SiteService(persistence, cas, clock, policy);
+  }
 
   async ingest(actor: PersistenceActor, input: IngestInput): Promise<FileRecord> {
     const scoped = this.scoped(actor, 'ingest file');
@@ -157,26 +175,98 @@ export class FilesService {
   }
 
   async gcUnreferenced(limit = 50): Promise<string[]> {
-    const bound = this.persistence.forActor({ tenantId: 'system_gc' });
-    const orphans = await this.persistence.forActor({ tenantId: 'system_gc' }).casRefs.listUnreferenced(limit);
-    void bound;
+    const refs = this.persistence.forActor({ tenantId: 'system_gc' }).casRefs;
     const removed: string[] = [];
+    const orphans = await refs.listUnreferenced(limit);
     for (const object of orphans) {
-      await this.cas.unlink(object.sha256);
-      const actor = { tenantId: 'system_gc' };
-      const refs = this.persistence.forActor(actor).casRefs;
-      await refs.deleteObject(object.sha256);
-      removed.push(object.sha256);
-      logPlatform('files.cas.gc', { contentHash: object.sha256, sizeBytes: object.sizeBytes });
+      try {
+        const count = await refs.refCount(object.sha256);
+        if (count > 0) {
+          logPlatform('sites.gc.skipped', {
+            contentHash: object.sha256,
+            reason: 'still-referenced',
+            refCount: count,
+          });
+          continue;
+        }
+        await refs.deleteObject(object.sha256);
+        await this.cas.unlink(object.sha256);
+        removed.push(object.sha256);
+        logPlatform('sites.gc.reclaimed', { contentHash: object.sha256, sizeBytes: object.sizeBytes });
+      } catch (err) {
+        logPlatform(
+          'sites.gc.failed',
+          { contentHash: object.sha256, error: err instanceof Error ? err.message : String(err) },
+          'error',
+        );
+      }
+    }
+    const disk = await this.cas.listObjects();
+    for (const object of disk) {
+      const catalog = await refs.getObject(object.sha256);
+      if (catalog) continue;
+      try {
+        const liveRefs = await refs.refCount(object.sha256);
+        if (liveRefs > 0) continue;
+        await this.cas.unlink(object.sha256);
+        removed.push(object.sha256);
+        logPlatform('sites.gc.reclaimed', {
+          contentHash: object.sha256,
+          sizeBytes: object.sizeBytes,
+          reason: 'disk-orphan',
+        });
+      } catch (err) {
+        logPlatform(
+          'sites.gc.failed',
+          { contentHash: object.sha256, error: err instanceof Error ? err.message : String(err) },
+          'error',
+        );
+      }
     }
     return removed;
   }
 
-  async processNextJob(actor: PersistenceActor, workerId: string, leaseMs = 30_000): Promise<FileRecord | null> {
+  async processNextJob(actor: PersistenceActor, workerId: string, leaseMs = 30_000): Promise<FilesJobOutcome | null> {
     const scoped = this.scoped(actor, 'process file job');
     const bound = this.persistence.forActor(scoped);
     const job = await bound.jobs.claimNext(scoped, workerId, leaseMs);
     if (!job) return null;
+    if (job.type === STORAGE_JOB_RETAIN) {
+      try {
+        const expiredRevisionIds = await this.sites.retainForTenant(scoped);
+        await bound.jobs.checkpoint(scoped, job.id, 'retained', 1, { expiredRevisionIds });
+        await bound.jobs.complete(scoped, job.id);
+        return { kind: 'storage.retain', expiredRevisionIds };
+      } catch (err) {
+        await bound.jobs.fail(scoped, job.id, {
+          code: 'storage.retain_failed',
+          message: err instanceof Error ? err.message : String(err),
+          retryable: true,
+        });
+        throw err;
+      }
+    }
+    if (job.type === STORAGE_JOB_GC) {
+      try {
+        const reclaimed = await this.gcUnreferenced();
+        await bound.jobs.checkpoint(scoped, job.id, 'reclaimed', 1, { reclaimedCount: reclaimed.length });
+        await bound.jobs.complete(scoped, job.id);
+        logPlatform('sites.gc.completed', { tenantId: scoped.tenantId, reclaimedCount: reclaimed.length });
+        return { kind: 'storage.gc', reclaimed };
+      } catch (err) {
+        await bound.jobs.fail(scoped, job.id, {
+          code: 'storage.gc_failed',
+          message: err instanceof Error ? err.message : String(err),
+          retryable: true,
+        });
+        logPlatform(
+          'sites.gc.failed',
+          { tenantId: scoped.tenantId, error: err instanceof Error ? err.message : String(err) },
+          'error',
+        );
+        throw err;
+      }
+    }
     if (job.type !== FILE_JOB_INGEST) {
       await bound.jobs.fail(scoped, job.id, {
         code: 'unsupported_job',

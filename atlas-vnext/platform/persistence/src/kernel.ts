@@ -25,10 +25,12 @@ import type {
   FileStore,
   FileVersionStore,
 } from './file-types.ts';
+import type { SiteStore } from './site-types.ts';
 
 export type {
   AttachmentRecord,
   AttachmentStore,
+  CasCatalogStats,
   CasObjectRecord,
   CasRefKind,
   CasRefRecord,
@@ -45,6 +47,14 @@ export type {
   FileVersionRecord,
   FileVersionStore,
 } from './file-types.ts';
+export type {
+  SiteCounts,
+  SiteRecord,
+  SiteRetentionClass,
+  SiteRevisionEntry,
+  SiteRevisionRecord,
+  SiteStore,
+} from './site-types.ts';
 
 export interface TenantRecord {
   id: string;
@@ -199,6 +209,7 @@ export interface ActorBoundPersistence {
   chunks: ChunkStore;
   attachments: AttachmentStore;
   casRefs: CasRefStore;
+  sites: SiteStore;
 }
 
 export interface RestartRecoveryResult {

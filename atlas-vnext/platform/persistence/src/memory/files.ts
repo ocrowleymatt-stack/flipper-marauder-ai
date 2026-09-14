@@ -4,6 +4,7 @@ import { ConflictError, OwnershipError } from '../errors.ts';
 import type {
   AttachmentRecord,
   AttachmentStore,
+  CasCatalogStats,
   CasObjectRecord,
   CasRefKind,
   CasRefRecord,
@@ -318,6 +319,11 @@ export function createMemoryFileStores(clock: () => string) {
       casObjects.set(sha256, record);
       return record;
     },
+    async getObject(sha256) {
+      const existing = casObjects.get(sha256);
+      if (!existing) return null;
+      return { ...existing, refCount: await casRefStore.refCount(sha256) };
+    },
     async addRef(actor, input) {
       const scoped = assertActor(actor, 'add CAS ref');
       const key = `${input.sha256}::${input.kind}::${input.ownerId}`;
@@ -341,6 +347,23 @@ export function createMemoryFileStores(clock: () => string) {
       const existing = casRefs.get(key);
       if (existing && existing.tenantId === scoped.tenantId) casRefs.delete(key);
     },
+    async removeRefsByOwner(actor, ownerId, kind) {
+      const scoped = assertActor(actor, 'remove CAS refs by owner');
+      let removed = 0;
+      for (const [key, ref] of [...casRefs]) {
+        if (ref.tenantId !== scoped.tenantId || ref.ownerId !== ownerId) continue;
+        if (kind && ref.kind !== kind) continue;
+        casRefs.delete(key);
+        removed += 1;
+      }
+      return removed;
+    },
+    async listRefsByOwner(actor, ownerId) {
+      const scoped = assertActor(actor, 'list CAS refs by owner');
+      return [...casRefs.values()].filter(
+        (item) => item.tenantId === scoped.tenantId && item.ownerId === ownerId,
+      );
+    },
     async refCount(sha256) {
       return [...casRefs.values()].filter((item) => item.sha256 === sha256).length;
     },
@@ -348,15 +371,28 @@ export function createMemoryFileStores(clock: () => string) {
       const scoped = assertActor(actor, 'CAS access');
       return [...casRefs.values()].some((item) => item.sha256 === sha256 && item.tenantId === scoped.tenantId);
     },
-    async listUnreferenced() {
+    async listUnreferenced(limit = 100) {
       return [...casObjects.values()]
         .map((item) => ({ ...item, refCount: [...casRefs.values()].filter((ref) => ref.sha256 === item.sha256).length }))
-        .filter((item) => item.refCount === 0);
+        .filter((item) => item.refCount === 0)
+        .slice(0, limit);
     },
     async deleteObject(sha256) {
       const count = await casRefStore.refCount(sha256);
       if (count > 0) throw new ConflictError(`Cannot GC CAS object ${sha256} while ${count} refs remain.`);
       casObjects.delete(sha256);
+    },
+    async stats(): Promise<CasCatalogStats> {
+      const objects = [...casObjects.values()];
+      const unreferenced = objects.filter(
+        (item) => ![...casRefs.values()].some((ref) => ref.sha256 === item.sha256),
+      );
+      return {
+        objectCount: objects.length,
+        catalogBytes: objects.reduce((sum, item) => sum + item.sizeBytes, 0),
+        unreferencedCount: unreferenced.length,
+        unreferencedBytes: unreferenced.reduce((sum, item) => sum + item.sizeBytes, 0),
+      };
     },
   };
 

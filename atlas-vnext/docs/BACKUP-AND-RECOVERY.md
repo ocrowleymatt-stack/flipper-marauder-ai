@@ -13,7 +13,7 @@
 1. Restore PostgreSQL from dump/WAL to a **new** cluster (do not overlay a live primary blindly).
 2. Restore object store to the matching generation.
 3. Integrity: for each project, `root_manifest_hash` must exist in CAS; sample blob SHA-256 matches path layout `sha256/ab/cd/<hex>`.
-4. Job rows in `running`/`waiting` at crash are marked `failed` with retryable structured failure or re-queued from checkpoint — never silently continue a lease from a dead worker.
+4. Job rows in `running` at crash are re-queued from checkpoint or marked `failed` when retries are exhausted. `waiting_runtime` stays `waiting_runtime`. Conversation executions that were `queued`/`running` become `failed` / `interrupted`. Never silently continue a dead worker's lease.
 5. Declare success only after a read-only canary (list projects, fetch one blob, resume one job).
 
 ## Disaster-recovery assumptions
@@ -24,4 +24,4 @@
 
 ## Migration rollback
 
-Schema migrations are forward-only with an explicit down path in the same PR, or expand-contract. Product dungeon migrations must not fork a second database. Design-gate has no live schema yet.
+Schema migrations are forward-only, checksummed, and fail startup visibly. There is no automatic destructive schema recreation. See [PERSISTENCE.md](./PERSISTENCE.md).

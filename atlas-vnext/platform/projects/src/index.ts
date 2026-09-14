@@ -2,6 +2,7 @@ import type { DungeonId } from '@atlas-vnext/contracts';
 
 export interface Project {
   id: string;
+  tenantId: string;
   name: string;
   dungeon: DungeonId | string;
   rootManifestHash: string | null;
@@ -11,7 +12,7 @@ export interface Project {
 }
 
 export interface ProjectStore {
-  create(input: { name: string; dungeon: string }): Promise<Project>;
+  create(input: { name: string; dungeon: string; tenantId: string }): Promise<Project>;
   get(id: string): Promise<Project | null>;
   bindManifest(id: string, manifestHash: string): Promise<Project>;
 }

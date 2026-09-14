@@ -10,6 +10,23 @@ jobs:
     defaults:
       run:
         working-directory: atlas-vnext
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: atlas
+          POSTGRES_DB: atlas_vnext
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atlas -d atlas_vnext"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://atlas:atlas@localhost:5432/atlas_vnext
+      ATLAS_DATABASE_URL: postgres://atlas:atlas@localhost:5432/atlas_vnext
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,8 +42,12 @@ jobs:
         run: npm run typecheck
       - name: Unit tests
         run: npm test
+      - name: Persistence / PostgreSQL
+        run: npm run test:persistence
       - name: Architecture boundary tests
         run: npm run test:boundaries
+      - name: Provider / runtime tests
+        run: npm run test:providers
       - name: Mountain behavioural compatibility
         run: npm run test:compat
       - name: Build

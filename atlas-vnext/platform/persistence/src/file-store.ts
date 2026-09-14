@@ -15,7 +15,7 @@ import type {
   ProvenanceWriter,
 } from '@atlas-vnext/conversation';
 import { UuidIdFactory } from '@atlas-vnext/conversation';
-import type { DomainEvent, EventBus } from '@atlas-vnext/events';
+import type { DomainEvent, EventBus, EventPublishInput, EventReplayCursor } from '@atlas-vnext/events';
 
 export const PERSISTENCE_SCHEMA_VERSION = 1;
 
@@ -105,11 +105,29 @@ export class DurableEventBus implements EventBus {
     private readonly now: () => string = () => new Date().toISOString(),
   ) {}
 
-  async publish(event: Omit<DomainEvent, 'eventId' | 'timestamp'>): Promise<DomainEvent> {
+  async publish(event: EventPublishInput): Promise<DomainEvent> {
+    if (event.idempotencyKey) {
+      const existing = this.document
+        .getDocument()
+        .events.find(
+          (item) => item.idempotencyKey === event.idempotencyKey && (item.tenantId ?? null) === (event.tenantId ?? null),
+        );
+      if (existing) return existing;
+    }
+    const channelEvents = this.document.getDocument().events.filter((item) => item.channel === event.channel);
+    const seq = channelEvents.reduce((max, item) => Math.max(max, item.seq ?? 0), 0) + 1;
     const recorded: DomainEvent = {
-      eventId: `evt_${randomUUID()}`,
+      eventId: event.eventId ?? `evt_${randomUUID()}`,
       timestamp: this.now(),
-      ...event,
+      channel: event.channel,
+      type: event.type,
+      payload: event.payload,
+      seq,
+      tenantId: event.tenantId,
+      workspaceId: event.workspaceId ?? null,
+      conversationId: event.conversationId ?? null,
+      jobId: event.jobId ?? null,
+      idempotencyKey: event.idempotencyKey ?? null,
     };
     await this.document.mutate((doc) => {
       doc.events.push(recorded);
@@ -130,9 +148,18 @@ export class DurableEventBus implements EventBus {
   }
 
   async history(channel: string): Promise<DomainEvent[]> {
+    return this.replay(channel);
+  }
+
+  async replay(channel: string, after?: EventReplayCursor): Promise<DomainEvent[]> {
     const events = this.document.getDocument().events;
-    if (channel === '*') return [...events];
-    return events.filter((event) => event.channel === channel);
+    let records = channel === '*' ? [...events] : events.filter((event) => event.channel === channel);
+    let afterSeq = after?.seq;
+    if (after?.eventId && afterSeq === undefined) {
+      afterSeq = events.find((event) => event.eventId === after.eventId)?.seq;
+    }
+    if (typeof afterSeq === 'number') records = records.filter((event) => (event.seq ?? 0) > afterSeq);
+    return records.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
   }
 }
 

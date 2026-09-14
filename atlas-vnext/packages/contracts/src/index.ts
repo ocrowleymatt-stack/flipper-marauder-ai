@@ -178,6 +178,8 @@ export type StructuredFailure = z.infer<typeof structuredFailureSchema>;
 
 export const jobRecordSchema = z.object({
   id: z.string(),
+  tenantId: z.string().min(1).optional(),
+  workspaceId: z.string().nullable().optional(),
   projectId: z.string().nullable(),
   dungeon: z.string(),
   type: z.string(),
@@ -191,6 +193,7 @@ export const jobRecordSchema = z.object({
   leaseOwner: z.string().nullable(),
   leaseUntil: z.string().nullable(),
   idempotencyKey: z.string().nullable(),
+  cancelRequested: z.boolean().optional(),
   traceId: z.string(),
   failureReason: structuredFailureSchema.nullable(),
   createdAt: z.string(),
@@ -345,6 +348,8 @@ export const conversationSchema = z.object({
   urn: z.string().min(1),
   title: z.string().min(1),
   projectId: z.string().nullable(),
+  tenantId: z.string().min(1).optional(),
+  workspaceId: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -361,6 +366,7 @@ export const messageSchema = z.object({
   content: z.string(),
   sequence: z.number().int().nonnegative(),
   executionId: z.string().nullable(),
+  tenantId: z.string().min(1).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -402,6 +408,7 @@ export const executionRecordSchema = z.object({
   conversationId: z.string().min(1),
   userMessageId: z.string().min(1),
   assistantMessageId: z.string().nullable(),
+  tenantId: z.string().min(1).optional(),
   status: executionStatusSchema,
   capability: z.string().min(1),
   route: routeDecisionSchema.nullable(),

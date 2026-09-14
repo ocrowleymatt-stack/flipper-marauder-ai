@@ -56,6 +56,54 @@ export class MemoryRouteLog implements ObservabilitySink {
   }
 }
 
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+const REDACT_KEY = /password|secret|token|authorization|api[_-]?key|database_url|connectionstring|credential/i;
+const REDACT_BODY_KEY = /^(content|body|text|prompt|payload|message)$/i;
+
+export function redactSecret(value: string): string {
+  return value.replace(/:([^:@/]+)@/g, ':***@');
+}
+
+export function redactFields(fields: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (REDACT_KEY.test(key) || REDACT_BODY_KEY.test(key)) {
+      out[key] = typeof value === 'string' ? redactSecret(value) === value ? '[redacted]' : redactSecret(value) : '[redacted]';
+      if (typeof value === 'string' && /:/.test(value) && /@/.test(value)) out[key] = redactSecret(value);
+      continue;
+    }
+    if (typeof value === 'string') out[key] = redactSecret(value);
+    else out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Structured platform log. Never pass message bodies, credentials, or provider
+ * payloads; redaction is a backstop, not a license to log them.
+ */
+export function logPlatform(
+  event: string,
+  fields: Record<string, unknown> = {},
+  level: LogLevel = 'info',
+  sink: (line: string) => void = (line) => {
+    if (level === 'error') console.error(line);
+    else if (level === 'warn') console.warn(line);
+    else console.info(line);
+  },
+): void {
+  sink(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      component: 'atlas-vnext',
+      level,
+      event,
+      ...redactFields(fields),
+    }),
+  );
+}
+
 export function routeTraceFromDecision(
   decision: RouteDecision,
   attempts: ObservedRouteAttempt[] = [],

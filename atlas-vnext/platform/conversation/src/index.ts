@@ -10,6 +10,7 @@ export type {
   MessageRepository,
   ModelExecutor,
   ProvenanceWriter,
+  UnitOfWork,
 } from './ports.ts';
 export { memoryStores } from './memory.ts';
 export { ConversationRuntime, conversationChannel, estimateTokens } from './runtime.ts';

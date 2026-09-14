@@ -25,6 +25,7 @@
       "@atlas-vnext/provenance": ["./platform/provenance/src/index.ts"],
       "@atlas-vnext/jobs": ["./platform/jobs/src/index.ts"],
       "@atlas-vnext/permissions": ["./platform/permissions/src/index.ts"],
+      "@atlas-vnext/projects": ["./platform/projects/src/index.ts"],
       "@atlas-vnext/observability": ["./platform/observability/src/index.ts"],
       "@atlas-vnext/storage": ["./platform/storage/src/index.ts"]
     }

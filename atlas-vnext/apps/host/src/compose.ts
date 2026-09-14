@@ -12,12 +12,21 @@ import {
   type SecretStore,
 } from '@atlas-vnext/execution';
 import { NexusRegistry, NexusRouter } from '@atlas-vnext/nexus';
-import { openDurableStore, type DurableConversationStore } from '@atlas-vnext/persistence';
+import {
+  openDurableStore,
+  openPlatformPersistence,
+  readPersistenceConfig,
+  PersistenceConfigError,
+  type DurableConversationStore,
+  type PersistenceConfig,
+  type PlatformPersistence,
+} from '@atlas-vnext/persistence';
 import { MODEL_CATALOGUE } from './catalogue.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
-  store: DurableConversationStore;
+  store: DurableConversationStore | null;
+  persistence: PlatformPersistence | null;
   router: NexusRouter;
   registry: NexusRegistry;
   broker: ReturnType<typeof createExecutionPlane>['broker'];
@@ -26,6 +35,7 @@ export interface Spine {
   availableRuntimes: string[];
   scheduler: RuntimeScheduler | null;
   runtimeSnapshot: () => RuntimeSnapshot | null;
+  close: () => Promise<void>;
 }
 
 export interface ComposeOptions {
@@ -37,6 +47,7 @@ export interface ComposeOptions {
   transport?: HttpTransport;
   runtimeStatePath?: string | null;
   runpodClient?: RunPodClient;
+  persistence?: PersistenceConfig;
 }
 
 /**
@@ -45,13 +56,14 @@ export interface ComposeOptions {
  */
 export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   const mode: ExecutionMode = options.mode ?? 'live';
-  const store = openDurableStore(options.dataPath);
+  const env = options.env ?? (mode === 'live' ? process.env : {});
+  const persistenceConfig = options.persistence ?? readPersistenceConfig(env);
+
   const registry = new NexusRegistry();
   for (const model of MODEL_CATALOGUE) {
     registry.register(model);
   }
 
-  const env = options.env ?? (mode === 'live' ? process.env : {});
   const secrets = options.secrets ?? new EnvSecretStore(env);
   const plane = createExecutionPlane({
     mode,
@@ -83,20 +95,50 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   }
 
   const router = new NexusRouter(registry);
-  const runtime = new ConversationRuntime({
-    conversations: store.conversations,
-    messages: store.messages,
-    executions: store.executions,
-    provenance: store.provenance,
-    events: store.events,
-    router,
-    executor: plane.broker,
-    availableRuntimes: plane.available,
-  });
-  await runtime.recoverInFlight();
+  let store: DurableConversationStore | null = null;
+  let persistence: PlatformPersistence | null = null;
+  let runtime: ConversationRuntime;
+
+  if (persistenceConfig.mode === 'postgres' || persistenceConfig.mode === 'memory') {
+    persistence = await openPlatformPersistence(persistenceConfig);
+    const tenantId = persistenceConfig.defaultTenantId;
+    if (!tenantId) {
+      await persistence.close();
+      throw new PersistenceConfigError('PostgreSQL/memory host mode requires ATLAS_TENANT_ID.');
+    }
+    await persistence.ensureTenant({ id: tenantId, name: tenantId });
+    const bound = persistence.forActor({ tenantId });
+    runtime = new ConversationRuntime({
+      conversations: bound.conversations,
+      messages: bound.messages,
+      executions: bound.executions,
+      provenance: bound.provenance,
+      events: bound.events,
+      router,
+      executor: plane.broker,
+      availableRuntimes: plane.available,
+      unitOfWork: persistence,
+    });
+    await persistence.recoverOnStart();
+  } else {
+    store = openDurableStore(options.dataPath);
+    runtime = new ConversationRuntime({
+      conversations: store.conversations,
+      messages: store.messages,
+      executions: store.executions,
+      provenance: store.provenance,
+      events: store.events,
+      router,
+      executor: plane.broker,
+      availableRuntimes: plane.available,
+    });
+    await runtime.recoverInFlight();
+  }
+
   return {
     runtime,
     store,
+    persistence,
     router,
     registry,
     broker: plane.broker,
@@ -105,5 +147,9 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     availableRuntimes: plane.available,
     scheduler: plane.scheduler,
     runtimeSnapshot: () => plane.runtimeSnapshot(),
+    close: async () => {
+      plane.scheduler?.stopIdleWatch();
+      await persistence?.close();
+    },
   };
 }

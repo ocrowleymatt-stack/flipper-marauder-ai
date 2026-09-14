@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   DEFAULT_BEHAVIOUR_MODE,
   behaviourModeSchema,
@@ -36,8 +37,10 @@ const ids = new UuidIdFactory();
 
 class AsyncMutex {
   private chain: Promise<void> = Promise.resolve();
+  private readonly als = new AsyncLocalStorage<boolean>();
   run<T>(fn: () => Promise<T>): Promise<T> {
-    const next = this.chain.then(fn, fn);
+    if (this.als.getStore()) return fn();
+    const next = this.chain.then(() => this.als.run(true, fn), () => this.als.run(true, fn));
     this.chain = next.then(
       () => undefined,
       () => undefined,

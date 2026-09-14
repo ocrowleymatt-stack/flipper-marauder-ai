@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CAPABILITY_SCOPES } from './capabilities.ts';
 
 /**
  * Mountain behavioural compatibility contracts.
@@ -47,21 +48,8 @@ export type TenantBehaviourRecord = z.infer<typeof tenantBehaviourRecordSchema>;
  * Current main @ 5cc7a964… keeps `behaviour/` separate from `permissions/engine.ts`.
  * These scopes stay independent of Behaviour.
  */
-export const AUTHORITY_SCOPES_UNCHANGED_BY_BEHAVIOUR = [
-  'filesystem.read',
-  'filesystem.write',
-  'network.public',
-  'network.private',
-  'browser.control',
-  'shell.execute',
-  'repo.read',
-  'repo.write',
-  'deployment.promote',
-  'secrets.use',
-  'device.control',
-  'compute.allocate',
-  'admin.configure',
-] as const;
+/** Open/Standard must not change any Authority scope, including the production namespace. */
+export const AUTHORITY_SCOPES_UNCHANGED_BY_BEHAVIOUR = CAPABILITY_SCOPES;
 
 export const behaviourAuthorityBoundarySchema = z.object({
   behaviour: behaviourModeSchema,

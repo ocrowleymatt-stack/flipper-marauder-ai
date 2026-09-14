@@ -1,5 +1,13 @@
 import { z } from 'zod';
 import { rejectedCandidateSchema, routingDelegationSchema } from './mountain-compat.ts';
+export {
+  CAPABILITY_SCOPES,
+  capabilityScopeSchema,
+  authorityCapabilitySchema,
+  DANGEROUS_CAPABILITY_SCOPES,
+  READONLY_TOOL_CAPABILITIES,
+} from './capabilities.ts';
+export type { CapabilityScope, AuthorityCapability } from './capabilities.ts';
 
 /**
  * Atlas vNext shared contracts.
@@ -121,36 +129,6 @@ export const streamChunkSchema = z.discriminatedUnion('type', [
   }),
 ]);
 export type StreamChunk = z.infer<typeof streamChunkSchema>;
-
-export const capabilityScopeSchema = z.enum([
-  'filesystem.read',
-  'filesystem.write',
-  'network.public',
-  'network.private',
-  'browser.control',
-  'shell.execute',
-  'repo.read',
-  'repo.write',
-  'deployment.promote',
-  'secrets.use',
-  'device.control',
-  'compute.allocate',
-  'admin.configure',
-]);
-export type CapabilityScope = z.infer<typeof capabilityScopeSchema>;
-
-export const DANGEROUS_CAPABILITY_SCOPES: readonly CapabilityScope[] = [
-  'filesystem.write',
-  'network.private',
-  'browser.control',
-  'shell.execute',
-  'repo.write',
-  'deployment.promote',
-  'secrets.use',
-  'device.control',
-  'compute.allocate',
-  'admin.configure',
-];
 
 export const permissionDecisionSchema = z.enum(['ALLOW', 'ASK', 'DENY']);
 export type PermissionDecision = z.infer<typeof permissionDecisionSchema>;
@@ -502,6 +480,22 @@ export const conversationStreamEventSchema = z.discriminatedUnion('type', [
     executionId: z.string(),
     call: toolCallRequestSchema,
   }),
+  z.object({
+    type: z.literal('tool.lifecycle'),
+    executionId: z.string(),
+    invocationId: z.string(),
+    toolId: z.string(),
+    status: z.string().min(1),
+    reason: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal('tool.result'),
+    executionId: z.string(),
+    invocationId: z.string(),
+    toolId: z.string(),
+    resultRef: z.string().nullable().optional(),
+    output: z.unknown().optional(),
+  }),
   z.object({ type: z.literal('usage'), executionId: z.string(), usage: tokenUsageSchema }),
   z.object({
     type: z.literal('provider.warning'),
@@ -538,3 +532,4 @@ export const conversationSnapshotSchema = z.object({
 export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema>;
 
 export * from './mountain-compat.ts';
+export * from './tools-auth.ts';

@@ -63,7 +63,7 @@ async function collect(
   return chunks;
 }
 
-describe('mountain-compat 1: failover-before-output / never-after-output (historical Mountain failover-provider.ts @ 5cc7a96; inspected vNext broker)', () => {
+describe('mountain-compat 1: failover-before-output / never-after-output (current Mountain failover-provider.ts @ 5cc7a96; Mountain #172; inspected vNext broker)', () => {
   it('retries/fails over before visible assistant output', async () => {
     const broker = new ExecutionBroker(1);
     broker.register({
@@ -169,7 +169,7 @@ describe('mountain-compat 1: failover-before-output / never-after-output (histor
   });
 });
 
-describe('mountain-compat 2: transactional tool-call buffering (historical Mountain failover-provider.ts @ 5cc7a96; inspected assembler + broker)', () => {
+describe('mountain-compat 2: transactional tool-call buffering (current Mountain failover-provider.ts @ 5cc7a96; inspected assembler + broker)', () => {
   it('does not emit tool calls from a failed attempt (no duplicate side effects)', async () => {
     const broker = new ExecutionBroker(1);
     let sideEffects = 0;
@@ -221,7 +221,7 @@ describe('mountain-compat 2: transactional tool-call buffering (historical Mount
   });
 });
 
-describe('mountain-compat 3: transient retry classification (historical Mountain provider-error.ts @ 5cc7a96; 429/5xx is vNext/Caspa-adjacent mapping)', () => {
+describe('mountain-compat 3: transient retry classification (current Mountain provider-error.ts @ 5cc7a96; 429/5xx is vNext/Caspa-adjacent mapping)', () => {
   it('classifies timeout/reset/429/5xx as transient and 400/401/unsupported/permission/context overflow as terminal', () => {
     expect(classifyProviderFailure(new Error('timeout before tokens')).retryable).toBe(true);
     expect(classifyProviderFailure(new Error('ECONNRESET')).retryable).toBe(true);
@@ -301,7 +301,7 @@ describe('mountain-compat 3: transient retry classification (historical Mountain
   });
 });
 
-describe('mountain-compat 4: local-only Private routing (historical Mountain nexus/private @ 5cc7a96; inspected Nexus privacy)', () => {
+describe('mountain-compat 4: local-only Private routing (current Mountain nexus/private @ 5cc7a96; Mountain #172; inspected Nexus privacy)', () => {
   it('never selects public-cloud under local_only privacy', () => {
     const { router } = routingHarness();
     const routed = router.resolve('nexus/fast', { privacy: 'local_only' });
@@ -345,7 +345,7 @@ describe('mountain-compat 4: local-only Private routing (historical Mountain nex
   });
 });
 
-describe('mountain-compat 5: Behaviour ≠ Authority (historical Mountain behaviour/ vs permissions/ @ 5cc7a96; #172/#221 unread)', () => {
+describe('mountain-compat 5: Behaviour ≠ Authority (current Mountain behaviour/ vs permissions/ @ 5cc7a96; Mountain #172)', () => {
   it('Open posture grants no extra filesystem, shell, network, publishing, compute, or admin capability', () => {
     const gate = new DefaultDenyGate();
     const open = authorityBoundary('open', gate);
@@ -382,7 +382,7 @@ describe('mountain-compat 5: Behaviour ≠ Authority (historical Mountain behavi
   });
 });
 
-describe('mountain-compat 6: tenant-isolated Behaviour persistence (historical tenancy/database-router + posture-store @ 5cc7a96; stub)', () => {
+describe('mountain-compat 6: tenant-isolated Behaviour persistence (current Mountain tenancy/database-router + posture-store @ 5cc7a96; Mountain #172; stub)', () => {
   it('resolves per tenant, isolates A from B, and fail-closes to Standard', () => {
     const store = new TenantBehaviourStore();
     expect(store.resolve('tenant-a')).toBe(DEFAULT_BEHAVIOUR_MODE);
@@ -410,7 +410,7 @@ describe('mountain-compat 6: tenant-isolated Behaviour persistence (historical t
   });
 });
 
-describe('mountain-compat 7: Behaviour prompt composed with capability/runtime policy (historical posture + mode-policy @ 5cc7a96; vNext fail-closed compose)', () => {
+describe('mountain-compat 7: Behaviour prompt composed with capability/runtime policy (current Mountain posture + mode-policy @ 5cc7a96; Mountain #172; vNext fail-closed compose)', () => {
   it('composes posture with policy and refuses to replace capability or runtime layers', () => {
     const open = composeBehaviourPrompt({
       behaviour: 'open',
@@ -436,7 +436,7 @@ describe('mountain-compat 7: Behaviour prompt composed with capability/runtime p
   });
 });
 
-describe('mountain-compat 8: Auto/Power-Pod specialist/fallback (historical hybrid-auto-policy @ 5cc7a96; inspected Forge-before-RunPod ranking)', () => {
+describe('mountain-compat 8: Auto/Power-Pod specialist/fallback (current Mountain hybrid-auto-policy @ 5cc7a96; inspected Forge-before-RunPod ranking)', () => {
   it('is not a dumb alias lookup and is not in ALIAS_POLICIES', () => {
     expect(capabilityAliasSchema.safeParse('auto').success).toBe(false);
     expect(capabilityAliasSchema.safeParse('power-pod').success).toBe(false);
@@ -490,7 +490,7 @@ describe('mountain-compat 8: Auto/Power-Pod specialist/fallback (historical hybr
   });
 
   it('vNext ranking (not a Mountain alias): fastest healthy reasoner wins nexus/reason; Auto still prefers local', () => {
-    // Historical Mountain 5cc7a96 capability table: nexus/reason primary was anthropic.
+    // Current Mountain @ 5cc7a96 capability table: nexus/reason primary was anthropic.
     // vNext ranks registered reasoners by runtime then latency. Fixture grok-build is fast.
     const { router } = routingHarness();
     const reason = router.resolve('nexus/reason', {
@@ -532,7 +532,7 @@ describe('mountain-compat 8: Auto/Power-Pod specialist/fallback (historical hybr
   });
 });
 
-describe('mountain-compat 9: route observability records attempts and rejects (historical performance/trace @ 5cc7a96; inspected vNext attempts)', () => {
+describe('mountain-compat 9: route observability records attempts and rejects (current Mountain performance/trace @ 5cc7a96; inspected vNext attempts)', () => {
   it('records actual attempted providers including failures, skips, and ranking rejects — not only the winner', async () => {
     const { router } = routingHarness();
     const routed = router.resolve('nexus/fast', { privacy: 'local_only' });
@@ -591,7 +591,7 @@ describe('mountain-compat 9: route observability records attempts and rejects (h
   });
 });
 
-describe('mountain-compat 10: deployment/resource hygiene — bounded retention (historical storage-pressure @ 5cc7a96; inspected RuntimeObserver cap)', () => {
+describe('mountain-compat 10: deployment/resource hygiene — bounded retention (current Mountain storage-pressure @ 5cc7a96; inspected RuntimeObserver cap)', () => {
   it('prunes artefacts, workspaces, releases, and events instead of growing unbounded', () => {
     const guard = new RetentionGuard({
       maxArtefacts: 3,

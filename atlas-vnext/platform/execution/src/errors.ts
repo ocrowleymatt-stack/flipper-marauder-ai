@@ -61,7 +61,7 @@ export function throwIfSecretLeaked(message: string, secret: string | undefined)
 }
 
 /**
- * Retry classification: historical Mountain provider-error taxonomy
+ * Retry classification: current Mountain @ 5cc7a964… provider-error taxonomy
  * (timeout/unavailable/abrupt_end retryable; invalid_request/context_length/
  * cancelled terminal) plus vNext HTTP 429/5xx → transient mapping.
  */

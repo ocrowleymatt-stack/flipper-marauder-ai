@@ -13,6 +13,8 @@ export {
 export type {
   DurableJobEngine,
   JobActor,
+  JobAttemptOutcome,
+  JobAttemptRecord,
   JobCheckpointRecord,
   JobEngine,
   JobEnqueueInput,

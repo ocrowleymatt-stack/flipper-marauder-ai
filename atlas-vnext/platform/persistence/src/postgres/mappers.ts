@@ -210,21 +210,37 @@ export function mapLease(row: {
 
 export function mapArtefact(row: {
   id: string;
+  urn?: string | null;
   tenant_id: string;
   workspace_id: string | null;
+  type?: string | null;
+  version?: number | string | null;
+  parent_id?: string | null;
+  created_by?: string | null;
+  execution_id?: string | null;
+  job_id?: string | null;
   content_hash: string | null;
   mime_type: string | null;
   size_bytes: string | number | null;
   created_at: Date | string;
+  updated_at?: Date | string | null;
 }): ArtefactMetadata {
   return {
     id: row.id,
+    urn: row.urn ?? `urn:atlas:artefact:${row.id}`,
     tenantId: row.tenant_id,
     workspaceId: row.workspace_id,
+    type: row.type ?? null,
+    version: row.version == null ? 1 : Number(row.version),
+    parentId: row.parent_id ?? null,
+    createdBy: row.created_by ?? null,
+    executionId: row.execution_id ?? null,
+    jobId: row.job_id ?? null,
     contentHash: row.content_hash,
     mimeType: row.mime_type,
     sizeBytes: row.size_bytes == null ? null : Number(row.size_bytes),
     createdAt: isoRequired(row.created_at),
+    updatedAt: isoRequired(row.updated_at ?? row.created_at),
   };
 }
 

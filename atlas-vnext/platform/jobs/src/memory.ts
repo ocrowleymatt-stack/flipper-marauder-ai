@@ -1,5 +1,5 @@
-import type { JobRecord, JobStatus } from '@atlas-vnext/contracts';
-import type { JobCheckpointRecord, JobStore } from './types.ts';
+import type { JobRecord, JobStatus, StructuredFailure } from '@atlas-vnext/contracts';
+import type { JobAttemptRecord, JobCheckpointRecord, JobStore } from './types.ts';
 
 class AsyncMutex {
   private chain: Promise<void> = Promise.resolve();
@@ -17,6 +17,7 @@ class AsyncMutex {
 export class MemoryJobStore implements JobStore {
   private readonly jobs = new Map<string, JobRecord>();
   private readonly checkpoints: JobCheckpointRecord[] = [];
+  private readonly attempts: JobAttemptRecord[] = [];
   private readonly mutex = new AsyncMutex();
 
   async insert(record: JobRecord): Promise<JobRecord> {
@@ -94,13 +95,55 @@ export class MemoryJobStore implements JobStore {
     return [...this.jobs.values()].filter((job) => job.leaseOwner === workerId).map(clone);
   }
 
-  async appendCheckpoint(row: JobCheckpointRecord): Promise<void> {
-    this.checkpoints.push(clone(row));
+  async appendCheckpoint(row: JobCheckpointRecord): Promise<JobCheckpointRecord> {
+    if (row.idempotencyKey) {
+      const existing = await this.findCheckpointByIdempotency(row.tenantId, row.idempotencyKey);
+      if (existing) return existing;
+    }
+    const copy = clone(row);
+    this.checkpoints.push(copy);
+    return clone(copy);
   }
 
   async latestCheckpoint(tenantId: string, jobId: string): Promise<JobCheckpointRecord | null> {
     const matches = this.checkpoints.filter((row) => row.tenantId === tenantId && row.jobId === jobId);
     return matches.length ? clone(matches[matches.length - 1]!) : null;
+  }
+
+  async findCheckpointByIdempotency(tenantId: string, key: string): Promise<JobCheckpointRecord | null> {
+    const found = this.checkpoints.find((row) => row.tenantId === tenantId && row.idempotencyKey === key);
+    return found ? clone(found) : null;
+  }
+
+  async recordAttempt(row: JobAttemptRecord): Promise<JobAttemptRecord> {
+    const copy = clone(row);
+    this.attempts.push(copy);
+    return clone(copy);
+  }
+
+  async finishAttempt(
+    tenantId: string,
+    jobId: string,
+    patch: {
+      outcome: JobAttemptRecord['outcome'];
+      finishedAt: string;
+      failureReason?: StructuredFailure | null;
+      workerId?: string | null;
+    },
+  ): Promise<JobAttemptRecord | null> {
+    const open = [...this.attempts]
+      .reverse()
+      .find((row) => row.tenantId === tenantId && row.jobId === jobId && row.finishedAt === null);
+    if (!open) return null;
+    open.outcome = patch.outcome;
+    open.finishedAt = patch.finishedAt;
+    open.failureReason = patch.failureReason ?? null;
+    if (patch.workerId !== undefined) open.workerId = patch.workerId;
+    return clone(open);
+  }
+
+  async listAttempts(tenantId: string, jobId: string): Promise<JobAttemptRecord[]> {
+    return this.attempts.filter((row) => row.tenantId === tenantId && row.jobId === jobId).map(clone);
   }
 }
 

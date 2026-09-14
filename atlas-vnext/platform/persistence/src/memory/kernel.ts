@@ -12,7 +12,7 @@ import {
 import { UuidIdFactory, type ConversationRepository, type ExecutionRepository, type MessageRepository, type ProvenanceWriter } from '@atlas-vnext/conversation';
 import { MemoryEventBus, type EventBus } from '@atlas-vnext/events';
 import { createJobEngine, MemoryJobStore, type DurableJobEngine } from '@atlas-vnext/jobs';
-import { TenantIsolationError } from '@atlas-vnext/permissions';
+import { BehaviourPolicyError, TenantIsolationError } from '@atlas-vnext/permissions';
 import { logPlatform } from '@atlas-vnext/observability';
 import { assertActor, sameWorkspace, type PersistenceActor } from '../actor.ts';
 import { OwnershipError, PersistenceClosedError } from '../errors.ts';
@@ -57,7 +57,9 @@ export class MemoryPersistence implements PlatformPersistence {
   private readonly conversations = new Map<string, Conversation>();
   private readonly messages = new Map<string, Message[]>();
   private readonly executions = new Map<string, ExecutionRecord>();
-  private readonly provenance: ProvenanceRecord[] = [];
+  private readonly provenance: Array<{ tenantId: string; entry: ProvenanceRecord }> = [];
+  private readonly conversationKeys = new Map<string, string>();
+  private readonly messageKeys = new Map<string, Message>();
   private readonly behaviour = new Map<string, TenantBehaviourRecord>();
   private readonly leases = new Map<string, RuntimeLeaseRecord>();
   private readonly artefactRows = new Map<string, ArtefactMetadata>();
@@ -162,11 +164,13 @@ export class MemoryPersistence implements PlatformPersistence {
         payload: { executionId: failed.id, code: 'interrupted' },
         tenantId: failed.tenantId,
         conversationId: failed.conversationId,
+        idempotencyKey: `execution:${failed.id}:interrupted`,
       });
       executions.push(failed);
     }
     const jobs = await this.jobs.recoverExpiredLeases(now);
-    return { executions, jobs };
+    const runtimeLeases = await this.runtimeLeases.expire(now);
+    return { executions, jobs, runtimeLeases };
   }
 
   async applyEventRetention(maxEntries?: number): Promise<number> {
@@ -186,6 +190,13 @@ export class MemoryPersistence implements PlatformPersistence {
     return {
       create: async (input) => {
         await this.ensureTenant({ id: actor.tenantId, name: actor.tenantId });
+        if (input.idempotencyKey) {
+          const existingId = this.conversationKeys.get(`${actor.tenantId}::${input.idempotencyKey}`);
+          if (existingId) {
+            const existing = this.conversations.get(existingId);
+            if (existing) return existing;
+          }
+        }
         const workspaceId = input.projectId ?? actor.workspaceId ?? null;
         if (workspaceId && !this.ownedWorkspace(actor, workspaceId)) {
           throw new OwnershipError(`Fail-closed: workspace ${workspaceId} is not visible to tenant ${actor.tenantId}.`);
@@ -204,6 +215,7 @@ export class MemoryPersistence implements PlatformPersistence {
         };
         this.conversations.set(id, conversation);
         this.messages.set(id, []);
+        if (input.idempotencyKey) this.conversationKeys.set(`${actor.tenantId}::${input.idempotencyKey}`, id);
         return conversation;
       },
       get: async (id) => {
@@ -238,6 +250,10 @@ export class MemoryPersistence implements PlatformPersistence {
       append: async (input) => {
         const conversation = await conversations.get(input.conversationId);
         if (!conversation) throw new OwnershipError(`Fail-closed: conversation ${input.conversationId} is not visible to this tenant.`);
+        if (input.idempotencyKey) {
+          const existing = this.messageKeys.get(`${actor.tenantId}::${input.idempotencyKey}`);
+          if (existing) return existing;
+        }
         const existing = this.messages.get(input.conversationId) ?? [];
         const sequence = existing.length === 0 ? 0 : Math.max(...existing.map((item) => item.sequence)) + 1;
         const id = ids.id('message');
@@ -256,6 +272,7 @@ export class MemoryPersistence implements PlatformPersistence {
         };
         existing.push(message);
         this.messages.set(input.conversationId, existing);
+        if (input.idempotencyKey) this.messageKeys.set(`${actor.tenantId}::${input.idempotencyKey}`, message);
         return message;
       },
       list: async (conversationId) => {
@@ -282,6 +299,13 @@ export class MemoryPersistence implements PlatformPersistence {
       create: async (record) => {
         const conversation = await conversations.get(record.conversationId);
         if (!conversation) throw new OwnershipError(`Fail-closed: conversation ${record.conversationId} is not visible to this tenant.`);
+        const duplicate = [...this.executions.values()].find(
+          (item) =>
+            item.tenantId === actor.tenantId &&
+            item.conversationId === record.conversationId &&
+            item.userMessageId === record.userMessageId,
+        );
+        if (duplicate) return duplicate;
         const stored = { ...record, tenantId: actor.tenantId };
         this.executions.set(stored.id, stored);
         return stored;
@@ -302,6 +326,15 @@ export class MemoryPersistence implements PlatformPersistence {
       save: async (record) => {
         const conversation = await conversations.get(record.conversationId);
         if (!conversation) throw new OwnershipError(`Fail-closed: conversation ${record.conversationId} is not visible to this tenant.`);
+        const existing = this.executions.get(record.id);
+        if (
+          existing &&
+          existing.tenantId === actor.tenantId &&
+          (existing.status === 'completed' || existing.status === 'failed' || existing.status === 'cancelled') &&
+          existing.status === record.status
+        ) {
+          return existing;
+        }
         const stored = { ...record, tenantId: actor.tenantId };
         this.executions.set(stored.id, stored);
         return stored;
@@ -319,9 +352,13 @@ export class MemoryPersistence implements PlatformPersistence {
   private provenanceWriter(actor: PersistenceActor): ProvenanceWriter {
     return {
       record: async (entry) => {
-        this.provenance.push({ ...entry });
+        if (this.provenance.some((item) => item.tenantId === actor.tenantId && item.entry.artefactId === entry.artefactId)) {
+          return;
+        }
+        this.provenance.push({ tenantId: actor.tenantId, entry: { ...entry } });
       },
-      forJob: async (jobId) => this.provenance.filter((entry) => entry.jobId === jobId),
+      forJob: async (jobId) =>
+        this.provenance.filter((item) => item.tenantId === actor.tenantId && item.entry.jobId === jobId).map((item) => item.entry),
     };
   }
 
@@ -350,9 +387,13 @@ export class MemoryPersistence implements PlatformPersistence {
       },
       write: async (actorTenantId, subjectTenantId, behaviour: BehaviourMode) => {
         this.assertBehaviour(actorTenantId, subjectTenantId, 'write');
+        const parsed = behaviourModeSchema.safeParse(behaviour);
+        if (!parsed.success) {
+          throw new BehaviourPolicyError(`Fail-closed: invalid Behaviour mode ${String(behaviour)}.`);
+        }
         const record: TenantBehaviourRecord = {
           tenantId: subjectTenantId,
-          behaviour: behaviourModeSchema.parse(behaviour),
+          behaviour: parsed.data,
           updatedAt: this.clock(),
           updatedByTenantId: actorTenantId,
         };
@@ -453,14 +494,23 @@ export class MemoryPersistence implements PlatformPersistence {
     return {
       record: async (actor, input) => {
         const scoped = assertActor(actor, 'record artefact metadata');
+        const now = this.clock();
         const record: ArtefactMetadata = {
           id: input.id,
+          urn: input.urn ?? `urn:atlas:artefact:${input.id}`,
           tenantId: scoped.tenantId,
           workspaceId: input.workspaceId ?? scoped.workspaceId ?? null,
+          type: input.type ?? null,
+          version: input.version ?? 1,
+          parentId: input.parentId ?? null,
+          createdBy: input.createdBy ?? scoped.principalId ?? null,
+          executionId: input.executionId ?? null,
+          jobId: input.jobId ?? null,
           contentHash: input.contentHash,
           mimeType: input.mimeType,
           sizeBytes: input.sizeBytes,
-          createdAt: input.createdAt ?? this.clock(),
+          createdAt: input.createdAt ?? now,
+          updatedAt: now,
         };
         this.artefactRows.set(record.id, record);
         return record;
@@ -469,6 +519,7 @@ export class MemoryPersistence implements PlatformPersistence {
         const scoped = assertActor(actor, 'read artefact metadata');
         const record = this.artefactRows.get(id);
         if (!record || record.tenantId !== scoped.tenantId) return null;
+        if (scoped.workspaceId && record.workspaceId && scoped.workspaceId !== record.workspaceId) return null;
         return record;
       },
     };

@@ -7,6 +7,18 @@ import { assertActor, type PersistenceActor } from '../actor.ts';
 import { mapEvent, type EventRow } from './mappers.ts';
 import type { PgTx } from './tx.ts';
 
+const REQUIRED_EVENT_TYPES = new Set([
+  'conversation.created',
+  'execution.completed',
+  'execution.failed',
+  'execution.cancelled',
+  'job.created',
+  'job.completed',
+  'job.failed',
+  'job.cancelled',
+  'job.waiting_runtime',
+]);
+
 export function createEventBus(tx: PgTx, actor: PersistenceActor | null, clock: () => string): EventBus {
   const listeners = new Map<string, Set<(event: DomainEvent) => void>>();
 
@@ -35,28 +47,29 @@ export function createEventBus(tx: PgTx, actor: PersistenceActor | null, clock: 
         await tx.query(
           `INSERT INTO event_streams (stream_id, tenant_id, next_seq)
            VALUES ($1, $2, 0)
-           ON CONFLICT (stream_id) DO NOTHING`,
+           ON CONFLICT (tenant_id, stream_id) DO NOTHING`,
           [event.channel, tenantId],
         );
         const stream = await tx.query<{ next_seq: string | number; tenant_id: string }>(
-          'SELECT next_seq, tenant_id FROM event_streams WHERE stream_id = $1 FOR UPDATE',
-          [event.channel],
+          'SELECT next_seq, tenant_id FROM event_streams WHERE stream_id = $1 AND tenant_id = $2 FOR UPDATE',
+          [event.channel, tenantId],
         );
         const streamRow = stream.rows[0];
         if (!streamRow) throw new Error(`Event stream ${event.channel} missing after insert.`);
-        if (streamRow.tenant_id !== tenantId) {
-          logPlatform('ownership.rejected', { action: 'event.publish', tenantId, channel: event.channel });
-          throw new OwnershipError(`Fail-closed: event stream ${event.channel} belongs to another tenant.`);
-        }
         const seq = Number(streamRow.next_seq) + 1;
-        await tx.query('UPDATE event_streams SET next_seq = $2 WHERE stream_id = $1', [event.channel, seq]);
+        await tx.query('UPDATE event_streams SET next_seq = $3 WHERE stream_id = $1 AND tenant_id = $2', [
+          event.channel,
+          tenantId,
+          seq,
+        ]);
         const eventId = event.eventId ?? `evt_${randomUUID()}`;
         const timestamp = clock();
+        const retainedUntil = REQUIRED_EVENT_TYPES.has(event.type) ? '9999-12-31T00:00:00.000Z' : null;
         try {
           const inserted = await tx.query<EventRow>(
             `INSERT INTO events (
-               id, stream_id, seq, type, payload, tenant_id, workspace_id, conversation_id, job_id, idempotency_key, created_at
-             ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11)
+               id, stream_id, seq, type, payload, tenant_id, workspace_id, conversation_id, job_id, idempotency_key, created_at, retained_until
+             ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12)
              RETURNING *`,
             [
               eventId,
@@ -70,6 +83,7 @@ export function createEventBus(tx: PgTx, actor: PersistenceActor | null, clock: 
               event.jobId ?? null,
               event.idempotencyKey ?? null,
               timestamp,
+              retainedUntil,
             ],
           );
           return mapEvent(inserted.rows[0]!);
@@ -152,7 +166,9 @@ export async function applyEventRetention(tx: PgTx, maxEntries = DEFAULT_RETENTI
        SELECT id, ROW_NUMBER() OVER (PARTITION BY stream_id ORDER BY seq DESC) AS rank
        FROM events
      )
-     DELETE FROM events WHERE id IN (SELECT id FROM ranked WHERE rank > $1)
+     DELETE FROM events
+     WHERE id IN (SELECT id FROM ranked WHERE rank > $1)
+       AND (retained_until IS NULL OR retained_until <= now())
      RETURNING id`,
     [maxEntries],
   );

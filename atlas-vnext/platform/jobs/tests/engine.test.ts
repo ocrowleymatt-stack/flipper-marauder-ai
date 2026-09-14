@@ -23,6 +23,12 @@ describe('durable job engine (memory contracts)', () => {
     expect(check.checkpoint).toEqual({ chapter: 1 });
     const done = await engine.complete(actor, first.id);
     expect(done.status).toBe('completed');
+    const again = await engine.complete(actor, first.id);
+    expect(again.id).toBe(done.id);
+    expect(again.status).toBe('completed');
+    const attempts = await engine.listAttempts(actor, first.id);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.outcome).toBe('succeeded');
     await expect(engine.checkpoint(actor, first.id, 'x', 1, {})).rejects.toThrow(/cannot checkpoint/);
   });
 

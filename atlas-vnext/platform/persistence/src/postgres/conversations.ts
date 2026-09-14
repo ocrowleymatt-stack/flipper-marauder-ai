@@ -8,9 +8,9 @@ import type { PgTx } from './tx.ts';
 
 const ids = new UuidIdFactory();
 
-async function loadConversation(tx: PgTx, actor: PersistenceActor, id: string, action: string): Promise<ConversationRow> {
+async function loadConversation(tx: PgTx, actor: PersistenceActor, id: string, action: string, forUpdate = false): Promise<ConversationRow> {
   const result = await tx.query<ConversationRow>(
-    'SELECT * FROM conversations WHERE id = $1 AND tenant_id = $2',
+    `SELECT * FROM conversations WHERE id = $1 AND tenant_id = $2${forUpdate ? ' FOR UPDATE' : ''}`,
     [id, actor.tenantId],
   );
   const row = result.rows[0];
@@ -46,13 +46,24 @@ export function createConversationRepos(tx: PgTx, actor: PersistenceActor, clock
       }
       const id = ids.id('conversation');
       const timestamp = clock();
-      const inserted = await tx.query<ConversationRow>(
-        `INSERT INTO conversations (id, urn, tenant_id, workspace_id, title, created_at, updated_at, idempotency_key)
-         VALUES ($1, $2, $3, $4, $5, $6, $6, $7)
-         RETURNING *`,
-        [id, ids.urn('conversation', id), owner.tenantId, workspaceId, input.title, timestamp, input.idempotencyKey ?? null],
-      );
-      return mapConversation(inserted.rows[0]!);
+      try {
+        const inserted = await tx.query<ConversationRow>(
+          `INSERT INTO conversations (id, urn, tenant_id, workspace_id, title, created_at, updated_at, idempotency_key)
+           VALUES ($1, $2, $3, $4, $5, $6, $6, $7)
+           RETURNING *`,
+          [id, ids.urn('conversation', id), owner.tenantId, workspaceId, input.title, timestamp, input.idempotencyKey ?? null],
+        );
+        return mapConversation(inserted.rows[0]!);
+      } catch (err) {
+        if ((err as { code?: string }).code === '23505' && input.idempotencyKey) {
+          const existing = await tx.query<ConversationRow>(
+            'SELECT * FROM conversations WHERE tenant_id = $1 AND idempotency_key = $2',
+            [owner.tenantId, input.idempotencyKey],
+          );
+          if (existing.rows[0]) return mapConversation(existing.rows[0]);
+        }
+        throw err;
+      }
     },
     async get(id) {
       const owner = scoped();
@@ -93,7 +104,14 @@ export function createConversationRepos(tx: PgTx, actor: PersistenceActor, clock
   const messages: MessageRepository = {
     async append(input) {
       const owner = scoped();
-      await loadConversation(tx, owner, input.conversationId, 'append message');
+      await loadConversation(tx, owner, input.conversationId, 'append message', true);
+      if (input.idempotencyKey) {
+        const existing = await tx.query<MessageRow>(
+          'SELECT * FROM messages WHERE tenant_id = $1 AND idempotency_key = $2',
+          [owner.tenantId, input.idempotencyKey],
+        );
+        if (existing.rows[0]) return mapMessage(existing.rows[0]);
+      }
       const seqRow = await tx.query<{ sequence: number }>(
         'SELECT COALESCE(MAX(sequence), -1) AS sequence FROM messages WHERE conversation_id = $1',
         [input.conversationId],
@@ -101,13 +119,24 @@ export function createConversationRepos(tx: PgTx, actor: PersistenceActor, clock
       const sequence = Number(seqRow.rows[0]?.sequence ?? -1) + 1;
       const id = ids.id('message');
       const timestamp = clock();
-      const inserted = await tx.query<MessageRow>(
-        `INSERT INTO messages (id, urn, tenant_id, conversation_id, role, content, sequence, execution_id, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-         RETURNING *`,
-        [id, ids.urn('message', id), owner.tenantId, input.conversationId, input.role, input.content, sequence, input.executionId, timestamp],
-      );
-      return mapMessage(inserted.rows[0]!);
+      try {
+        const inserted = await tx.query<MessageRow>(
+          `INSERT INTO messages (id, urn, tenant_id, conversation_id, role, content, sequence, execution_id, created_at, updated_at, idempotency_key)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10)
+           RETURNING *`,
+          [id, ids.urn('message', id), owner.tenantId, input.conversationId, input.role, input.content, sequence, input.executionId, timestamp, input.idempotencyKey ?? null],
+        );
+        return mapMessage(inserted.rows[0]!);
+      } catch (err) {
+        if ((err as { code?: string }).code === '23505' && input.idempotencyKey) {
+          const existing = await tx.query<MessageRow>(
+            'SELECT * FROM messages WHERE tenant_id = $1 AND idempotency_key = $2',
+            [owner.tenantId, input.idempotencyKey],
+          );
+          if (existing.rows[0]) return mapMessage(existing.rows[0]);
+        }
+        throw err;
+      }
     },
     async list(conversationId) {
       const owner = scoped();
@@ -139,36 +168,58 @@ export function createConversationRepos(tx: PgTx, actor: PersistenceActor, clock
     async create(record) {
       const owner = scoped();
       await loadConversation(tx, owner, record.conversationId, 'create execution');
-      const inserted = await tx.query<ExecutionRow>(
-        `INSERT INTO executions (
-           id, urn, tenant_id, conversation_id, user_message_id, assistant_message_id, status, capability,
-           route, selected_provider, selected_model, attempts, usage, failure_reason, latency_ms,
-           created_at, updated_at, started_at, completed_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15,$16,$17,$18,$19)
-         RETURNING *`,
-        [
-          record.id,
-          record.urn,
-          owner.tenantId,
-          record.conversationId,
-          record.userMessageId,
-          record.assistantMessageId,
-          record.status,
-          record.capability,
-          json(record.route),
-          record.selectedProvider,
-          record.selectedModel,
-          json(record.attempts),
-          json(record.usage),
-          json(record.failureReason),
-          record.latencyMs ?? null,
-          record.createdAt,
-          record.updatedAt,
-          record.startedAt,
-          record.completedAt,
-        ],
+      const existingTurn = await tx.query<ExecutionRow>(
+        'SELECT * FROM executions WHERE conversation_id = $1 AND user_message_id = $2 AND tenant_id = $3',
+        [record.conversationId, record.userMessageId, owner.tenantId],
       );
-      return mapExecution(inserted.rows[0]!);
+      if (existingTurn.rows[0]) return mapExecution(existingTurn.rows[0]);
+      try {
+        const inserted = await tx.query<ExecutionRow>(
+          `INSERT INTO executions (
+             id, urn, tenant_id, conversation_id, user_message_id, assistant_message_id, status, capability,
+             route, selected_provider, selected_model, attempts, usage, failure_reason, latency_ms,
+             created_at, updated_at, started_at, completed_at, idempotency_key
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15,$16,$17,$18,$19,$20)
+           RETURNING *`,
+          [
+            record.id,
+            record.urn,
+            owner.tenantId,
+            record.conversationId,
+            record.userMessageId,
+            record.assistantMessageId,
+            record.status,
+            record.capability,
+            json(record.route),
+            record.selectedProvider,
+            record.selectedModel,
+            json(record.attempts),
+            json(record.usage),
+            json(record.failureReason),
+            record.latencyMs ?? null,
+            record.createdAt,
+            record.updatedAt,
+            record.startedAt,
+            record.completedAt,
+            record.id,
+          ],
+        );
+        return mapExecution(inserted.rows[0]!);
+      } catch (err) {
+        if ((err as { code?: string }).code === '23505') {
+          const existing = await tx.query<ExecutionRow>(
+            'SELECT * FROM executions WHERE conversation_id = $1 AND user_message_id = $2 AND tenant_id = $3',
+            [record.conversationId, record.userMessageId, owner.tenantId],
+          );
+          if (existing.rows[0]) return mapExecution(existing.rows[0]);
+          const byId = await tx.query<ExecutionRow>(
+            'SELECT * FROM executions WHERE id = $1 AND tenant_id = $2',
+            [record.id, owner.tenantId],
+          );
+          if (byId.rows[0]) return mapExecution(byId.rows[0]);
+        }
+        throw err;
+      }
     },
     async get(id) {
       const owner = scoped();
@@ -195,6 +246,18 @@ export function createConversationRepos(tx: PgTx, actor: PersistenceActor, clock
     async save(record) {
       const owner = scoped();
       await loadConversation(tx, owner, record.conversationId, 'save execution');
+      const current = await tx.query<ExecutionRow>(
+        'SELECT * FROM executions WHERE id = $1 AND tenant_id = $2',
+        [record.id, owner.tenantId],
+      );
+      const existing = current.rows[0] ? mapExecution(current.rows[0]) : null;
+      if (
+        existing &&
+        (existing.status === 'completed' || existing.status === 'failed' || existing.status === 'cancelled') &&
+        existing.status === record.status
+      ) {
+        return existing;
+      }
       const result = await tx.query<ExecutionRow>(
         `UPDATE executions SET
            assistant_message_id = $3, status = $4, capability = $5, route = $6::jsonb,
@@ -250,7 +313,8 @@ export function createConversationRepos(tx: PgTx, actor: PersistenceActor, clock
            id, tenant_id, artefact_id, project_id, source_inputs, input_manifest_hash, provider, model,
            tool_calls, job_id, timestamp, trace_id, capability, usage, locality, latency_ms,
            selected_route_id, attempt_outcomes, artefact_hash
-         ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18::jsonb,NULL)`,
+         ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18::jsonb,NULL)
+         ON CONFLICT (id) DO NOTHING`,
         [
           `prv_${entry.artefactId}`,
           owner.tenantId,

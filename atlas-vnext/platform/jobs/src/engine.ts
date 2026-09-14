@@ -151,7 +151,19 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
           now,
         });
         if (!claimed) return null;
-        await emit(claimed, 'job.started', { workerId });
+        const attempts = await store.listAttempts(actor.tenantId, claimed.id);
+        await store.recordAttempt({
+          id: `jat_${randomUUID()}`,
+          tenantId: actor.tenantId,
+          jobId: claimed.id,
+          attemptNumber: attempts.length + 1,
+          workerId,
+          outcome: 'started',
+          startedAt: now,
+          finishedAt: null,
+          failureReason: null,
+        });
+        await emit(claimed, 'job.started', { workerId }, `job:${claimed.id}:started:${attempts.length + 1}`);
         log('job.claimed', { jobId: claimed.id, tenantId: actor.tenantId, workerId, leaseUntil });
         return claimed;
       });
@@ -172,11 +184,15 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
       });
     },
 
-    async checkpoint(actor, id, stage, progressRatio, data) {
+    async checkpoint(actor, id, stage, progressRatio, data, idempotencyKey) {
       return uow.run(async () => {
         const record = await loadOwned(actor, id, 'checkpoint');
         if (isTerminalJobStatus(record.status)) {
           throw new TerminalJobMutationError(`Job ${id} is ${record.status} and cannot checkpoint.`);
+        }
+        if (idempotencyKey) {
+          const existing = await store.findCheckpointByIdempotency(actor.tenantId, idempotencyKey);
+          if (existing) return record;
         }
         const now = clock();
         const next: JobRecord = {
@@ -195,8 +211,9 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
           progressRatio,
           data,
           createdAt: now,
+          idempotencyKey: idempotencyKey ?? null,
         });
-        await emit(saved, 'job.checkpoint', { stage, progressRatio });
+        await emit(saved, 'job.checkpoint', { stage, progressRatio }, idempotencyKey ? `job:${id}:checkpoint:${idempotencyKey}` : undefined);
         return saved;
       });
     },
@@ -204,8 +221,14 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
     async complete(actor, id) {
       return uow.run(async () => {
         const record = await loadOwned(actor, id, 'complete');
+        if (record.status === 'completed') return record;
         const saved = await store.save(transition(record, 'completed', { progressRatio: 1 }));
-        await emit(saved, 'job.completed', {});
+        await store.finishAttempt(actor.tenantId, id, {
+          outcome: 'succeeded',
+          finishedAt: clock(),
+          workerId: record.leaseOwner,
+        });
+        await emit(saved, 'job.completed', {}, `job:${id}:completed`);
         return saved;
       });
     },
@@ -213,9 +236,16 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
     async fail(actor, id, error) {
       return uow.run(async () => {
         const record = await loadOwned(actor, id, 'fail');
+        if (record.status === 'failed') return record;
         const failure: StructuredFailure = { ...error, at: clock() };
         const saved = await store.save(transition(record, 'failed', { failureReason: failure }));
-        await emit(saved, 'job.failed', { code: error.code });
+        await store.finishAttempt(actor.tenantId, id, {
+          outcome: 'failed',
+          finishedAt: clock(),
+          failureReason: failure,
+          workerId: record.leaseOwner,
+        });
+        await emit(saved, 'job.failed', { code: error.code }, `job:${id}:failed:${error.code}`);
         return saved;
       });
     },
@@ -231,7 +261,13 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
             failureReason: { code: 'cancelled', message: 'Job cancelled.', retryable: false, at: clock() },
           }),
         );
-        await emit(saved, 'job.cancelled', {});
+        await store.finishAttempt(actor.tenantId, id, {
+          outcome: 'failed',
+          finishedAt: clock(),
+          failureReason: saved.failureReason,
+          workerId: record.leaseOwner,
+        });
+        await emit(saved, 'job.cancelled', {}, `job:${id}:cancelled`);
         log('job.cancelled', { jobId: id, tenantId: actor.tenantId });
         return saved;
       });
@@ -241,7 +277,7 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
       return uow.run(async () => {
         const record = await loadOwned(actor, id, 'waitForRuntime');
         const saved = await store.save(transition(record, 'waiting_runtime', { leaseOwner: null, leaseUntil: null }));
-        await emit(saved, 'job.waiting_runtime', {});
+        await emit(saved, 'job.waiting_runtime', {}, `job:${id}:waiting_runtime`);
         return saved;
       });
     },
@@ -282,7 +318,13 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
               completedAt: null,
             });
             const saved = await store.save(next);
-            await emit(saved, 'job.retry_scheduled', { retryCount: saved.retryCount });
+            await store.finishAttempt(record.tenantId ?? '', record.id, {
+              outcome: 'lease_expired',
+              finishedAt: now,
+              failureReason: failed.failureReason,
+              workerId: record.leaseOwner,
+            });
+            await emit(saved, 'job.retry_scheduled', { retryCount: saved.retryCount }, `job:${saved.id}:retry:${saved.retryCount}`);
             log('retry.scheduled', { jobId: saved.id, retryCount: saved.retryCount });
             log('job.recovered', { jobId: saved.id, status: saved.status });
             recovered.push(saved);
@@ -298,7 +340,13 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
               },
             });
             const saved = await store.save(next);
-            await emit(saved, 'job.failed', { code: 'lease_expired' });
+            await store.finishAttempt(record.tenantId ?? '', record.id, {
+              outcome: 'lease_expired',
+              finishedAt: now,
+              failureReason: next.failureReason,
+              workerId: record.leaseOwner,
+            });
+            await emit(saved, 'job.failed', { code: 'lease_expired' }, `job:${saved.id}:failed:lease_expired`);
             log('job.recovered', { jobId: saved.id, status: saved.status });
             recovered.push(saved);
           }
@@ -329,7 +377,13 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
             completedAt: null,
           });
           const saved = await store.save(next);
-          await emit(saved, 'job.released', { workerId });
+          await store.finishAttempt(record.tenantId ?? '', record.id, {
+            outcome: 'released',
+            finishedAt: clock(),
+            failureReason: failed.failureReason,
+            workerId,
+          });
+          await emit(saved, 'job.released', { workerId }, `job:${saved.id}:released:${workerId}`);
           log('job.released', { jobId: saved.id, workerId });
           released.push(saved);
         }
@@ -359,13 +413,18 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
             failureReason: null,
             updatedAt: now,
           });
-          await emit(saved, 'job.requeued', { admin: true });
+          await emit(saved, 'job.requeued', { admin: true }, `job:${id}:requeued`);
           return saved;
         }
         const saved = await store.save(transition(record, 'queued', { leaseOwner: null, leaseUntil: null, completedAt: null }));
-        await emit(saved, 'job.requeued', { admin: true });
+        await emit(saved, 'job.requeued', { admin: true }, `job:${id}:requeued`);
         return saved;
       });
+    },
+
+    async listAttempts(actor, id) {
+      await loadOwned(actor, id, 'listAttempts');
+      return store.listAttempts(actor.tenantId, id);
     },
   };
 }

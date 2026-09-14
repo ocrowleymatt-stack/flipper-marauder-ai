@@ -62,7 +62,7 @@ export class ConversationRuntime {
         title: sanitiseTitle(input.title) ?? DEFAULT_TITLE,
         projectId: input.projectId ?? null,
       });
-      await this.publish(conversation.id, 'conversation.created', { conversationId: conversation.id });
+      await this.publish(conversation.id, 'conversation.created', { conversationId: conversation.id }, `conversation:${conversation.id}:created`);
       return conversation;
     });
   }
@@ -91,7 +91,7 @@ export class ConversationRuntime {
       await this.publish(failed.conversationId, 'execution.failed', {
         executionId: failed.id,
         code: 'interrupted',
-      });
+      }, `execution:${failed.id}:interrupted`);
       recovered.push(failed);
     }
     return recovered;
@@ -113,7 +113,7 @@ export class ConversationRuntime {
     const cancelled = await this.transition(execution, 'cancelled', {
       failureReason: failure('cancelled', 'Execution cancelled.', false, this.clock.now()),
     });
-    await this.publish(cancelled.conversationId, 'execution.cancelled', { executionId: cancelled.id });
+    await this.publish(cancelled.conversationId, 'execution.cancelled', { executionId: cancelled.id }, `execution:${cancelled.id}:cancelled`);
     return cancelled;
   }
 
@@ -167,7 +167,7 @@ export class ConversationRuntime {
         completedAt: null,
       };
       const execution = await this.deps.executions.create(created);
-      await this.publish(conversationId, 'execution.created', { executionId });
+      await this.publish(conversationId, 'execution.created', { executionId }, `execution:${executionId}:created`);
       return { userMessage, execution };
     });
     const userMessage = started.userMessage;
@@ -382,7 +382,7 @@ export class ConversationRuntime {
           executionId,
           provider: execution.selectedProvider,
           model: execution.selectedModel,
-        });
+        }, `execution:${executionId}:completed`);
         yield {
           type: 'execution.completed',
           executionId,
@@ -408,7 +408,7 @@ export class ConversationRuntime {
           executionId,
           code,
           visibleOutput: visible,
-        });
+        }, `execution:${executionId}:${status}`);
         yield { type: 'execution', execution };
         if (status === 'failed') {
           yield { type: 'execution.failed', executionId, failure: structured };
@@ -509,12 +509,14 @@ export class ConversationRuntime {
     conversationId: string,
     type: string,
     payload: Record<string, unknown>,
+    idempotencyKey?: string,
   ): Promise<void> {
     await this.deps.events.publish({
       channel: conversationChannel(conversationId),
       type,
       payload,
       conversationId,
+      idempotencyKey,
     });
   }
 

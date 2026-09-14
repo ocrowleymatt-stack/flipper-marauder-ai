@@ -60,12 +60,20 @@ export interface RuntimeLeaseRecord {
 
 export interface ArtefactMetadata {
   id: string;
+  urn: string;
   tenantId: string;
   workspaceId: string | null;
+  type: string | null;
+  version: number;
+  parentId: string | null;
+  createdBy: string | null;
+  executionId: string | null;
+  jobId: string | null;
   contentHash: string | null;
   mimeType: string | null;
   sizeBytes: number | null;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface DurableBehaviourStore {
@@ -92,7 +100,22 @@ export interface RuntimeLeaseStore {
 }
 
 export interface ArtefactMetadataStore {
-  record(actor: PersistenceActor, input: Omit<ArtefactMetadata, 'tenantId' | 'createdAt'> & { createdAt?: string }): Promise<ArtefactMetadata>;
+  record(
+    actor: PersistenceActor,
+    input: Omit<
+      ArtefactMetadata,
+      'tenantId' | 'urn' | 'createdAt' | 'updatedAt' | 'type' | 'version' | 'parentId' | 'createdBy' | 'executionId' | 'jobId'
+    > & {
+      createdAt?: string;
+      urn?: string;
+      type?: string | null;
+      version?: number;
+      parentId?: string | null;
+      createdBy?: string | null;
+      executionId?: string | null;
+      jobId?: string | null;
+    },
+  ): Promise<ArtefactMetadata>;
   get(actor: PersistenceActor, id: string): Promise<ArtefactMetadata | null>;
 }
 
@@ -111,6 +134,7 @@ export interface ActorBoundPersistence {
 export interface RestartRecoveryResult {
   executions: ExecutionRecord[];
   jobs: Awaited<ReturnType<DurableJobEngine['recoverExpiredLeases']>>;
+  runtimeLeases: RuntimeLeaseRecord[];
 }
 
 export interface PlatformPersistence extends UnitOfWork {

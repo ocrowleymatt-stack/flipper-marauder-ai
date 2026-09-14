@@ -71,6 +71,6 @@ flipper-marauder-ai/
 ## 5. Persistence
 
 - **PostgreSQL** for transactional metadata: tenants, workspaces, conversations, messages, executions, jobs, checkpoints, events, behaviour posture, provenance/artefact pointers, runtime lease metadata. Implemented in `platform/persistence` (see [docs/PERSISTENCE.md](docs/PERSISTENCE.md)).
-- CAS blobs: later. Never file bytes or base64 in relational rows. `artefact_metadata.content_hash` is a pointer stub.
+- CAS blobs: later. Never file bytes or base64 in relational rows. `artefact_metadata` stores identity, tenancy, type, version lineage, creator/execution provenance, timestamps, and `content_hash` as a future CAS pointer.
 - Local/dev may use the JSON `FileDocument` store. Production cannot; missing PostgreSQL fails closed.
 - SQLite is not a second product database.

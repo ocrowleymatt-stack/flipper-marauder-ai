@@ -50,6 +50,21 @@ export interface JobCheckpointRecord {
   progressRatio: number;
   data: Record<string, unknown>;
   createdAt: string;
+  idempotencyKey?: string | null;
+}
+
+export type JobAttemptOutcome = 'started' | 'succeeded' | 'failed' | 'released' | 'lease_expired';
+
+export interface JobAttemptRecord {
+  id: string;
+  tenantId: string;
+  jobId: string;
+  attemptNumber: number;
+  workerId: string | null;
+  outcome: JobAttemptOutcome;
+  startedAt: string;
+  finishedAt: string | null;
+  failureReason: StructuredFailure | null;
 }
 
 export interface JobEventSink {
@@ -78,8 +93,16 @@ export interface JobStore {
   }): Promise<JobRecord | null>;
   listExpiredRunning(now: string): Promise<JobRecord[]>;
   listByLeaseOwner(workerId: string): Promise<JobRecord[]>;
-  appendCheckpoint(row: JobCheckpointRecord): Promise<void>;
+  appendCheckpoint(row: JobCheckpointRecord): Promise<JobCheckpointRecord>;
   latestCheckpoint(tenantId: string, jobId: string): Promise<JobCheckpointRecord | null>;
+  findCheckpointByIdempotency(tenantId: string, key: string): Promise<JobCheckpointRecord | null>;
+  recordAttempt(row: JobAttemptRecord): Promise<JobAttemptRecord>;
+  finishAttempt(
+    tenantId: string,
+    jobId: string,
+    patch: { outcome: JobAttemptOutcome; finishedAt: string; failureReason?: StructuredFailure | null; workerId?: string | null },
+  ): Promise<JobAttemptRecord | null>;
+  listAttempts(tenantId: string, jobId: string): Promise<JobAttemptRecord[]>;
 }
 
 export interface UnitOfWork {
@@ -97,6 +120,7 @@ export interface DurableJobEngine {
     stage: string,
     progressRatio: number,
     data: Record<string, unknown>,
+    idempotencyKey?: string,
   ): Promise<JobRecord>;
   complete(actor: JobActor, id: string): Promise<JobRecord>;
   fail(actor: JobActor, id: string, error: { code: string; message: string; retryable: boolean }): Promise<JobRecord>;
@@ -106,6 +130,7 @@ export interface DurableJobEngine {
   recoverExpiredLeases(now?: string): Promise<JobRecord[]>;
   releaseWorker(workerId: string): Promise<JobRecord[]>;
   recoverTerminal(actor: JobActor, id: string, to: 'queued'): Promise<JobRecord>;
+  listAttempts(actor: JobActor, id: string): Promise<JobAttemptRecord[]>;
 }
 
 /** @deprecated Use DurableJobEngine. Kept so existing type imports compile. */

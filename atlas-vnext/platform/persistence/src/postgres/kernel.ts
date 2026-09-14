@@ -121,13 +121,15 @@ export class PostgresPersistence implements PlatformPersistence {
           payload: { executionId: execution.id, code: 'interrupted' },
           tenantId: execution.tenantId,
           conversationId: execution.conversationId,
+          idempotencyKey: `execution:${execution.id}:interrupted`,
         });
         recovered.push(execution);
       }
       return recovered;
     });
     const jobs = await this.jobs.recoverExpiredLeases(this.clock());
-    return { executions, jobs };
+    const runtimeLeases = await this.runtimeLeases.expire(this.clock());
+    return { executions, jobs, runtimeLeases };
   }
 
   async applyEventRetention(maxEntries?: number): Promise<number> {
@@ -246,18 +248,41 @@ function createArtefactStore(tx: PgTx, clock: () => string): ArtefactMetadataSto
   return {
     async record(actor, input) {
       const scoped = assertActor(actor, 'record artefact metadata');
+      const now = clock();
+      const urn = `urn:atlas:artefact:${input.id}`;
       const result = await tx.query(
-        `INSERT INTO artefact_metadata (id, tenant_id, workspace_id, content_hash, mime_type, size_bytes, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
+        `INSERT INTO artefact_metadata (
+           id, urn, tenant_id, workspace_id, type, version, parent_id, created_by, execution_id, job_id,
+           content_hash, mime_type, size_bytes, created_at, updated_at
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)
+         ON CONFLICT (id) DO UPDATE SET
+           type = COALESCE(EXCLUDED.type, artefact_metadata.type),
+           version = EXCLUDED.version,
+           parent_id = COALESCE(EXCLUDED.parent_id, artefact_metadata.parent_id),
+           created_by = COALESCE(EXCLUDED.created_by, artefact_metadata.created_by),
+           execution_id = COALESCE(EXCLUDED.execution_id, artefact_metadata.execution_id),
+           job_id = COALESCE(EXCLUDED.job_id, artefact_metadata.job_id),
+           content_hash = COALESCE(EXCLUDED.content_hash, artefact_metadata.content_hash),
+           mime_type = COALESCE(EXCLUDED.mime_type, artefact_metadata.mime_type),
+           size_bytes = COALESCE(EXCLUDED.size_bytes, artefact_metadata.size_bytes),
+           updated_at = EXCLUDED.updated_at
          RETURNING *`,
         [
           input.id,
+          urn,
           scoped.tenantId,
           input.workspaceId ?? scoped.workspaceId ?? null,
+          input.type ?? null,
+          input.version ?? 1,
+          input.parentId ?? null,
+          input.createdBy ?? scoped.principalId ?? null,
+          input.executionId ?? null,
+          input.jobId ?? null,
           input.contentHash,
           input.mimeType,
           input.sizeBytes,
-          input.createdAt ?? clock(),
+          input.createdAt ?? now,
         ],
       );
       return mapArtefact(sqlRow(result.rows[0]!));
@@ -268,7 +293,10 @@ function createArtefactStore(tx: PgTx, clock: () => string): ArtefactMetadataSto
         'SELECT * FROM artefact_metadata WHERE id = $1 AND tenant_id = $2',
         [id, scoped.tenantId],
       );
-      return result.rows[0] ? mapArtefact(sqlRow(result.rows[0])) : null;
+      const mapped = result.rows[0] ? mapArtefact(sqlRow(result.rows[0])) : null;
+      if (!mapped) return null;
+      if (scoped.workspaceId && mapped.workspaceId && scoped.workspaceId !== mapped.workspaceId) return null;
+      return mapped;
     },
   };
 }

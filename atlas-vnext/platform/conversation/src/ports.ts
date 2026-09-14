@@ -26,6 +26,7 @@ export interface MessageRepository {
     role: Message['role'];
     content: string;
     executionId: string | null;
+    idempotencyKey?: string;
   }): Promise<Message>;
   list(conversationId: string): Promise<Message[]>;
   save(message: Message): Promise<Message>;

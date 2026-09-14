@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_BEHAVIOUR_MODE, behaviourModeSchema, type BehaviourMode, type TenantBehaviourRecord } from '@atlas-vnext/contracts';
-import { TenantIsolationError } from '@atlas-vnext/permissions';
+import { BehaviourPolicyError, TenantIsolationError } from '@atlas-vnext/permissions';
 import { UuidIdFactory } from '@atlas-vnext/conversation';
 import { logPlatform } from '@atlas-vnext/observability';
 import { OwnershipError } from '../errors.ts';
@@ -101,7 +101,7 @@ export function createBehaviourStore(tx: PgTx): DurableBehaviourStore {
       const result = await tx.query('SELECT * FROM behaviour_postures WHERE tenant_id = $1', [subjectTenantId]);
       const row = result.rows[0] as { behaviour?: string } | undefined;
       if (!row) return DEFAULT_BEHAVIOUR_MODE;
-      return behaviourModeSchema.parse(row.behaviour);
+      return parseBehaviour(row.behaviour);
     },
     async read(actorTenantId, subjectTenantId) {
       assertBehaviourTenant(actorTenantId, subjectTenantId, 'read');
@@ -112,7 +112,7 @@ export function createBehaviourStore(tx: PgTx): DurableBehaviourStore {
       if (!row) return null;
       return {
         tenantId: row.tenant_id,
-        behaviour: behaviourModeSchema.parse(row.behaviour),
+        behaviour: parseBehaviour(row.behaviour),
         updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
         updatedByTenantId: row.updated_by_tenant_id,
       } satisfies TenantBehaviourRecord;
@@ -120,7 +120,7 @@ export function createBehaviourStore(tx: PgTx): DurableBehaviourStore {
     async write(actorTenantId, subjectTenantId, behaviour) {
       assertBehaviourTenant(actorTenantId, subjectTenantId, 'write');
       await ensureTenant(tx, { id: subjectTenantId, name: subjectTenantId });
-      const parsed = behaviourModeSchema.parse(behaviour);
+      const parsed = parseBehaviour(behaviour);
       const now = new Date().toISOString();
       const result = await tx.query(
         `INSERT INTO behaviour_postures (tenant_id, behaviour, updated_at, updated_by_tenant_id)
@@ -132,12 +132,20 @@ export function createBehaviourStore(tx: PgTx): DurableBehaviourStore {
       const row = result.rows[0]!;
       return {
         tenantId: row.tenant_id as string,
-        behaviour: behaviourModeSchema.parse(row.behaviour),
+        behaviour: parseBehaviour(row.behaviour),
         updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
         updatedByTenantId: row.updated_by_tenant_id as string,
       };
     },
   };
+}
+
+function parseBehaviour(value: unknown): BehaviourMode {
+  const parsed = behaviourModeSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new BehaviourPolicyError(`Fail-closed: invalid Behaviour mode ${String(value)}.`);
+  }
+  return parsed.data;
 }
 
 function assertBehaviourTenant(actorTenantId: string, subjectTenantId: string, action: string): void {

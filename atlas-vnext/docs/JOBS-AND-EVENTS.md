@@ -18,7 +18,7 @@ Illegal transitions throw (`assertJobTransition`). Failed jobs may return to `qu
 
 ## Record (contract)
 
-id, projectId, dungeon, type, status, priority, currentStage, progressRatio, checkpoint, retryCount, maxRetries, leaseOwner, leaseUntil, idempotencyKey, traceId, structured `failureReason`, timestamps (`createdAt`, `updatedAt`, `startedAt`, `completedAt`).
+id, projectId, dungeon, type, status, priority, currentStage, progressRatio, checkpoint, retryCount, maxRetries, leaseOwner, leaseUntil, idempotencyKey, traceId, structured `failureReason`, timestamps (`createdAt`, `updatedAt`, `startedAt`, `completedAt`). Each claim is a `job_attempts` row.
 
 ## Events
 

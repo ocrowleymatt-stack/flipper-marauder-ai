@@ -22,7 +22,7 @@ This tranche is durability, restart safety, transactional correctness, and tenan
 - Domain packages (`conversation`, `jobs`, `events`, `permissions`) define ports. PostgreSQL details live under `platform/persistence/src/postgres/`.
 - Production mode is PostgreSQL. In-memory implements the **same** `PlatformPersistence` contracts for unit tests. Integration tests use a real PostgreSQL adapter.
 - Requesting PostgreSQL and failing to connect **fails closed**. There is no silent fallback to memory or the JSON file.
-- Blobs are not stored in PostgreSQL. `artefact_metadata.content_hash` is a CAS pointer stub for a later Files tranche.
+- Blobs are not stored in PostgreSQL. `artefact_metadata` is identity + tenant/workspace + type + version/parent lineage + creator/execution/job provenance + timestamps + `content_hash` (future CAS pointer). No file bytes.
 
 ```text
 apps/host  →  ConversationRuntime (ports)
@@ -42,10 +42,10 @@ Tables (see `platform/persistence/migrations/`):
 - `principals`, `tenants`, `workspaces`
 - `behaviour_postures`
 - `conversations`, `messages`, `executions`
-- `jobs`, `job_checkpoints`
+- `jobs`, `job_checkpoints`, `job_attempts`
 - `event_streams`, `events`
 - `runtime_leases`
-- `provenance`, `artefact_metadata` (hashes/metadata only)
+- `provenance`, `artefact_metadata` (hashes/metadata only; no blobs)
 
 IDs are opaque strings (`cnv_…`, `job_…`). Ownership is `(tenant_id)` plus optional `workspace_id`. Looking up by ID without a tenant fails closed.
 
@@ -74,7 +74,16 @@ Atomic today:
 
 No distributed transactions. CAS is out of scope.
 
-Idempotency keys: job enqueue `(tenant_id, idempotency_key)`; event append `(tenant_id, idempotency_key)`. Retries return the committed row.
+Idempotency keys (unique per tenant; retries return the committed row, including after a racing second connection):
+
+- conversation create `(tenant_id, idempotency_key)`
+- message append `(tenant_id, idempotency_key)`
+- execution create `(conversation_id, user_message_id)` and execution id
+- job enqueue `(tenant_id, idempotency_key)`
+- job checkpoint `(tenant_id, idempotency_key)`
+- event append `(tenant_id, idempotency_key)`
+
+Terminal job `complete` / `fail` / `cancel` and terminal execution `save` are idempotent. Repeating them does not emit a second completion event.
 
 ## Durable jobs
 
@@ -82,6 +91,7 @@ State machine remains `JOB_TRANSITIONS` in `platform/jobs`. Engine: `createJobEn
 
 - `queued` rows survive restart.
 - Claim: `FOR UPDATE SKIP LOCKED` (Postgres) or an in-process mutex (memory). Two workers cannot run the same job.
+- Each claim writes a `job_attempts` row (`started` → `succeeded` / `failed` / `lease_expired` / `released`).
 - Heartbeat refreshes `lease_until`. Expired `running` leases re-queue (retry) or fail (retries exhausted).
 - `waiting_runtime` is **not** claimed and **not** converted by lease recovery (RunPod scarce-runtime wait stays durable).
 - Terminal `completed` / `cancelled` are immutable except explicit `recoverTerminal` (admin).
@@ -91,14 +101,14 @@ State machine remains `JOB_TRANSITIONS` in `platform/jobs`. Engine: `createJobEn
 
 Each stream (`conversation:<id>`, `job:<id>`) has a monotonic `seq` on `event_streams`. Live SSE still fans out in-process **after** commit. Reconnect: `replay(channel, { eventId | seq })`. Committed events do not depend on the process staying alive.
 
-Retention: `applyEventRetention(maxEntries)` deletes oldest rows per stream (hook; not a product GC job).
+Retention: `applyEventRetention(maxEntries)` deletes oldest **non-held** rows per stream (hook; not a product GC job). Required conversation/job completion events set `retained_until` and are not pruned. Conversations, messages, jobs, checkpoints, artefacts, and provenance rows are never deleted by this hook.
 
 ## Restart / recovery
 
 On host start with PostgreSQL:
 
 1. Migrate (fail visible).
-2. `recoverOnStart()`: in-flight conversation executions (`queued`/`running`) → `failed` / `interrupted`; expired job leases reconciled; `waiting_runtime` left alone.
+2. `recoverOnStart()`: in-flight conversation executions (`queued`/`running`) → `failed` / `interrupted`; expired job leases reconciled; expired `runtime_leases` marked expired; `waiting_runtime` left alone. Scheduler still owns the one paid RunPod — persistence does not start pods.
 3. Fresh service objects against the same database reconstruct snapshots. No duplicate assistant messages; no lost committed events.
 
 JSON file mode still uses `ConversationRuntime.recoverInFlight()` (existing local/dev behaviour).
@@ -110,7 +120,8 @@ Authoritative checks are in the adapter, not the UI.
 - Missing/blank tenant → `OwnershipError` / `TenantIsolationError`.
 - Tenant A cannot read/mutate B conversations, jobs, events, or Behaviour.
 - Workspace-scoped actors cannot use another workspace’s conversation id.
-- Behaviour posture is per-tenant; Open still does not grant Authority.
+- Behaviour posture is per-tenant; invalid modes fail closed; Open still does not grant Authority.
+- Artefact metadata and provenance are tenant-scoped. Looking up by id without the owning tenant returns null.
 - No process-global tenant cache; each call carries the actor.
 
 ## Local development

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { TenantIsolationError } from '@atlas-vnext/permissions';
+import { BehaviourPolicyError, TenantIsolationError, authorityBoundary, behaviourGrantsNoAuthority } from '@atlas-vnext/permissions';
 import { OwnershipError } from '../../src/errors.ts';
 import { openTestKernel, tenantA, tenantB } from './harness.ts';
 
@@ -62,5 +62,60 @@ describe('tenant and workspace isolation', () => {
     await expect(a.read(tenantA.tenantId, tenantB.tenantId)).rejects.toBeInstanceOf(TenantIsolationError);
     await expect(a.write(tenantA.tenantId, tenantB.tenantId, 'open')).rejects.toBeInstanceOf(TenantIsolationError);
     await expect(a.resolve('', tenantA.tenantId)).rejects.toBeInstanceOf(TenantIsolationError);
+  });
+
+  it('isolates artefact metadata and provenance across tenants', async () => {
+    const handle = await openTestKernel();
+    cleanups.push(handle.close);
+    await handle.kernel.ensureTenant({ id: tenantA.tenantId, name: 'A' });
+    await handle.kernel.ensureTenant({ id: tenantB.tenantId, name: 'B' });
+    const recorded = await handle.kernel.artefacts.record(tenantA, {
+      id: 'art_secret',
+      workspaceId: null,
+      type: 'document',
+      version: 1,
+      parentId: null,
+      createdBy: 'principal_a',
+      executionId: 'exe_1',
+      jobId: 'job_1',
+      contentHash: 'abc',
+      mimeType: 'text/plain',
+      sizeBytes: 4,
+    });
+    expect(recorded.urn).toContain('art_secret');
+    expect(recorded.type).toBe('document');
+    expect(recorded.parentId).toBeNull();
+    expect(recorded.createdBy).toBe('principal_a');
+    expect(recorded.executionId).toBe('exe_1');
+    expect(await handle.kernel.artefacts.get(tenantB, recorded.id)).toBeNull();
+    await handle.kernel.forActor(tenantA).provenance.record({
+      artefactId: recorded.id,
+      projectId: 'proj_a',
+      sourceInputs: ['in'],
+      inputManifestHash: null,
+      provider: 'openai',
+      model: 'gpt-4o',
+      toolCalls: [],
+      jobId: 'job_1',
+      timestamp: '2026-09-14T00:00:00.000Z',
+      traceId: 'trc',
+    });
+    expect(await handle.kernel.forActor(tenantA).provenance.forJob('job_1')).toHaveLength(1);
+    expect(await handle.kernel.forActor(tenantB).provenance.forJob('job_1')).toEqual([]);
+  });
+
+  it('rejects invalid Behaviour and does not treat Open as Authority', async () => {
+    const handle = await openTestKernel();
+    cleanups.push(handle.close);
+    await handle.kernel.ensureTenant({ id: tenantA.tenantId, name: 'A' });
+    const behaviour = handle.kernel.forActor(tenantA).behaviour;
+    await expect(behaviour.write(tenantA.tenantId, tenantA.tenantId, 'jailbreak' as never)).rejects.toBeInstanceOf(
+      BehaviourPolicyError,
+    );
+    expect(await behaviour.resolve(tenantA.tenantId)).toBe('standard');
+    await behaviour.write(tenantA.tenantId, tenantA.tenantId, 'open');
+    const gate = { evaluate: () => 'DENY' as const };
+    expect(behaviourGrantsNoAuthority('open', gate)).toBe(true);
+    expect(authorityBoundary('open', gate).grantedScopes).toEqual([]);
   });
 });

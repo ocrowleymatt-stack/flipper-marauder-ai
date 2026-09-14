@@ -60,8 +60,8 @@ export class NexusRouter {
     if (!this.registry.isRoutable(registered)) {
       throw new Error(`Model ${target} is not healthy.`);
     }
-    this.assertRequirements(registered, request);
     this.assertPrivacy(registered, request, target);
+    this.assertRequirements(registered, request);
 
     return {
       target,

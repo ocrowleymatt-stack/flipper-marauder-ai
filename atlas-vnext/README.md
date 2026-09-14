@@ -27,7 +27,7 @@ Default runtime is **live** adapters. Missing keys mark that provider unavailabl
 - Shared contracts (`packages/contracts`)
 - Thin Nexus router (`platform/nexus`)
 - Execution broker + production adapters (`platform/execution`)
-- Conversation domain + durable file metadata store (dev adapter, not final)
+- Conversation domain + PostgreSQL persistence kernel (JSON file remains local/dev)
 - Workspace UI (`apps/web`) and HTTP/SSE host (`apps/host`)
 - Import-graph architecture tests
 
@@ -45,6 +45,8 @@ npm run typecheck
 npm test
 npm run test:boundaries
 npm run test:providers
+npm run test:persistence
+npm run test:runtime
 npm run test:compat
 npm run build
 ```

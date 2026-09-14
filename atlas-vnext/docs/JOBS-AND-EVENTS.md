@@ -12,7 +12,7 @@
 ## States
 
 `queued` → `running` → `completed` | `failed` | `cancelled`  
-side states: `waiting`, `waiting_permission`, `paused`.
+side states: `waiting`, `waiting_runtime`, `waiting_permission`, `paused`.
 
 Illegal transitions throw (`assertJobTransition`). Failed jobs may return to `queued` for retry; cancelled/completed are terminal.
 
@@ -28,4 +28,4 @@ Types: `job.created|started|stage_transition|progress|checkpoint|permission_requ
 
 Heartbeat comments keep proxies from dropping the stream. Durable delivery uses a transactional outbox, not a second broker.
 
-This PR ships contracts + `platform/jobs` and `platform/events` interfaces plus the transition table. No in-memory fake runner.
+This PR ships contracts, `platform/jobs` (engine + stores), and `platform/events` (replay/idempotent publish). PostgreSQL persistence is in `platform/persistence`.

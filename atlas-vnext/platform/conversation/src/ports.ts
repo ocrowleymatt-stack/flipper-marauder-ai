@@ -9,8 +9,12 @@ import type {
   StreamChunk,
 } from '@atlas-vnext/contracts';
 
+export interface UnitOfWork {
+  run<T>(fn: () => Promise<T>): Promise<T>;
+}
+
 export interface ConversationRepository {
-  create(input: { title: string; projectId: string | null }): Promise<Conversation>;
+  create(input: { title: string; projectId: string | null; idempotencyKey?: string }): Promise<Conversation>;
   get(id: string): Promise<Conversation | null>;
   list(): Promise<Conversation[]>;
   save(conversation: Conversation): Promise<Conversation>;

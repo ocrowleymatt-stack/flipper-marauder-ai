@@ -6,4 +6,4 @@ Every long-running operation (commission, OSINT scan, research sweep, site build
 
 This is not a dungeon-specific runner. Dungeons register handlers; the job engine is shared.
 
-This package freezes the interface and the legal state transitions. Durable PostgreSQL persistence is deferred; in-memory maps are not shipped.
+This package freezes the interface, the legal state transitions, and a restart-safe engine (`createJobEngine`) over a `JobStore`. PostgreSQL claiming uses `SELECT … FOR UPDATE SKIP LOCKED`. In-memory is the same engine for unit tests. Terminal states are immutable except explicit admin recovery. `waiting_runtime` is not auto-failed on lease expiry.

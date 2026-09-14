@@ -22,6 +22,7 @@ import type {
   MessageRepository,
   ModelExecutor,
   ProvenanceWriter,
+  UnitOfWork,
 } from './ports.ts';
 import { assertExecutionTransition } from './transitions.ts';
 
@@ -41,6 +42,8 @@ export interface ConversationRuntimeDeps {
   availableRuntimes?: string[];
   /** Local-only Private routing. Default `any` does not change existing callers. */
   privacy?: 'any' | 'local_only';
+  /** Optional transactional boundary for conversation/message/execution writes. */
+  unitOfWork?: UnitOfWork;
 }
 
 export class ConversationRuntime {
@@ -54,12 +57,14 @@ export class ConversationRuntime {
   }
 
   async createConversation(input: { title?: string; projectId?: string | null } = {}): Promise<Conversation> {
-    const conversation = await this.deps.conversations.create({
-      title: sanitiseTitle(input.title) ?? DEFAULT_TITLE,
-      projectId: input.projectId ?? null,
+    return this.transact(async () => {
+      const conversation = await this.deps.conversations.create({
+        title: sanitiseTitle(input.title) ?? DEFAULT_TITLE,
+        projectId: input.projectId ?? null,
+      });
+      await this.publish(conversation.id, 'conversation.created', { conversationId: conversation.id });
+      return conversation;
     });
-    await this.publish(conversation.id, 'conversation.created', { conversationId: conversation.id });
-    return conversation;
   }
 
   async listConversations(): Promise<Conversation[]> {
@@ -129,39 +134,46 @@ export class ConversationRuntime {
     }
 
     const capability = input.capability?.trim() || 'nexus/fast';
-    const userMessage = await this.deps.messages.append({
-      conversationId,
-      role: 'user',
-      content,
-      executionId: null,
-    });
-    await this.touchConversation(conversation, content);
-    await this.publish(conversationId, 'message.appended', { messageId: userMessage.id, role: 'user' });
-    yield { type: 'message', message: userMessage };
+    const started = await this.transact(async () => {
+      const userMessage = await this.deps.messages.append({
+        conversationId,
+        role: 'user',
+        content,
+        executionId: null,
+      });
+      await this.touchConversation(conversation, content);
+      await this.publish(conversationId, 'message.appended', { messageId: userMessage.id, role: 'user' });
 
-    const executionId = this.ids.id('execution');
-    const timestamp = this.clock.now();
-    let execution: ExecutionRecord = {
-      id: executionId,
-      urn: this.ids.urn('execution', executionId),
-      conversationId,
-      userMessageId: userMessage.id,
-      assistantMessageId: null,
-      status: 'queued',
-      capability,
-      route: null,
-      selectedProvider: null,
-      selectedModel: null,
-      attempts: [],
-      usage: null,
-      failureReason: null,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      startedAt: null,
-      completedAt: null,
-    };
-    execution = await this.deps.executions.create(execution);
-    await this.publish(conversationId, 'execution.created', { executionId });
+      const executionId = this.ids.id('execution');
+      const timestamp = this.clock.now();
+      const created: ExecutionRecord = {
+        id: executionId,
+        urn: this.ids.urn('execution', executionId),
+        conversationId,
+        userMessageId: userMessage.id,
+        assistantMessageId: null,
+        tenantId: conversation.tenantId,
+        status: 'queued',
+        capability,
+        route: null,
+        selectedProvider: null,
+        selectedModel: null,
+        attempts: [],
+        usage: null,
+        failureReason: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        startedAt: null,
+        completedAt: null,
+      };
+      const execution = await this.deps.executions.create(created);
+      await this.publish(conversationId, 'execution.created', { executionId });
+      return { userMessage, execution };
+    });
+    const userMessage = started.userMessage;
+    let execution = started.execution;
+    const executionId = execution.id;
+    yield { type: 'message', message: userMessage };
     yield { type: 'execution', execution };
 
     const controller = new AbortController();
@@ -313,23 +325,28 @@ export class ConversationRuntime {
           }
           assembled += chunk.text;
           if (!assistant) {
-            assistant = await this.deps.messages.append({
-              conversationId,
-              role: 'assistant',
-              content: assembled,
-              executionId,
+            const first = await this.transact(async () => {
+              const message = await this.deps.messages.append({
+                conversationId,
+                role: 'assistant',
+                content: assembled,
+                executionId,
+              });
+              const nextExecution = await this.saveExecution({
+                ...execution,
+                assistantMessageId: message.id,
+                attempts: [...attempts],
+                selectedProvider: execution.selectedProvider,
+                selectedModel: execution.selectedModel,
+              });
+              await this.publish(conversationId, 'message.appended', {
+                messageId: message.id,
+                role: 'assistant',
+              });
+              return { message, execution: nextExecution };
             });
-            execution = await this.saveExecution({
-              ...execution,
-              assistantMessageId: assistant.id,
-              attempts: [...attempts],
-              selectedProvider: execution.selectedProvider,
-              selectedModel: execution.selectedModel,
-            });
-            await this.publish(conversationId, 'message.appended', {
-              messageId: assistant.id,
-              role: 'assistant',
-            });
+            assistant = first.message;
+            execution = first.execution;
             yield { type: 'message', message: assistant };
             yield { type: 'execution', execution };
           } else {
@@ -497,7 +514,12 @@ export class ConversationRuntime {
       channel: conversationChannel(conversationId),
       type,
       payload,
+      conversationId,
     });
+  }
+
+  private transact<T>(fn: () => Promise<T>): Promise<T> {
+    return this.deps.unitOfWork ? this.deps.unitOfWork.run(fn) : fn();
   }
 }
 

@@ -29,7 +29,7 @@ Does not own: route policy, UI, project/CAS writes, dungeon modules.
 | `observability` | Route/attempt traces including rejects |
 | `flags` | Feature flags |
 | `conversation` | Conversation, message, and execution state |
-| `persistence` | Local/dev durable metadata adapter |
+| `persistence` | PostgreSQL adapter, migrations, tenant-scoped kernels; JSON file is local/dev only |
 
 None of these are dungeon modules. None may import dungeons.
 

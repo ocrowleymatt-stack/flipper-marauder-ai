@@ -9,6 +9,10 @@
   "dependencies": {
     "@atlas-vnext/contracts": "*",
     "@atlas-vnext/conversation": "*",
-    "@atlas-vnext/events": "*"
+    "@atlas-vnext/events": "*",
+    "@atlas-vnext/jobs": "*",
+    "@atlas-vnext/observability": "*",
+    "@atlas-vnext/permissions": "*",
+    "pg": "^8.23.0"
   }
 }

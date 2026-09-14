@@ -218,8 +218,18 @@ export class AnthropicToolCallAssembler {
   }
 }
 
+export interface GeminiFunctionCallPart {
+  name?: string;
+  args?: unknown;
+  /** Provider-supplied call id when present; never used as a name-only key. */
+  id?: string;
+}
+
 interface GeminiBufferedTool {
   key: string;
+  providerId?: string;
+  ordinal: number;
+  partIndex: number;
   name?: string;
   argsJson: string;
   argsObject: Record<string, unknown>;
@@ -230,24 +240,20 @@ interface GeminiBufferedTool {
 /**
  * Assembles Gemini `functionCall` parts that may arrive split across SSE
  * events (name first, args later, or JSON-string fragments).
+ *
+ * Identity is the provider call id, else part index + call ordinal.
+ * Function name alone is never a key — two calls to the same function stay distinct.
  */
 export class GeminiFunctionCallAssembler {
   private readonly calls = new Map<string, GeminiBufferedTool>();
+  private readonly idToKey = new Map<string, string>();
   private currentKey: string | null = null;
+  private nextOrdinal = 0;
 
-  ingest(part: { functionCall?: { name?: string; args?: unknown } }, index = 0): void {
+  ingest(part: { functionCall?: GeminiFunctionCallPart }, index = 0): void {
     const call = part.functionCall;
     if (!call) return;
-    const key = call.name?.trim() ? `name:${call.name}` : this.currentKey ?? `part:${index}:${this.calls.size}`;
-    this.currentKey = key;
-    const buf = this.calls.get(key) ?? {
-      key,
-      name: call.name,
-      argsJson: '',
-      argsObject: {},
-      hasObjectArgs: false,
-      emitted: false,
-    };
+    const buf = this.bufferFor(call, index);
     if (call.name) buf.name = call.name;
     if (typeof call.args === 'string') {
       buf.argsJson += call.args;
@@ -255,9 +261,14 @@ export class GeminiFunctionCallAssembler {
       buf.hasObjectArgs = true;
       buf.argsObject = { ...buf.argsObject, ...call.args };
     }
-    this.calls.set(key, buf);
+    this.calls.set(buf.key, buf);
+    this.currentKey = buf.key;
   }
 
+  /**
+   * Emit structurally complete calls and warnings for leftovers.
+   * Call only at stream end — never per delta, and never before args are complete.
+   */
   finish(providerId: string): StreamChunk[] {
     const out: StreamChunk[] = [];
     for (const buf of this.calls.values()) {
@@ -283,7 +294,7 @@ export class GeminiFunctionCallAssembler {
             });
             continue;
           }
-          out.push({ type: 'tool_call', call: { id: name, toolId: name, arguments: parsed } });
+          out.push({ type: 'tool_call', call: { id: this.emitId(buf), toolId: name, arguments: parsed } });
         } catch {
           out.push({
             type: 'warning',
@@ -295,9 +306,95 @@ export class GeminiFunctionCallAssembler {
       }
       out.push({
         type: 'tool_call',
-        call: { id: name, toolId: name, arguments: buf.hasObjectArgs ? buf.argsObject : {} },
+        call: {
+          id: this.emitId(buf),
+          toolId: name,
+          arguments: buf.hasObjectArgs ? buf.argsObject : {},
+        },
       });
     }
     return out;
+  }
+
+  private bufferFor(call: GeminiFunctionCallPart, partIndex: number): GeminiBufferedTool {
+    const providerId = call.id?.trim();
+    if (providerId) {
+      const existingKey = this.idToKey.get(providerId);
+      if (existingKey) {
+        const existing = this.calls.get(existingKey);
+        if (existing) return existing;
+      }
+      const created = this.createBuffer(`id:${providerId}`, partIndex, providerId);
+      this.idToKey.set(providerId, created.key);
+      return created;
+    }
+
+    const name = call.name?.trim();
+    if (!name) {
+      const byPartIndex = this.unfinishedAtPartIndex(partIndex);
+      if (byPartIndex) return byPartIndex;
+      if (this.currentKey) {
+        const current = this.calls.get(this.currentKey);
+        if (current && !current.emitted) return current;
+      }
+    }
+
+    if (this.currentKey) {
+      const current = this.calls.get(this.currentKey);
+      if (
+        current &&
+        !current.emitted &&
+        current.partIndex === partIndex &&
+        !this.isStructurallyComplete(current) &&
+        (!name || !current.name || current.name === name)
+      ) {
+        return current;
+      }
+    }
+
+    return this.createBuffer(`part:${partIndex}:ord:${this.nextOrdinal}`, partIndex);
+  }
+
+  private unfinishedAtPartIndex(partIndex: number): GeminiBufferedTool | undefined {
+    let found: GeminiBufferedTool | undefined;
+    for (const buf of this.calls.values()) {
+      if (buf.emitted || buf.partIndex !== partIndex) continue;
+      if (this.isStructurallyComplete(buf)) continue;
+      if (!found || buf.ordinal > found.ordinal) found = buf;
+    }
+    return found;
+  }
+
+  private createBuffer(key: string, partIndex: number, providerId?: string): GeminiBufferedTool {
+    const ordinal = this.nextOrdinal;
+    this.nextOrdinal += 1;
+    const created: GeminiBufferedTool = {
+      key,
+      providerId,
+      ordinal,
+      partIndex,
+      argsJson: '',
+      argsObject: {},
+      hasObjectArgs: false,
+      emitted: false,
+    };
+    this.calls.set(key, created);
+    return created;
+  }
+
+  private isStructurallyComplete(buf: GeminiBufferedTool): boolean {
+    if (!buf.name?.trim()) return false;
+    if (buf.argsJson.length > 0) {
+      try {
+        return isPlainObject(JSON.parse(buf.argsJson));
+      } catch {
+        return false;
+      }
+    }
+    return buf.hasObjectArgs;
+  }
+
+  private emitId(buf: GeminiBufferedTool): string {
+    return buf.providerId ?? `gcall:${buf.ordinal}`;
   }
 }

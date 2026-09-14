@@ -32,7 +32,7 @@ export {
   AnthropicToolCallAssembler,
   GeminiFunctionCallAssembler,
 } from './tool-call-buffer.ts';
-export type { OpenAIToolCallDelta } from './tool-call-buffer.ts';
+export type { OpenAIToolCallDelta, GeminiFunctionCallPart } from './tool-call-buffer.ts';
 export { sanitizeText, sanitizeUnknown } from './sanitize.ts';
 export { ProviderHttpError, httpFailure, connectionFailure, isRetryableError } from './errors.ts';
 export { RuntimeScheduler, waitingCopy, MAX_KEEP_WARM_SECONDS } from './runtime/scheduler.ts';

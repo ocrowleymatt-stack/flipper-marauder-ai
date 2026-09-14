@@ -108,7 +108,7 @@ interface GeminiEvent {
       parts?: Array<{
         text?: string;
         thought?: boolean;
-        functionCall?: { name?: string; args?: unknown };
+        functionCall?: { name?: string; args?: unknown; id?: string };
       }>;
     };
   }>;

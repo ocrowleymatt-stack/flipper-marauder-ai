@@ -12,7 +12,7 @@ Atlas vNext architecture is unchanged: **Nexus owns WHERE** (registry, aliases, 
 | Mountain PRs **#172** / **#221** | **Not inspectable** (repo missing). Encoded from the user-authoritative description: tenant-routed Standard/Open Behaviour, persistent per-tenant resolution, fail-closed defaults, prompt composition, **unchanged Authority**. Open changes **response posture only**. |
 | Caspa `routerFailover` / `aiRouterPolicy` | **Inspected** (read-only): billing/transient cooldowns, attempt order, circuit breaker. **Not copied.** Cooldown maps to execution circuit-breaker + Nexus health exclusion. |
 | commons `@ocrowley/ai-client` | **Inspected**: Ollama-first failover mixes policy + HTTP — **discard as structure**. |
-| vNext `main` @ `9fa67b3` | **Inspected**: broker failover-before-output, tool-call buffer, Forge-before-RunPod ranking, local-only privacy, attempt traces. |
+| vNext `main` @ `ab13570` (PR #4 merge, includes `7c709c36`) | **Inspected**: broker failover-before-output, tool-call buffer, Forge-before-RunPod ranking, local-only privacy, attempt traces. Host catalogue aliases `grok-build` → upstream `grok-build-0.1` (fast reasoning); mountain-compat ranking tests register the same row so Auto/Power-Pod and `nexus/reason` stay aligned. |
 
 Legend used in tests: **specified** = user-stated Mountain requirement; **inspected** = verified against accessible code.
 

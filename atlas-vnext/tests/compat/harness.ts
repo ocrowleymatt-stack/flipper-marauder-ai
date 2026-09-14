@@ -73,6 +73,19 @@ export function routingHarness() {
   );
   registry.register(
     model({
+      provider: 'xai',
+      model: 'grok-build',
+      label: 'Grok Build',
+      // Host catalogue on main: alias grok-build → upstream grok-build-0.1.
+      capabilities: { text: true, reasoning: true, tools: true, vision: true, code: true },
+      contextWindow: 256_000,
+      costClass: 'medium',
+      latencyClass: 'fast',
+      runtimeRequirements: ['xai'],
+    }),
+  );
+  registry.register(
+    model({
       provider: 'forge',
       model: 'qwen3',
       label: 'Forge Qwen',

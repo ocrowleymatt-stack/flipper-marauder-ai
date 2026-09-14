@@ -470,6 +470,31 @@ describe('mountain-compat 8: Auto/Power-Pod specialist/fallback (specified; insp
     expect(privateFirst.candidateChain[0]).not.toBe('runpod/llm');
     expect(privateFirst.decisionReason).toMatch(/specialist/);
   });
+
+  it('keeps grok-build-0.1 (fast reasoning) on nexus/reason without waking burst GPU or bypassing local Auto', () => {
+    const { router } = routingHarness();
+    const reason = router.resolve('nexus/reason', {
+      availableRuntimes: ['xai', 'anthropic', 'ollama', 'forge', 'runpod'],
+    });
+    expect(reason.resolvedRouteId).toBe('xai/grok-build');
+    expect(reason.candidateChain.indexOf('xai/grok-build')).toBeLessThan(
+      reason.candidateChain.indexOf('anthropic/claude-sonnet'),
+    );
+    expect(reason.candidateChain).not.toContain('runpod/llm');
+
+    const auto = router.resolve('auto', {
+      availableRuntimes: ['xai', 'ollama', 'forge', 'runpod'],
+    });
+    expect(auto.resolvedRouteId).toBe('ollama/llama3.2');
+    expect(auto.candidateChain.indexOf('forge/qwen3')).toBeLessThan(auto.candidateChain.indexOf('runpod/llm'));
+    expect(auto.candidateChain).toContain('xai/grok-build');
+
+    const privateReason = router.resolve('nexus/reason', { privacy: 'local_only' });
+    expect(privateReason.resolvedRouteId).not.toBe('xai/grok-build');
+    expect(privateReason.rejectedCandidates?.some((row) => row.provider === 'xai' && row.reason === 'privacy_local_only')).toBe(
+      true,
+    );
+  });
 });
 
 describe('mountain-compat 9: route observability records attempts and rejects (inspected attempts; specified rejects)', () => {

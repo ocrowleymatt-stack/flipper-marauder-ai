@@ -2,7 +2,9 @@
 
 PostgreSQL is the production-capable metadata store. Conversation ports, the job engine, and the event bus stay adapter-free; `platform/persistence` owns SQL, pools, and migrations.
 
-This tranche is durability, restart safety, transactional correctness, and tenant/workspace isolation. It is not Files/CAS, Dungeon migration, Caspa, Nexus/Execution redesign, or UI work.
+This tranche is durability, restart safety, transactional correctness, tenant/workspace isolation, and the Files/CAS/context foundation. It is not Dungeon migration, Caspa, Nexus/Execution redesign, Workbench UI, or a Mountain UI clone.
+
+Product direction (constraint, not UI work): Atlas vNext is a progressive Workbench — simple chat when the task is simple; persistent workspace/artefact surfaces when work is substantial. Chat is one surface. Messages are not the only durable result. Conversations belong to workspaces; they are not the only workspace child. First-class Project objects are `ProjectService` over `workspaces`. See [docs/PERSISTENCE.md](../../docs/PERSISTENCE.md) and [docs/FILES-AND-CONTEXT.md](../../docs/FILES-AND-CONTEXT.md).
 
 ## Inventory (pre-change)
 
@@ -11,7 +13,9 @@ This tranche is durability, restart safety, transactional correctness, and tenan
 | Conversations / messages / executions | JSON `FileDocument` + in-memory maps | Same ports; PostgreSQL + memory kernels |
 | Jobs | Transition table only | Restart-safe engine + `SELECT … FOR UPDATE SKIP LOCKED` |
 | Events | In-process `MemoryEventBus` / file log | Durable per-stream seq, replay, idempotent append |
-| Projects / workspaces | Interface stub | Tenant-scoped workspace rows (manifest hash pointer only) |
+| Projects / workspaces | Interface stub | Tenant-scoped workspace rows + first-class `ProjectService`. Conversations, jobs, files, and artefacts may belong to a workspace; conversations are not the only child. |
+| Artefact metadata / provenance | Interface stubs | Versioned `artefact_metadata` + provenance rows (hashes only). Durable results are not required to be chat messages. |
+| Files / CAS / context | Design-gate shells | Filesystem CAS, ingestion, extraction, chunking, lexical retrieval, budgeted context, citations. |
 | Behaviour posture | In-process `TenantBehaviourStore` | Durable per-tenant row; still not Authority |
 | Runtime leases | RunPod file store (unchanged) | Optional PG `runtime_leases` metadata; scheduler semantics unchanged |
 | JSON file store | Local/dev conversation document | Still local/dev; not a second production architecture |
@@ -22,17 +26,27 @@ This tranche is durability, restart safety, transactional correctness, and tenan
 - Domain packages (`conversation`, `jobs`, `events`, `permissions`) define ports. PostgreSQL details live under `platform/persistence/src/postgres/`.
 - Production mode is PostgreSQL. In-memory implements the **same** `PlatformPersistence` contracts for unit tests. Integration tests use a real PostgreSQL adapter.
 - Requesting PostgreSQL and failing to connect **fails closed**. There is no silent fallback to memory or the JSON file.
-- Blobs are not stored in PostgreSQL. `artefact_metadata` is identity + tenant/workspace + type + version/parent lineage + creator/execution/job provenance + timestamps + `content_hash` (future CAS pointer). No file bytes.
+- Blobs are not stored in PostgreSQL. `artefact_metadata` and `files` store identity + tenant/workspace + type + version/parent lineage + timestamps + `content_hash` (CAS pointer). Chunk rows hold bounded retrieval text, not uploaded files.
 
 ```text
-apps/host  →  ConversationRuntime (ports)
+apps/host  →  ConversationRuntime (current simple-chat surface; not the product shell)
            →  PlatformPersistence.forActor(tenant)
+                ├ workspaces          (durable container; first-class Projects later)
                 ├ conversations / messages / executions
-                ├ jobs (leases, checkpoints)
-                ├ events (seq + replay)
-                ├ workspaces / behaviour / provenance stubs
-                └ runtime_leases (metadata only)
+                │                     (one workspace child; chat-turn records only)
+                ├ jobs / checkpoints / attempts
+                │                     (resumable long-running work; not chat-bound)
+                ├ artefact_metadata   (first-class durable results; hash pointer only)
+                ├ files / chunks / attachments
+                ├ site_records / site_revisions (logical current site pointer)
+                ├ cas_objects / cas_refs (refcount; bytes stay in CAS)
+                ├ provenance          (artefact lineage; not a second chat log)
+                ├ events              (per-stream seq + replay; conversation or job)
+                ├ behaviour
+                └ runtime_leases      (metadata only)
 ```
+
+Do not add tables or docs that force every artefact through `messages`, or that treat the conversation list as the workspace.
 
 ## Schema ownership
 
@@ -46,6 +60,8 @@ Tables (see `platform/persistence/migrations/`):
 - `event_streams`, `events`
 - `runtime_leases`
 - `provenance`, `artefact_metadata` (hashes/metadata only; no blobs)
+- `cas_objects`, `cas_refs`, `files`, `file_versions`, `extractions`, `chunks`, `attachments`
+- `site_records`, `site_revisions`, `site_revision_entries` (logical site + current revision pointer; no copied trees)
 
 IDs are opaque strings (`cnv_…`, `job_…`). Ownership is `(tenant_id)` plus optional `workspace_id`. Looking up by ID without a tenant fails closed.
 
@@ -57,9 +73,9 @@ IDs are opaque strings (`cnv_…`, `job_…`). Ownership is `(tenant_id)` plus o
 4. Failed SQL rolls back that migration and throws `MigrationError`. Data already committed is left intact; the bad version is not recorded.
 5. Migrations are additive. They must not `DROP SCHEMA` / `DROP DATABASE` or recreate the world.
 
-Empty database: apply 001 then 002. Repeat startup: both skipped.
+Empty database: apply 001…005. Repeat startup: all skipped.
 
-Upgrade fixture: apply frozen v1 SQL + `schema_migrations` row 1, then run the migrator (applies 002).
+Upgrade fixture: apply frozen v1 SQL + `schema_migrations` row 1, then run the migrator (applies 002–005).
 
 ## Transaction boundaries
 
@@ -72,7 +88,7 @@ Atomic today:
 - first assistant message + execution `assistantMessageId`
 - job enqueue / claim / checkpoint / complete / fail / cancel + job events
 
-No distributed transactions. CAS is out of scope.
+No distributed transactions. CAS put happens before the metadata transaction; unreferenced blobs are GC'd by hook.
 
 Idempotency keys (unique per tenant; retries return the committed row, including after a racing second connection):
 

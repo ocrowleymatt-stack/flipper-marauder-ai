@@ -339,9 +339,11 @@ export type OutboxRecord = z.infer<typeof outboxRecordSchema>;
 /**
  * Conversation spine contracts.
  *
- * Conversations and executions are platform/domain state, not UI memory
- * and not Nexus routing policy. Message bodies of conversational scale
- * live in metadata storage; CAS remains for artefacts/blobs.
+ * Conversations belong to a workspace (`workspaceId` / `projectId` alias).
+ * They are platform/domain state, not UI memory and not Nexus routing policy.
+ * Message bodies of conversational scale live in metadata storage.
+ * Durable results that are not chat — artefacts, jobs, files — use their own
+ * records; CAS remains for blobs. Do not treat messages as the only durable result.
  */
 export const conversationSchema = z.object({
   id: z.string().min(1),

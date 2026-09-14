@@ -17,6 +17,44 @@ import type { EventBus } from '@atlas-vnext/events';
 import type { DurableJobEngine } from '@atlas-vnext/jobs';
 import type { PersistenceActor } from './actor.ts';
 import type { PersistenceMode } from './config.ts';
+import type {
+  AttachmentStore,
+  CasRefStore,
+  ChunkStore,
+  ExtractionStore,
+  FileStore,
+  FileVersionStore,
+} from './file-types.ts';
+import type { SiteStore } from './site-types.ts';
+
+export type {
+  AttachmentRecord,
+  AttachmentStore,
+  CasCatalogStats,
+  CasObjectRecord,
+  CasRefKind,
+  CasRefRecord,
+  CasRefStore,
+  ChunkLocator,
+  ChunkRecord,
+  ChunkStore,
+  ExtractionRecord,
+  ExtractionStatus,
+  ExtractionStore,
+  FileRecord,
+  FileStatus,
+  FileStore,
+  FileVersionRecord,
+  FileVersionStore,
+} from './file-types.ts';
+export type {
+  SiteCounts,
+  SiteRecord,
+  SiteRetentionClass,
+  SiteRevisionEntry,
+  SiteRevisionRecord,
+  SiteStore,
+} from './site-types.ts';
 
 export interface TenantRecord {
   id: string;
@@ -34,14 +72,18 @@ export interface PrincipalRecord {
   updatedAt: string;
 }
 
+/** Durable workspace container. First-class named Project objects alias this row; conversations are one child, not the only one. */
 export interface WorkspaceRecord {
   id: string;
   urn: string;
   tenantId: string;
   name: string;
+  description: string | null;
   dungeon: string | null;
   rootManifestHash: string | null;
   archived: boolean;
+  revision: number;
+  deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -58,6 +100,10 @@ export interface RuntimeLeaseRecord {
   updatedAt: string;
 }
 
+/**
+ * First-class durable result metadata (not a chat message).
+ * Version/parent lineage is here; blob bytes are not (future CAS via contentHash).
+ */
 export interface ArtefactMetadata {
   id: string;
   urn: string;
@@ -87,9 +133,20 @@ export interface DurableBehaviourStore {
 }
 
 export interface WorkspaceStore {
-  create(actor: PersistenceActor, input: { name: string; dungeon?: string; id?: string }): Promise<WorkspaceRecord>;
-  get(actor: PersistenceActor, id: string): Promise<WorkspaceRecord | null>;
-  list(actor: PersistenceActor): Promise<WorkspaceRecord[]>;
+  create(
+    actor: PersistenceActor,
+    input: { name: string; dungeon?: string; id?: string; description?: string },
+  ): Promise<WorkspaceRecord>;
+  get(actor: PersistenceActor, id: string, opts?: { includeDeleted?: boolean }): Promise<WorkspaceRecord | null>;
+  list(actor: PersistenceActor, opts?: { includeArchived?: boolean; includeDeleted?: boolean }): Promise<WorkspaceRecord[]>;
+  update(
+    actor: PersistenceActor,
+    id: string,
+    patch: { name?: string; description?: string | null; dungeon?: string | null; expectedRevision: number },
+  ): Promise<WorkspaceRecord>;
+  archive(actor: PersistenceActor, id: string, expectedRevision?: number): Promise<WorkspaceRecord>;
+  restore(actor: PersistenceActor, id: string, expectedRevision?: number): Promise<WorkspaceRecord>;
+  logicalDelete(actor: PersistenceActor, id: string, expectedRevision?: number): Promise<WorkspaceRecord>;
   bindManifest(actor: PersistenceActor, id: string, manifestHash: string): Promise<WorkspaceRecord>;
 }
 
@@ -117,8 +174,25 @@ export interface ArtefactMetadataStore {
     },
   ): Promise<ArtefactMetadata>;
   get(actor: PersistenceActor, id: string): Promise<ArtefactMetadata | null>;
+  list(actor: PersistenceActor, workspaceId: string | null): Promise<ArtefactMetadata[]>;
+  createVersion(
+    actor: PersistenceActor,
+    parentId: string,
+    input: {
+      id: string;
+      expectedVersion: number;
+      contentHash: string | null;
+      mimeType?: string | null;
+      sizeBytes?: number | null;
+      type?: string | null;
+      createdBy?: string | null;
+      executionId?: string | null;
+      jobId?: string | null;
+    },
+  ): Promise<ArtefactMetadata>;
 }
 
+/** Tenant-scoped handles. Conversations/messages/executions are the chat-turn slice; jobs, files, and artefacts are not required to pass through chat. */
 export interface ActorBoundPersistence {
   actor: PersistenceActor;
   conversations: ConversationRepository;
@@ -129,6 +203,13 @@ export interface ActorBoundPersistence {
   jobs: DurableJobEngine;
   behaviour: DurableBehaviourStore;
   workspaces: WorkspaceStore;
+  files: FileStore;
+  fileVersions: FileVersionStore;
+  extractions: ExtractionStore;
+  chunks: ChunkStore;
+  attachments: AttachmentStore;
+  casRefs: CasRefStore;
+  sites: SiteStore;
 }
 
 export interface RestartRecoveryResult {
@@ -144,7 +225,7 @@ export interface PlatformPersistence extends UnitOfWork {
   ensurePrincipal(input: { id: string; displayName?: string | null }): Promise<PrincipalRecord>;
   ensureWorkspace(
     actor: PersistenceActor,
-    input: { id?: string; name: string; dungeon?: string },
+    input: { id?: string; name: string; dungeon?: string; description?: string },
   ): Promise<WorkspaceRecord>;
   runtimeLeases: RuntimeLeaseStore;
   artefacts: ArtefactMetadataStore;

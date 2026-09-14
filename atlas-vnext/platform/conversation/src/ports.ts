@@ -14,6 +14,7 @@ export interface UnitOfWork {
 }
 
 export interface ConversationRepository {
+  /** `projectId` is a workspace-id alias until first-class Project objects exist. */
   create(input: { title: string; projectId: string | null; idempotencyKey?: string }): Promise<Conversation>;
   get(id: string): Promise<Conversation | null>;
   list(): Promise<Conversation[]>;
@@ -33,6 +34,7 @@ export interface MessageRepository {
 }
 
 export interface ExecutionRepository {
+  /** Chat-turn records. Resumable long-running work uses `jobs`, not executions. */
   create(record: ExecutionRecord): Promise<ExecutionRecord>;
   get(id: string): Promise<ExecutionRecord | null>;
   listByConversation(conversationId: string): Promise<ExecutionRecord[]>;

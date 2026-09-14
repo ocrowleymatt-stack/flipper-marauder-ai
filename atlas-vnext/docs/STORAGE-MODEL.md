@@ -19,17 +19,19 @@ Caspa’s `hybridCoreRepository` already uses PostgreSQL for immutable manuscrip
 ```text
 storage/
   blobs/sha256/ab/cd/<hex>
-  manifests/sha256/ab/<hex>.json
 ```
 
-Metadata lives in PostgreSQL, not beside the blob directory as a second source of truth.
+On disk this is `<casRoot>/sha256/<aa>/<bb>/<hash>`. Metadata lives in PostgreSQL (`cas_objects`, `cas_refs`, `files`), not beside the blob directory as a second source of truth.
 
-## Metadata (illustrative)
+## Metadata
 
-`projects` — id, name, dungeon, `root_manifest_hash`, settings, timestamps.  
-`blobs` — sha256, size, mime, extracted_text (truncated), refcounts.  
-`manifests` — sha256, project_id, parent, entries_json (or entries as rows).  
-`artefacts` — id, project_id, job_id, blob_hash, provenance_json.
+`workspaces` / projects — id, name, dungeon, `root_manifest_hash`, revision, timestamps.  
+`cas_objects` — sha256, size, created_at.  
+`cas_refs` — tenant-owned references (file, artefact, extraction, site revision/entry).  
+`files` / `file_versions` — logical path, mime, size, content hash, version.  
+`artefact_metadata` — id, project/workspace, job, blob hash, type, version lineage.  
+`site_records` / `site_revisions` / `site_revision_entries` — one logical site, current-revision pointer, bounded history.  
+`chunks` — bounded retrieval text + locators (not uploaded file bytes).
 
 ## Manifest
 
@@ -37,6 +39,6 @@ Deterministic JSON: sorted paths, sha256, sizeBytes, mimeType, executable. The m
 
 ## GC
 
-Reference-count from manifests + artefacts; mark-and-sweep orphans older than retention. Quota watermarks prune disposable preview caches first. Production artefacts and custom-domain sites are protected.
+Reference-count from `cas_refs`. Expired site revisions drop their refs. Durable jobs `storage.retain` and `storage.gc` perform retention and unlink; `gcUnreferenced` never deletes an object while any ref remains, including another tenant's. Disk orphans (CAS put without metadata) are unlinked fail-closed. Disk-full CAS publish throws `CasPublicationError` and does not move the current site pointer.
 
-This PR ships the contract and `platform/storage` interface only.
+Observability (no file bodies): logical site count, retained revision count, CAS physical bytes, catalog bytes, logical vs unique (deduplicated) bytes, reclaimable/unreferenced bytes, GC reclaim/failure events.

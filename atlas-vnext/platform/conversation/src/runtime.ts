@@ -441,6 +441,9 @@ export class ConversationRuntime {
     execution: ExecutionRecord,
     decision: RouteDecision,
   ): Promise<void> {
+    // Chat-turn provenance stub only. First-class artefacts live in artefact_metadata
+    // and are not required to be messages. Using the assistant message id as artefactId
+    // does not make messages the artefact store.
     const entry: ProvenanceRecord = {
       artefactId: assistant.id,
       projectId: conversation.projectId ?? conversation.id,

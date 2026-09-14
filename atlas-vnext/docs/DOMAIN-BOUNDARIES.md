@@ -20,8 +20,10 @@ Does not own: route policy, UI, project/CAS writes, dungeon modules.
 
 | Package | Owns |
 |---|---|
-| `projects` | Authoritative project records + current manifest pointer |
-| `storage` | CAS blobs + manifests; never in-DB binaries; retention bounds stub |
+| `projects` | Authoritative project records (named workspaces) + current manifest pointer |
+| `storage` | CAS blobs + manifests; never in-DB binaries; retention bounds |
+| `files` | Ingestion, extraction, chunking, attachments, textual artefacts, logical sites, bounded revision retention, storage jobs |
+| `context` | Lexical retrieval, budgeted context assembly, honest citations |
 | `jobs` | Shared state machine, checkpoints, leases |
 | `events` | SSE fan-out |
 | `provenance` | Artefact lineage |
@@ -48,14 +50,15 @@ Dungeons may call Nexus (route) and the Execution **broker** (run). They may not
 
 ## Conversation domain (`platform/conversation`)
 
-Owns conversation, message, and execution records. Does not import Nexus or execution adapters. The host injects a capability router and a model executor.
+Owns conversation, message, and execution records (the chat-turn slice). Does not import Nexus or execution adapters. The host injects a capability router and a model executor. Chat is one surface; jobs, artefact metadata, and workspaces are platform-owned and are not required to pass through conversation.
 
 ## Flow
 
 ```text
 UI  →  host (composition root)
-    →  conversation runtime
+    →  conversation runtime          (simple-chat surface)
          →  Nexus.resolve(alias) → RouteDecision
          →  ExecutionBroker.execute(decision)
          →  durable conversations / messages / executions / events
+    →  jobs / artefacts / workspaces / files / context (first-class; not chat-only)
 ```

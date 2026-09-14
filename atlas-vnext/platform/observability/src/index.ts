@@ -59,7 +59,7 @@ export class MemoryRouteLog implements ObservabilitySink {
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const REDACT_KEY = /password|secret|token|authorization|api[_-]?key|database_url|connectionstring|credential/i;
-const REDACT_BODY_KEY = /^(content|body|text|prompt|payload|message)$/i;
+const REDACT_BODY_KEY = /^(content|body|text|prompt|payload|message|bytes|filebody|extracted|chunk)$/i;
 
 export function redactSecret(value: string): string {
   return value.replace(/:([^:@/]+)@/g, ':***@');

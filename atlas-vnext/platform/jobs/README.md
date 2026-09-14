@@ -2,7 +2,7 @@
 
 Platform primitive: durable jobs.
 
-Every long-running operation (commission, OSINT scan, research sweep, site build) is a persisted job with status, checkpoints, leases, retries, cancellation, and a trace ID.
+Every long-running operation (commission, OSINT scan, research sweep, site build) is a persisted job with status, checkpoints, leases, retries, cancellation, and a trace ID. Jobs are workspace-scoped platform work, not conversation children and not chat-turn `executions`.
 
 This is not a dungeon-specific runner. Dungeons register handlers; the job engine is shared.
 

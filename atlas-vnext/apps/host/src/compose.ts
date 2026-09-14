@@ -21,12 +21,20 @@ import {
   type PersistenceConfig,
   type PlatformPersistence,
 } from '@atlas-vnext/persistence';
+import { FilesService } from '@atlas-vnext/files';
+import { ContextService } from '@atlas-vnext/context';
+import { ProjectService } from '@atlas-vnext/projects';
+import { openFilesystemCas, type CasStore } from '@atlas-vnext/storage';
 import { MODEL_CATALOGUE } from './catalogue.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
   store: DurableConversationStore | null;
   persistence: PlatformPersistence | null;
+  files: FilesService | null;
+  projects: ProjectService | null;
+  context: ContextService | null;
+  cas: CasStore | null;
   router: NexusRouter;
   registry: NexusRegistry;
   broker: ReturnType<typeof createExecutionPlane>['broker'];
@@ -48,6 +56,7 @@ export interface ComposeOptions {
   runtimeStatePath?: string | null;
   runpodClient?: RunPodClient;
   persistence?: PersistenceConfig;
+  casRoot?: string;
 }
 
 /**
@@ -97,6 +106,10 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   const router = new NexusRouter(registry);
   let store: DurableConversationStore | null = null;
   let persistence: PlatformPersistence | null = null;
+  let files: FilesService | null = null;
+  let projects: ProjectService | null = null;
+  let context: ContextService | null = null;
+  let cas: CasStore | null = null;
   let runtime: ConversationRuntime;
 
   if (persistenceConfig.mode === 'postgres' || persistenceConfig.mode === 'memory') {
@@ -120,6 +133,10 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       unitOfWork: persistence,
     });
     await persistence.recoverOnStart();
+    cas = await openFilesystemCas(options.casRoot ?? join(dirname(options.dataPath), 'cas'));
+    files = new FilesService(persistence, cas);
+    projects = new ProjectService(persistence);
+    context = new ContextService(persistence);
   } else {
     store = openDurableStore(options.dataPath);
     runtime = new ConversationRuntime({
@@ -139,6 +156,10 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     runtime,
     store,
     persistence,
+    files,
+    projects,
+    context,
+    cas,
     router,
     registry,
     broker: plane.broker,

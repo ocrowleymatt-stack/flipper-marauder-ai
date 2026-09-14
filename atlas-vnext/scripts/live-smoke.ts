@@ -30,7 +30,7 @@ const conversation = await spine.runtime.createConversation({ title: 'live-smoke
 const types: string[] = [];
 let text = '';
 for await (const event of spine.runtime.sendMessage(conversation.id, {
-  content: 'Reply with the single word pong.',
+  content: 'Reply with exactly: ATLAS LIVE',
   capability: 'nexus/fast',
 })) {
   types.push(event.type);

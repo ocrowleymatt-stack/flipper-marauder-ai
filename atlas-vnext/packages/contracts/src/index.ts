@@ -34,8 +34,16 @@ export type CostClass = z.infer<typeof costClassSchema>;
 export const latencyClassSchema = z.enum(['fast', 'medium', 'slow']);
 export type LatencyClass = z.infer<typeof latencyClassSchema>;
 
-export const localitySchema = z.enum(['local', 'cloud']);
+export const localitySchema = z.enum(['local', 'private_cloud', 'public_cloud']);
 export type Locality = z.infer<typeof localitySchema>;
+
+export const runtimeClassSchema = z.enum([
+  'always_available',
+  'private_hosted',
+  'on_demand',
+  'expensive_burst',
+]);
+export type RuntimeClass = z.infer<typeof runtimeClassSchema>;
 
 export const privacyEligibilitySchema = z.enum(['any', 'local_only']);
 export type PrivacyEligibility = z.infer<typeof privacyEligibilitySchema>;
@@ -58,6 +66,7 @@ export const registeredModelSchema = z.object({
   costClass: costClassSchema,
   latencyClass: latencyClassSchema,
   locality: localitySchema,
+  runtimeClass: runtimeClassSchema.default('always_available'),
   health: providerHealthSchema.default('configured'),
   privacyEligibility: privacyEligibilitySchema.default('any'),
   runtimeRequirements: z.array(z.string().min(1)).default([]),
@@ -73,6 +82,8 @@ export const routeDecisionSchema = z.object({
   model: z.string(),
   candidateChain: z.array(z.string()),
   localOnly: z.boolean(),
+  locality: localitySchema,
+  runtimeClass: runtimeClassSchema,
   decisionReason: z.string(),
   traceId: z.string(),
   evaluatedAt: z.string(),
@@ -139,6 +150,7 @@ export const jobStatusSchema = z.enum([
   'queued',
   'running',
   'waiting',
+  'waiting_runtime',
   'waiting_permission',
   'paused',
   'completed',

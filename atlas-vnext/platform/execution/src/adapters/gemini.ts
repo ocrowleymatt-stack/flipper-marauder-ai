@@ -3,6 +3,7 @@ import { ProviderHttpError, httpFailure, usageFromCounts } from '../errors.ts';
 import { sanitizeText } from '../sanitize.ts';
 import { geminiApiKey, type SecretStore } from '../secrets.ts';
 import { parseSse } from '../stream-parse.ts';
+import { GeminiFunctionCallAssembler } from '../tool-call-buffer.ts';
 import { readAllText, type HttpTransport } from '../transport.ts';
 import type { ExecutionContext, ProviderAdapter } from '../types.ts';
 
@@ -28,9 +29,20 @@ export class GeminiAdapter implements ProviderAdapter {
     const parts: Array<{ text: string }> = [];
     if (context.systemPrompt) parts.push({ text: context.systemPrompt });
     parts.push({ text: context.prompt });
-    const body = {
+    const body: Record<string, unknown> = {
       contents: [{ role: 'user', parts }],
     };
+    if (context.tools?.length) {
+      body.tools = [
+        {
+          functionDeclarations: context.tools.map((tool) => ({
+            name: tool.id,
+            description: tool.description,
+            parameters: tool.inputSchema,
+          })),
+        },
+      ];
+    }
     let response;
     try {
       response = await this.options.transport.send({
@@ -53,6 +65,7 @@ export class GeminiAdapter implements ProviderAdapter {
       throw new ProviderHttpError(httpFailure(this.providerId, response.status, text));
     }
 
+    const tools = new GeminiFunctionCallAssembler();
     for await (const frame of parseSse(response.stream)) {
       if (context.signal?.aborted) throw new Error('Execution aborted.');
       let parsed: GeminiEvent;
@@ -66,19 +79,14 @@ export class GeminiAdapter implements ProviderAdapter {
         throw new ProviderHttpError(httpFailure(this.providerId, parsed.error.code ?? 400, parsed.error.message));
       }
       const candidate = parsed.candidates?.[0];
+      let partIndex = 0;
       for (const part of candidate?.content?.parts ?? []) {
         if (part.thought && part.text) yield { type: 'reasoning', text: part.text };
         else if (part.text) yield { type: 'text', text: part.text };
-        if (part.functionCall?.name) {
-          yield {
-            type: 'tool_call',
-            call: {
-              id: part.functionCall.name,
-              toolId: part.functionCall.name,
-              arguments: part.functionCall.args ?? {},
-            },
-          };
+        if (part.functionCall) {
+          tools.ingest(part, partIndex);
         }
+        partIndex += 1;
       }
       const usage = usageFromCounts(
         parsed.usageMetadata?.promptTokenCount,
@@ -87,6 +95,7 @@ export class GeminiAdapter implements ProviderAdapter {
       );
       if (usage) yield { type: 'usage', usage };
     }
+    yield* tools.finish(this.providerId);
   }
 }
 
@@ -97,7 +106,7 @@ interface GeminiEvent {
       parts?: Array<{
         text?: string;
         thought?: boolean;
-        functionCall?: { name: string; args?: Record<string, unknown> };
+        functionCall?: { name?: string; args?: unknown };
       }>;
     };
   }>;

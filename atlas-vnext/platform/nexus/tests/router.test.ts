@@ -7,10 +7,11 @@ function model(partial: Partial<RegisteredModel> & Pick<RegisteredModel, 'provid
     contextWindow: 32_768,
     costClass: 'medium',
     latencyClass: 'fast',
-    locality: 'cloud',
+    locality: 'public_cloud',
     health: 'healthy',
     privacyEligibility: 'any',
     runtimeRequirements: [],
+    runtimeClass: 'always_available',
     ...partial,
     capabilities: {
       text: true,
@@ -191,7 +192,7 @@ describe('Nexus router (policy only)', () => {
         contextWindow: 100,
         costClass: 'low',
         latencyClass: 'fast',
-        locality: 'cloud',
+        locality: 'public_cloud',
       }),
     ).toThrow();
     expect(() =>
@@ -202,7 +203,7 @@ describe('Nexus router (policy only)', () => {
         contextWindow: -1,
         costClass: 'medium',
         latencyClass: 'fast',
-        locality: 'cloud',
+        locality: 'public_cloud',
       }),
     ).toThrow();
     expect(registry.list()).toEqual([]);
@@ -225,6 +226,43 @@ describe('Nexus router (policy only)', () => {
     registry.setHealth('openai', 'unavailable');
     const decision = router.resolve('nexus/fast');
     expect(decision.candidateChain.every((id) => !id.startsWith('openai/'))).toBe(true);
+  });
+
+  it('does not wake expensive burst capacity when private-hosted Forge can satisfy', () => {
+    const { registry, router } = harness();
+    registry.register(
+      model({
+        provider: 'forge',
+        model: 'qwen3',
+        label: 'Forge Qwen',
+        costClass: 'free',
+        latencyClass: 'fast',
+        locality: 'private_cloud',
+        runtimeClass: 'private_hosted',
+        runtimeRequirements: ['forge'],
+      }),
+    );
+    registry.register(
+      model({
+        provider: 'runpod',
+        model: 'llm',
+        label: 'RunPod LLM',
+        costClass: 'high',
+        latencyClass: 'fast',
+        locality: 'private_cloud',
+        runtimeClass: 'expensive_burst',
+        runtimeRequirements: ['runpod'],
+      }),
+    );
+    const cheap = router.resolve('nexus/cheap', { availableRuntimes: ['ollama', 'forge', 'runpod'] });
+    expect(cheap.resolvedRouteId).toBe('ollama/llama3.2');
+    expect(cheap.candidateChain.indexOf('forge/qwen3')).toBeLessThan(cheap.candidateChain.indexOf('runpod/llm'));
+    registry.setHealth('ollama', 'unavailable');
+    registry.setHealth('openai', 'unavailable');
+    registry.setHealth('gemini', 'unavailable');
+    const privateFirst = router.resolve('nexus/fast', { availableRuntimes: ['forge', 'runpod'] });
+    expect(privateFirst.resolvedRouteId).toBe('forge/qwen3');
+    expect(privateFirst.candidateChain[0]).not.toBe('runpod/llm');
   });
 
   it('enforces runtime requirements on explicit routes', () => {

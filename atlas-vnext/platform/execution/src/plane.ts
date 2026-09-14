@@ -3,11 +3,17 @@ import { AnthropicAdapter } from './adapters/anthropic.ts';
 import { GeminiAdapter } from './adapters/gemini.ts';
 import { MockAdapter } from './adapters/mock.ts';
 import { OllamaAdapter } from './adapters/ollama.ts';
-import { createOpenAIAdapter, createVeniceAdapter } from './adapters/openai.ts';
-import { PLACEHOLDER_PROVIDERS } from './adapters/placeholder.ts';
+import { createForgeAdapter, probeForgeHealth } from './adapters/forge.ts';
+import { createOpenAIAdapter, createVeniceAdapter, createXaiAdapter } from './adapters/openai.ts';
+import { RunPodAdapter } from './adapters/runpod.ts';
 import { ExecutionBroker } from './broker.ts';
 import { readExecutionConfig, type ExecutionConfig } from './config.ts';
-import { EnvSecretStore, geminiApiKey, SECRET_KEYS, type SecretStore } from './secrets.ts';
+import { EnvSecretStore, forgeApiKey, geminiApiKey, SECRET_KEYS, xaiApiKey, type SecretStore } from './secrets.ts';
+import { HttpRunPodClient } from './runtime/client.ts';
+import { RuntimeObserver } from './runtime/observer.ts';
+import { RuntimeScheduler } from './runtime/scheduler.ts';
+import { FileRuntimeStateStore, MemoryRuntimeStateStore } from './runtime/store.ts';
+import type { RunPodClient, RuntimeSnapshot } from './runtime/types.ts';
 import { FetchTransport, type HttpTransport } from './transport.ts';
 import type { HealthObserver, ProviderAdapter } from './types.ts';
 
@@ -22,6 +28,8 @@ export interface ExecutionPlaneOptions {
   health?: HealthObserver;
   streamDelayMs?: number;
   catalogue?: RegisteredModel[];
+  runpodClient?: RunPodClient;
+  runtimeStatePath?: string | null;
 }
 
 export interface ExecutionPlane {
@@ -31,11 +39,15 @@ export interface ExecutionPlane {
   health: Record<string, ProviderHealth>;
   config: ExecutionConfig;
   ollama: OllamaAdapter | null;
+  scheduler: RuntimeScheduler | null;
+  runtimeObserver: RuntimeObserver | null;
   mode: ExecutionMode;
   refreshOllamaHealth(): Promise<ProviderHealth>;
+  refreshForgeHealth(): Promise<ProviderHealth>;
+  runtimeSnapshot(): RuntimeSnapshot | null;
 }
 
-const MOCK_PROVIDERS = ['openai', 'anthropic', 'gemini', 'ollama'] as const;
+const MOCK_PROVIDERS = ['openai', 'anthropic', 'gemini', 'ollama', 'xai'] as const;
 
 /**
  * Composition helper for the execution plane. Hosts call this; Nexus does not.
@@ -52,6 +64,18 @@ export function createExecutionPlane(options: ExecutionPlaneOptions): ExecutionP
   const broker = new ExecutionBroker(options.mode === 'mock' ? 1 : config.attemptsPerCandidate, {
     health: options.health,
   });
+  const runtimeObserver = new RuntimeObserver();
+
+  const mark = (id: string, status: ProviderHealth, detail?: string, adapter?: ProviderAdapter | null) => {
+    health[id] = status;
+    options.health?.onProviderHealth(id, status, detail);
+    if (adapter && (status === 'configured' || status === 'healthy')) {
+      broker.register(adapter);
+      available.push(id);
+    } else {
+      unavailable.push(id);
+    }
+  };
 
   if (options.mode === 'mock') {
     for (const id of MOCK_PROVIDERS) {
@@ -60,10 +84,10 @@ export function createExecutionPlane(options: ExecutionPlaneOptions): ExecutionP
       health[id] = 'healthy';
       options.health?.onProviderHealth(id, 'healthy');
     }
-    for (const id of ['venice', ...PLACEHOLDER_PROVIDERS]) {
+    for (const id of ['venice', 'forge', 'runpod']) {
       health[id] = 'unavailable';
       unavailable.push(id);
-      options.health?.onProviderHealth(id, 'unavailable', id === 'venice' ? 'mock_mode' : 'placeholder');
+      options.health?.onProviderHealth(id, 'unavailable', 'mock_mode');
     }
     return {
       broker,
@@ -72,9 +96,17 @@ export function createExecutionPlane(options: ExecutionPlaneOptions): ExecutionP
       health,
       config,
       ollama: null,
+      scheduler: null,
+      runtimeObserver: null,
       mode: 'mock',
       async refreshOllamaHealth() {
         return 'healthy';
+      },
+      async refreshForgeHealth() {
+        return 'unavailable';
+      },
+      runtimeSnapshot() {
+        return null;
       },
     };
   }
@@ -134,18 +166,26 @@ export function createExecutionPlane(options: ExecutionPlaneOptions): ExecutionP
           })
         : null,
     },
+    {
+      id: 'xai',
+      ready: Boolean(xaiApiKey(secrets)),
+      adapter: xaiApiKey(secrets)
+        ? createXaiAdapter({
+            secrets,
+            transport,
+            timeoutMs: config.timeoutMs,
+            baseUrl: config.xaiBaseUrl,
+            modelMap: modelMaps.xai,
+          })
+        : null,
+    },
   ];
 
   for (const entry of liveAdapters) {
     if (entry.adapter && entry.ready) {
-      broker.register(entry.adapter);
-      available.push(entry.id);
-      health[entry.id] = 'configured';
-      options.health?.onProviderHealth(entry.id, 'configured');
+      mark(entry.id, 'configured', undefined, entry.adapter);
     } else {
-      unavailable.push(entry.id);
-      health[entry.id] = 'unavailable';
-      options.health?.onProviderHealth(entry.id, 'unavailable', 'missing_credentials');
+      mark(entry.id, 'unavailable', 'missing_credentials');
     }
   }
 
@@ -155,15 +195,59 @@ export function createExecutionPlane(options: ExecutionPlaneOptions): ExecutionP
     baseUrl: config.ollamaBaseUrl,
     modelMap: modelMaps.ollama,
   });
-  broker.register(ollama);
-  available.push('ollama');
-  health.ollama = 'configured';
-  options.health?.onProviderHealth('ollama', 'configured');
+  mark('ollama', 'configured', undefined, ollama);
 
-  for (const id of PLACEHOLDER_PROVIDERS) {
-    unavailable.push(id);
-    health[id] = 'unavailable';
-    options.health?.onProviderHealth(id, 'unavailable', 'placeholder');
+  let forgeAdapter: ProviderAdapter | null = null;
+  if (config.forgeBaseUrl) {
+    forgeAdapter = createForgeAdapter({
+      secrets,
+      transport,
+      timeoutMs: config.timeoutMs,
+      baseUrl: config.forgeBaseUrl,
+      protocol: config.forgeProtocol,
+      chatPath: config.forgeChatPath,
+      healthPath: config.forgeHealthPath,
+      modelMap: modelMaps.forge,
+    });
+    mark('forge', 'configured', forgeApiKey(secrets) ? undefined : 'optional_auth', forgeAdapter);
+  } else {
+    mark('forge', 'unavailable', 'missing_endpoint');
+  }
+
+  let scheduler: RuntimeScheduler | null = null;
+  const runpodConfigured = Boolean(secrets.get(SECRET_KEYS.runpod) && config.runpodPodId);
+  if (runpodConfigured) {
+    const store = options.runtimeStatePath
+      ? new FileRuntimeStateStore(options.runtimeStatePath)
+      : new MemoryRuntimeStateStore();
+    scheduler = new RuntimeScheduler({
+      client:
+        options.runpodClient ??
+        new HttpRunPodClient({
+          transport,
+          secrets,
+          baseUrl: config.runpodApiBaseUrl,
+          timeoutMs: config.timeoutMs,
+        }),
+      store,
+      observer: runtimeObserver,
+      podId: config.runpodPodId,
+      maxActivePods: config.runpodMaxActivePods,
+      idleShutdownSeconds: config.runpodIdleShutdownSeconds,
+      warmTimeoutMs: config.runpodWarmTimeoutMs,
+      inferencePort: config.runpodInferencePort,
+    });
+    const runpod = new RunPodAdapter({
+      scheduler,
+      secrets,
+      transport,
+      timeoutMs: config.timeoutMs,
+      inferenceBaseUrl: config.runpodInferenceBaseUrl,
+      modelMap: modelMaps.runpod,
+    });
+    mark('runpod', 'configured', undefined, runpod);
+  } else {
+    mark('runpod', 'unavailable', secrets.get(SECRET_KEYS.runpod) ? 'missing_pod_id' : 'missing_credentials');
   }
 
   return {
@@ -173,6 +257,8 @@ export function createExecutionPlane(options: ExecutionPlaneOptions): ExecutionP
     health,
     config,
     ollama,
+    scheduler,
+    runtimeObserver,
     mode: 'live',
     async refreshOllamaHealth() {
       try {
@@ -187,6 +273,27 @@ export function createExecutionPlane(options: ExecutionPlaneOptions): ExecutionP
         options.health?.onProviderHealth('ollama', 'unhealthy', detail);
         return 'unhealthy';
       }
+    },
+    async refreshForgeHealth() {
+      if (!config.forgeBaseUrl) {
+        health.forge = 'unavailable';
+        options.health?.onProviderHealth('forge', 'unavailable', 'missing_endpoint');
+        return 'unavailable';
+      }
+      const probed = await probeForgeHealth({
+        transport,
+        timeoutMs: config.timeoutMs,
+        baseUrl: config.forgeBaseUrl,
+        healthPath: config.forgeHealthPath,
+        protocol: config.forgeProtocol,
+        secrets,
+      });
+      health.forge = probed.health;
+      options.health?.onProviderHealth('forge', probed.health, probed.detail);
+      return probed.health;
+    },
+    runtimeSnapshot() {
+      return scheduler?.snapshot() ?? null;
     },
   };
 }

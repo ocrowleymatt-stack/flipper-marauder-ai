@@ -3,9 +3,9 @@ import type { StreamChunk } from '@atlas-vnext/contracts';
 import {
   AnthropicAdapter,
   GeminiAdapter,
+  HETZNER_IS_FORGE_HOST,
   MapSecretStore,
   OllamaAdapter,
-  PlaceholderAdapter,
   createExecutionPlane,
   createOpenAIAdapter,
   createVeniceAdapter,
@@ -165,6 +165,44 @@ describe('Anthropic adapter contract', () => {
       { type: 'usage', usage: { inputTokens: 9, outputTokens: 2, totalTokens: 11 } },
     ]);
   });
+
+  it('buffers input_json_delta fragments and does not emit a tool_call from incomplete JSON', async () => {
+    const adapter = new AnthropicAdapter({
+      secrets: new MapSecretStore({ ANTHROPIC_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://api.anthropic.com',
+      transport: transportFor(() => ({
+        status: 200,
+        body: [
+          'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"lookup"}}\n\n',
+          'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"q\\":\\""}}\n\n',
+          'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"atlas\\"}"}}\n\n',
+          'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        ].join(''),
+      })),
+    });
+    const chunks = await collect(adapter.stream('claude-sonnet', { prompt: 'search' }));
+    expect(chunks.filter((chunk) => chunk.type === 'tool_call')).toEqual([
+      { type: 'tool_call', call: { id: 'toolu_1', toolId: 'lookup', arguments: { q: 'atlas' } } },
+    ]);
+
+    const incomplete = new AnthropicAdapter({
+      secrets: new MapSecretStore({ ANTHROPIC_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://api.anthropic.com',
+      transport: transportFor(() => ({
+        status: 200,
+        body: [
+          'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_bad","name":"lookup"}}\n\n',
+          'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"q\\":"}}\n\n',
+          'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        ].join(''),
+      })),
+    });
+    const dropped = await collect(incomplete.stream('claude-sonnet', { prompt: 'search' }));
+    expect(dropped.some((chunk) => chunk.type === 'tool_call')).toBe(false);
+    expect(dropped.some((chunk) => chunk.type === 'warning')).toBe(true);
+  });
 });
 
 describe('Gemini adapter contract', () => {
@@ -193,6 +231,47 @@ describe('Gemini adapter contract', () => {
       { type: 'text', text: 'flash' },
       { type: 'usage', usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } },
     ]);
+  });
+
+  it('assembles functionCall parts across SSE events before emitting a tool_call', async () => {
+    const adapter = new GeminiAdapter({
+      secrets: new MapSecretStore({ GEMINI_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      transport: transportFor(() => ({
+        status: 200,
+        body: sse([
+          JSON.stringify({ candidates: [{ content: { parts: [{ functionCall: { name: 'lookup' } }] } }] }),
+          JSON.stringify({
+            candidates: [{ content: { parts: [{ functionCall: { name: 'lookup', args: '{"q":"' } }] } }],
+          }),
+          JSON.stringify({
+            candidates: [{ content: { parts: [{ functionCall: { args: 'atlas"}' } }] } }],
+          }),
+        ]),
+      })),
+    });
+    const chunks = await collect(adapter.stream('flash', { prompt: 'search' }));
+    expect(chunks.filter((chunk) => chunk.type === 'tool_call')).toEqual([
+      { type: 'tool_call', call: { id: 'lookup', toolId: 'lookup', arguments: { q: 'atlas' } } },
+    ]);
+
+    const incomplete = new GeminiAdapter({
+      secrets: new MapSecretStore({ GEMINI_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      transport: transportFor(() => ({
+        status: 200,
+        body: sse([
+          JSON.stringify({
+            candidates: [{ content: { parts: [{ functionCall: { name: 'lookup', args: '{"q":' } }] } }],
+          }),
+        ]),
+      })),
+    });
+    const dropped = await collect(incomplete.stream('flash', { prompt: 'search' }));
+    expect(dropped.some((chunk) => chunk.type === 'tool_call')).toBe(false);
+    expect(dropped.some((chunk) => chunk.type === 'warning')).toBe(true);
   });
 });
 
@@ -277,9 +356,11 @@ describe('Ollama local adapter', () => {
 });
 
 describe('placeholder providers', () => {
-  it('does not pretend RunPod or Forge are implemented', async () => {
-    const adapter = new PlaceholderAdapter('runpod');
-    await expect(collect(adapter.stream('x', { prompt: 'hi' }))).rejects.toThrow(/placeholder/);
+  it('does not register Hetzner as a fake second inference provider', () => {
+    expect(HETZNER_IS_FORGE_HOST).toBe(true);
+    const plane = createExecutionPlane({ mode: 'live', env: {}, secrets: new MapSecretStore({}) });
+    expect(plane.broker.registeredProviders()).not.toContain('hetzner');
+    expect(plane.health.hetzner).toBeUndefined();
   });
 });
 
@@ -296,9 +377,10 @@ describe('execution plane availability', () => {
     });
     expect(plane.available).toContain('openai');
     expect(plane.available).toContain('ollama');
-    expect(plane.unavailable).toEqual(expect.arrayContaining(['anthropic', 'gemini', 'venice', 'runpod', 'forge']));
+    expect(plane.unavailable).toEqual(expect.arrayContaining(['anthropic', 'gemini', 'venice', 'xai', 'runpod', 'forge']));
     expect(plane.health.anthropic).toBe('unavailable');
     expect(plane.health.runpod).toBe('unavailable');
+    expect(plane.health.xai).toBe('unavailable');
     await plane.refreshOllamaHealth();
     expect(plane.health.ollama).toBe('unhealthy');
   });
@@ -319,5 +401,40 @@ describe('execution plane availability', () => {
     });
     expect(plane.available).toContain('gemini');
     expect(plane.unavailable).not.toContain('gemini');
+  });
+
+  it('keeps unrelated providers available when RunPod is down', async () => {
+    const plane = createExecutionPlane({
+      mode: 'live',
+      env: { OPENAI_API_KEY: KEY, ANTHROPIC_API_KEY: KEY },
+      secrets: new MapSecretStore({ OPENAI_API_KEY: KEY, ANTHROPIC_API_KEY: KEY }),
+      transport: transportFor(() => ({
+        status: 200,
+        body: sse(['{"choices":[{"delta":{"content":"ok"}}]}', '[DONE]']),
+      })),
+    });
+    expect(plane.available).toEqual(expect.arrayContaining(['openai', 'anthropic', 'ollama']));
+    expect(plane.unavailable).toContain('runpod');
+    expect(plane.scheduler).toBeNull();
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of plane.broker.execute(
+      {
+        target: 'openai/gpt-4o',
+        resolvedRouteId: 'openai/gpt-4o',
+        provider: 'openai',
+        model: 'gpt-4o',
+        candidateChain: ['openai/gpt-4o'],
+        localOnly: false,
+        locality: 'public_cloud',
+        runtimeClass: 'always_available',
+        decisionReason: 'explicit',
+        traceId: 'trc',
+        evaluatedAt: new Date().toISOString(),
+      },
+      { prompt: 'hi' },
+    )) {
+      chunks.push(chunk);
+    }
+    expect(chunks.filter((chunk) => chunk.type === 'text')).toEqual([{ type: 'text', text: 'ok' }]);
   });
 });

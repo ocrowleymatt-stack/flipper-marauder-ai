@@ -1,3 +1,4 @@
+import { dirname, join } from 'node:path';
 import type { ProviderHealth } from '@atlas-vnext/contracts';
 import { ConversationRuntime } from '@atlas-vnext/conversation';
 import {
@@ -5,6 +6,7 @@ import {
   EnvSecretStore,
   type ExecutionMode,
   type HttpTransport,
+  type RuntimeSnapshot,
   type SecretStore,
 } from '@atlas-vnext/execution';
 import { NexusRegistry, NexusRouter } from '@atlas-vnext/nexus';
@@ -20,6 +22,7 @@ export interface Spine {
   health: Record<string, ProviderHealth>;
   mode: ExecutionMode;
   availableRuntimes: string[];
+  runtimeSnapshot: RuntimeSnapshot | null;
 }
 
 export interface ComposeOptions {
@@ -29,6 +32,7 @@ export interface ComposeOptions {
   secrets?: SecretStore;
   env?: Record<string, string | undefined>;
   transport?: HttpTransport;
+  runtimeStatePath?: string | null;
 }
 
 /**
@@ -52,6 +56,8 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     transport: options.transport,
     streamDelayMs: options.streamDelayMs,
     catalogue: MODEL_CATALOGUE,
+    runtimeStatePath:
+      options.runtimeStatePath ?? (mode === 'live' ? join(dirname(options.dataPath), 'runtime.json') : null),
     health: {
       onProviderHealth(provider, health) {
         registry.setHealth(provider, health);
@@ -65,6 +71,10 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
 
   if (mode === 'live') {
     await plane.refreshOllamaHealth();
+    await plane.refreshForgeHealth();
+    if (plane.scheduler) {
+      await plane.scheduler.reconcile();
+    }
   }
 
   const router = new NexusRouter(registry);
@@ -88,5 +98,6 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     health: { ...plane.health },
     mode,
     availableRuntimes: plane.available,
+    runtimeSnapshot: plane.runtimeSnapshot(),
   };
 }

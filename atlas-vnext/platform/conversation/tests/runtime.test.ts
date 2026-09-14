@@ -20,6 +20,8 @@ function decision(target: string, chain: string[]): RouteDecision {
     model: model ?? 'gpt-4o',
     candidateChain: chain,
     localOnly: false,
+    locality: 'public_cloud',
+    runtimeClass: 'always_available',
     decisionReason: 'test-route',
     traceId: 'trc_test',
     evaluatedAt: '2026-09-14T00:00:00.000Z',

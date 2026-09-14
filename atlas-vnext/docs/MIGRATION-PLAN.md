@@ -28,9 +28,10 @@ Zero-downtime cutover is a later concern. This repository is a greenfield design
 
 ## Phase 3 — real adapters (this PR)
 
-- [x] OpenAI, Anthropic, Gemini, Ollama, Venice in **execution**
-- [x] Runtime health probes writing snapshots into Nexus (Ollama discovery; circuit-breaker snapshots)
-- RunPod / Forge / Hetzner remain placeholders
+- [x] OpenAI, Anthropic, Gemini, Ollama, Venice, xAI/Grok in **execution**
+- [x] Forge/Hetzner as one private-hosted inference provider (not a fake placeholder)
+- [x] RunPod shared scheduler (one pod, lease/queue/idle-stop/crash recover)
+- [x] Runtime health probes writing snapshots into Nexus (Ollama discovery; Forge probe; circuit-breaker snapshots)
 
 The local file metadata store is **not** final; Phase 2 still owes PostgreSQL.
 

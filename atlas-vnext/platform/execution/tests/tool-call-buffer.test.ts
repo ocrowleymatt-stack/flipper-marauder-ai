@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OpenAIToolCallAssembler } from '@atlas-vnext/execution';
+import { OpenAIToolCallAssembler, AnthropicToolCallAssembler, GeminiFunctionCallAssembler } from '@atlas-vnext/execution';
 
 describe('OpenAI tool-call argument assembly', () => {
   it('does not parse argument fragments as complete JSON/calls', () => {
@@ -69,5 +69,41 @@ describe('OpenAI tool-call argument assembly', () => {
     expect(assembler.finish('openai')).toEqual([
       { type: 'tool_call', call: { id: 'call_empty', toolId: 'noop', arguments: {} } },
     ]);
+  });
+});
+
+describe('Anthropic input_json_delta assembly', () => {
+  it('does not parse a partial_json fragment as a complete tool call', () => {
+    const assembler = new AnthropicToolCallAssembler();
+    assembler.start(0, { type: 'tool_use', id: 'toolu_1', name: 'lookup' });
+    assembler.ingestDelta(0, { type: 'input_json_delta', partial_json: '{"q":"' });
+    const incomplete = assembler.finishBlock(0, 'anthropic');
+    expect(incomplete.some((chunk) => chunk.type === 'tool_call')).toBe(false);
+
+    const complete = new AnthropicToolCallAssembler();
+    complete.start(0, { type: 'tool_use', id: 'toolu_1', name: 'lookup' });
+    complete.ingestDelta(0, { type: 'input_json_delta', partial_json: '{"q":"' });
+    complete.ingestDelta(0, { type: 'input_json_delta', partial_json: 'atlas"}' });
+    expect(complete.finishBlock(0, 'anthropic')).toEqual([
+      { type: 'tool_call', call: { id: 'toolu_1', toolId: 'lookup', arguments: { q: 'atlas' } } },
+    ]);
+  });
+});
+
+describe('Gemini functionCall assembly', () => {
+  it('merges name-only then argument fragments and drops incomplete JSON', () => {
+    const assembler = new GeminiFunctionCallAssembler();
+    assembler.ingest({ functionCall: { name: 'lookup' } });
+    assembler.ingest({ functionCall: { args: '{"q":"' } });
+    assembler.ingest({ functionCall: { args: 'atlas"}' } });
+    expect(assembler.finish('gemini')).toEqual([
+      { type: 'tool_call', call: { id: 'lookup', toolId: 'lookup', arguments: { q: 'atlas' } } },
+    ]);
+
+    const incomplete = new GeminiFunctionCallAssembler();
+    incomplete.ingest({ functionCall: { name: 'lookup', args: '{"q":' } });
+    const chunks = incomplete.finish('gemini');
+    expect(chunks.some((chunk) => chunk.type === 'tool_call')).toBe(false);
+    expect(chunks[0]).toMatchObject({ type: 'warning', provider: 'gemini' });
   });
 });

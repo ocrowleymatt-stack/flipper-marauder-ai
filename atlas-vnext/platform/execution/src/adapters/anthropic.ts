@@ -3,6 +3,7 @@ import { ProviderHttpError, httpFailure, usageFromCounts } from '../errors.ts';
 import { sanitizeText } from '../sanitize.ts';
 import type { SecretStore } from '../secrets.ts';
 import { parseSse } from '../stream-parse.ts';
+import { AnthropicToolCallAssembler } from '../tool-call-buffer.ts';
 import { readAllText, type HttpTransport } from '../transport.ts';
 import type { ExecutionContext, ProviderAdapter } from '../types.ts';
 
@@ -25,13 +26,20 @@ export class AnthropicAdapter implements ProviderAdapter {
       throw new Error('anthropic is unavailable: missing credentials.');
     }
     const upstream = this.options.modelMap?.[model] ?? model;
-    const body = {
+    const body: Record<string, unknown> = {
       model: upstream,
       max_tokens: 4096,
       stream: true,
       system: context.systemPrompt,
       messages: [{ role: 'user', content: context.prompt }],
     };
+    if (context.tools?.length) {
+      body.tools = context.tools.map((tool) => ({
+        name: tool.id,
+        description: tool.description,
+        input_schema: tool.inputSchema,
+      }));
+    }
     let response;
     try {
       response = await this.options.transport.send({
@@ -57,6 +65,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
+    const tools = new AnthropicToolCallAssembler();
     for await (const frame of parseSse(response.stream)) {
       if (context.signal?.aborted) throw new Error('Execution aborted.');
       let parsed: AnthropicEvent;
@@ -70,11 +79,20 @@ export class AnthropicAdapter implements ProviderAdapter {
       if (type === 'error' && parsed.error?.message) {
         throw new ProviderHttpError(httpFailure(this.providerId, 400, parsed.error.message));
       }
+      if (type === 'content_block_start' && parsed.content_block) {
+        tools.start(parsed.index ?? 0, parsed.content_block);
+      }
       if (type === 'content_block_delta' && parsed.delta?.type === 'text_delta' && parsed.delta.text) {
         yield { type: 'text', text: parsed.delta.text };
       }
       if (type === 'content_block_delta' && parsed.delta?.type === 'thinking_delta' && parsed.delta.thinking) {
         yield { type: 'reasoning', text: parsed.delta.thinking };
+      }
+      if (type === 'content_block_delta' && parsed.delta?.type === 'input_json_delta') {
+        tools.ingestDelta(parsed.index ?? 0, parsed.delta);
+      }
+      if (type === 'content_block_stop') {
+        yield* tools.finishBlock(parsed.index ?? 0, this.providerId);
       }
       if (type === 'message_start' && parsed.message?.usage) {
         inputTokens = parsed.message.usage.input_tokens;
@@ -84,6 +102,7 @@ export class AnthropicAdapter implements ProviderAdapter {
         if (parsed.usage.input_tokens != null) inputTokens = parsed.usage.input_tokens;
       }
     }
+    yield* tools.finish(this.providerId);
     const usage = usageFromCounts(inputTokens, outputTokens);
     if (usage) yield { type: 'usage', usage };
   }
@@ -91,8 +110,10 @@ export class AnthropicAdapter implements ProviderAdapter {
 
 interface AnthropicEvent {
   type?: string;
+  index?: number;
   error?: { message?: string };
-  delta?: { type?: string; text?: string; thinking?: string };
+  delta?: { type?: string; text?: string; thinking?: string; partial_json?: string };
+  content_block?: { type?: string; id?: string; name?: string };
   message?: { usage?: { input_tokens?: number; output_tokens?: number } };
   usage?: { input_tokens?: number; output_tokens?: number };
 }

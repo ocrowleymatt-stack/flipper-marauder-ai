@@ -1,9 +1,10 @@
 import type { JobRecord, JobStatus } from '@atlas-vnext/contracts';
 
 export const JOB_TRANSITIONS: Record<JobStatus, readonly JobStatus[]> = {
-  queued: ['running', 'cancelled'],
-  running: ['waiting', 'waiting_permission', 'paused', 'completed', 'failed', 'cancelled'],
+  queued: ['running', 'waiting_runtime', 'cancelled'],
+  running: ['waiting', 'waiting_runtime', 'waiting_permission', 'paused', 'completed', 'failed', 'cancelled'],
   waiting: ['running', 'cancelled', 'failed'],
+  waiting_runtime: ['running', 'cancelled', 'failed'],
   waiting_permission: ['running', 'cancelled', 'failed'],
   paused: ['running', 'cancelled'],
   completed: [],

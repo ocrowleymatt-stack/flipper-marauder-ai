@@ -14,6 +14,8 @@ function decision(): RouteDecision {
     model: 'gpt-4o',
     candidateChain: ['openai/gpt-4o'],
     localOnly: false,
+    locality: 'public_cloud',
+    runtimeClass: 'always_available',
     decisionReason: 'test',
     traceId: 'trc_reload',
     evaluatedAt: '2026-09-14T00:00:00.000Z',

@@ -3,6 +3,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { ProviderHealth } from '@atlas-vnext/contracts';
+import type { RuntimeSnapshot } from '@atlas-vnext/execution';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -20,6 +21,7 @@ export interface HostOptions {
   health?: {
     mode: string;
     providers: Record<string, ProviderHealth>;
+    runtime?: RuntimeSnapshot | null;
   };
 }
 
@@ -45,6 +47,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
         service: 'atlas-vnext-host',
         mode: options.health?.mode ?? 'unknown',
         providers: options.health?.providers ?? {},
+        runtime: options.health?.runtime ?? null,
       });
       return;
     }

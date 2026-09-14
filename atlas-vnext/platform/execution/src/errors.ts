@@ -59,3 +59,12 @@ export function throwIfSecretLeaked(message: string, secret: string | undefined)
     throw new Error('Refusing to throw an error that contains a provider secret.');
   }
 }
+
+/** Auth failures are not retried on the same provider; 429/5xx and transport blips are. */
+export function isRetryableError(err: unknown): boolean {
+  if (err instanceof ProviderHttpError) return err.failure.retryable;
+  const message = err instanceof Error ? err.message : String(err);
+  if (/missing credentials|authentication_failure|not implemented/i.test(message)) return false;
+  if (/Execution aborted|aborted/i.test(message)) return false;
+  return true;
+}

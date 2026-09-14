@@ -6,4 +6,4 @@ Every long-running operation (commission, OSINT scan, research sweep, site build
 
 This is not a dungeon-specific runner. Dungeons register handlers; the job engine is shared.
 
-This package is a design-gate shell. In-memory maps are not a substitute for the durable store and are not shipped here.
+This package freezes the interface and the legal state transitions. Durable PostgreSQL persistence is deferred; in-memory maps are not shipped.

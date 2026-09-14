@@ -10,11 +10,13 @@
     "dungeons/*"
   ],
   "scripts": {
+    "lint": "node scripts/lint.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:boundaries": "vitest run tests/architecture",
     "test:nexus": "vitest run platform/nexus",
     "test:execution": "vitest run platform/execution",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "build": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

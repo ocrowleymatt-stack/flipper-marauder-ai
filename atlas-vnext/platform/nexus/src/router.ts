@@ -7,6 +7,7 @@ import type {
   RouteDecision,
 } from '@atlas-vnext/contracts';
 import { capabilityAliasSchema } from '@atlas-vnext/contracts';
+import { ALIAS_POLICIES } from './alias-policy.ts';
 import type { NexusRegistry } from './registry.ts';
 
 export interface RouteRequest {
@@ -15,6 +16,8 @@ export interface RouteRequest {
   requireReasoning?: boolean;
   requireCode?: boolean;
   contextTokens?: number;
+  /** Local-only privacy: cloud models are ineligible regardless of alias. */
+  privacy?: 'any' | 'local_only';
   traceId?: string;
 }
 
@@ -58,6 +61,7 @@ export class NexusRouter {
       throw new Error(`Model ${target} is not healthy.`);
     }
     this.assertRequirements(registered, request);
+    this.assertPrivacy(registered, request, target);
 
     return {
       target,
@@ -65,7 +69,7 @@ export class NexusRouter {
       provider,
       model,
       candidateChain: [target],
-      localOnly: registered.locality === 'local',
+      localOnly: registered.locality === 'local' || request.privacy === 'local_only',
       decisionReason: `Explicit route ${target}`,
       traceId,
       evaluatedAt,
@@ -78,48 +82,19 @@ export class NexusRouter {
     traceId: string,
     evaluatedAt: string,
   ): RouteDecision {
+    const policy = ALIAS_POLICIES[alias];
+    const localOnly = alias === 'nexus/local' || request.privacy === 'local_only';
     const pool = this.registry.list().filter((model) => this.registry.isRoutable(model));
-    const localOnly = alias === 'nexus/local';
-    let reason = '';
 
-    let candidates = pool.filter((model) => {
-      if (localOnly && model.locality !== 'local') return false;
-      switch (alias) {
-        case 'nexus/local':
-          reason = 'Local-only policy';
-          return model.locality === 'local';
-        case 'nexus/reason':
-          reason = 'Reasoning capability required';
-          return model.capabilities.reasoning;
-        case 'nexus/code':
-          reason = 'Code capability required';
-          return model.capabilities.code;
-        case 'nexus/vision':
-          reason = 'Vision capability required';
-          return model.capabilities.vision;
-        case 'nexus/fast':
-          reason = 'Lowest-latency interactive path';
-          return model.latencyClass === 'fast';
-        case 'nexus/cheap':
-          reason = 'Lowest cost class';
-          return true;
-        case 'nexus/frontier':
-          reason = 'Frontier / high-capability path';
-          return model.costClass === 'high' || model.capabilities.reasoning;
-      }
-    });
-
-    candidates = candidates.filter((model) => this.matchesRequirements(model, request));
-
-    if (alias === 'nexus/cheap') {
-      candidates.sort((a, b) => costRank(a.costClass) - costRank(b.costClass));
-    } else {
-      candidates.sort((a, b) => {
-        if (a.health === 'healthy' && b.health !== 'healthy') return -1;
-        if (b.health === 'healthy' && a.health !== 'healthy') return 1;
-        return latencyRank(a.latencyClass) - latencyRank(b.latencyClass);
-      });
+    let candidates = pool.filter((model) => this.matchesAliasPolicy(model, policy));
+    if (localOnly) {
+      candidates = candidates.filter((model) => model.locality === 'local');
     }
+    if (request.privacy === 'local_only') {
+      candidates = candidates.filter((model) => model.privacyEligibility === 'local_only' || model.locality === 'local');
+    }
+    candidates = candidates.filter((model) => this.matchesRequirements(model, request));
+    candidates = this.sortCandidates(candidates, policy.sort);
 
     const primary = candidates[0];
     if (!primary) {
@@ -134,10 +109,36 @@ export class NexusRouter {
       model: primary.model,
       candidateChain,
       localOnly,
-      decisionReason: `${reason} → ${primary.provider}/${primary.model}`,
+      decisionReason: `${policy.reason} → ${primary.provider}/${primary.model}`,
       traceId,
       evaluatedAt,
     };
+  }
+
+  private matchesAliasPolicy(model: RegisteredModel, policy: (typeof ALIAS_POLICIES)[CapabilityAlias]): boolean {
+    if (policy.locality && model.locality !== policy.locality) return false;
+    if (policy.requireLatencyClass && model.latencyClass !== policy.requireLatencyClass) return false;
+    if (policy.requireCapabilities) {
+      for (const cap of policy.requireCapabilities) {
+        if (!model.capabilities[cap]) return false;
+      }
+    }
+    if (policy.frontier) {
+      return model.costClass === 'high' || model.capabilities.reasoning;
+    }
+    return true;
+  }
+
+  private sortCandidates(candidates: RegisteredModel[], sort: 'latency' | 'cost'): RegisteredModel[] {
+    return [...candidates].sort((a, b) => {
+      if (sort === 'cost') {
+        const byCost = costRank(a.costClass) - costRank(b.costClass);
+        if (byCost !== 0) return byCost;
+      }
+      if (a.health === 'healthy' && b.health !== 'healthy') return -1;
+      if (b.health === 'healthy' && a.health !== 'healthy') return 1;
+      return latencyRank(a.latencyClass) - latencyRank(b.latencyClass);
+    });
   }
 
   private matchesRequirements(model: RegisteredModel, request: RouteRequest): boolean {
@@ -146,6 +147,9 @@ export class NexusRouter {
     if (request.requireReasoning && !model.capabilities.reasoning) return false;
     if (request.requireCode && !model.capabilities.code) return false;
     if (request.contextTokens && model.contextWindow < request.contextTokens) return false;
+    if (request.privacy === 'local_only' && model.locality !== 'local' && model.privacyEligibility !== 'local_only') {
+      return false;
+    }
     return true;
   }
 
@@ -157,6 +161,12 @@ export class NexusRouter {
         );
       }
       throw new Error(`Model ${model.provider}/${model.model} does not meet route requirements.`);
+    }
+  }
+
+  private assertPrivacy(model: RegisteredModel, request: RouteRequest, target: string): void {
+    if (request.privacy === 'local_only' && model.locality !== 'local' && model.privacyEligibility !== 'local_only') {
+      throw new Error(`Model ${target} is not eligible under local-only privacy policy.`);
     }
   }
 }

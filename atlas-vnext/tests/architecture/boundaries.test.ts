@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -121,5 +122,34 @@ describe('architecture boundary graph', () => {
       `,
     });
     expect(report.violations.some((v) => v.rule === 'execution-no-policy-or-domain')).toBe(true);
+  });
+
+  it('fails when a platform primitive imports a product dungeon', () => {
+    const report = analyzeGraph(root, {
+      'platform/jobs/src/forbidden-dungeon.ts': `
+        import { osintDungeon } from '@atlas-vnext/dungeon-osint';
+        export const leak = osintDungeon;
+      `,
+    });
+    expect(report.violations.some((v) => v.rule === 'platform-no-dungeons')).toBe(true);
+  });
+
+  it('fails when an app imports a provider SDK instead of contracts', () => {
+    const report = analyzeGraph(root, {
+      'apps/web/src/forbidden-sdk.ts': `
+        import OpenAI from 'openai';
+        export const client = OpenAI;
+      `,
+    });
+    expect(report.violations.some((v) => v.rule === 'apps-no-provider-impl')).toBe(true);
+  });
+
+  it('fails CI when the committed negative fixture is treated as Nexus source', () => {
+    const fixture = readFileSync(resolve(root, 'tests/architecture/fixtures/violations/nexus-forbidden.ts'), 'utf8');
+    const report = analyzeGraph(root, {
+      'platform/nexus/src/from-negative-fixture.ts': fixture,
+    });
+    expect(report.violations.some((v) => v.rule === 'nexus-no-transport')).toBe(true);
+    expect(report.violations.some((v) => v.rule === 'nexus-layer-import')).toBe(true);
   });
 });

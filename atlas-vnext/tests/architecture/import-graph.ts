@@ -12,7 +12,10 @@ export type Layer =
   | 'storage'
   | 'provenance'
   | 'permissions'
+  | 'observability'
+  | 'flags'
   | 'dungeon'
+  | 'apps'
   | 'tests'
   | 'unknown';
 
@@ -50,6 +53,8 @@ const PACKAGE_LAYER: Record<string, Layer> = {
   '@atlas-vnext/storage': 'storage',
   '@atlas-vnext/provenance': 'provenance',
   '@atlas-vnext/permissions': 'permissions',
+  '@atlas-vnext/observability': 'observability',
+  '@atlas-vnext/flags': 'flags',
 };
 
 const DUNGEON_PACKAGES: Record<string, string> = {
@@ -76,6 +81,9 @@ const TRANSPORT_MODULES = new Set([
   '@anthropic-ai/sdk',
   '@google/genai',
   '@google/generative-ai',
+  'node:http2',
+  'http2',
+  'node:undici',
 ]);
 
 const STORAGE_MODULES = new Set([
@@ -108,6 +116,21 @@ const NEXUS_FORBIDDEN_LAYERS = new Set<Layer>([
   'projects',
   'provenance',
   'permissions',
+  'observability',
+  'flags',
+]);
+
+const PLATFORM_LAYERS = new Set<Layer>([
+  'projects',
+  'jobs',
+  'events',
+  'storage',
+  'provenance',
+  'permissions',
+  'observability',
+  'flags',
+  'nexus',
+  'execution',
 ]);
 
 export function classifyPath(relPath: string): { layer: Layer; dungeon?: string } {
@@ -121,6 +144,9 @@ export function classifyPath(relPath: string): { layer: Layer; dungeon?: string 
   if (normalised.startsWith('platform/storage/')) return { layer: 'storage' };
   if (normalised.startsWith('platform/provenance/')) return { layer: 'provenance' };
   if (normalised.startsWith('platform/permissions/')) return { layer: 'permissions' };
+  if (normalised.startsWith('platform/observability/')) return { layer: 'observability' };
+  if (normalised.startsWith('platform/flags/')) return { layer: 'flags' };
+  if (normalised.startsWith('apps/')) return { layer: 'apps' };
   const dungeonMatch = normalised.match(/^dungeons\/([^/]+)\//);
   if (dungeonMatch) return { layer: 'dungeon', dungeon: dungeonMatch[1] };
   if (normalised.startsWith('tests/')) return { layer: 'tests' };
@@ -145,6 +171,7 @@ export function walkSourceFiles(root: string): string[] {
   visit(join(root, 'packages'));
   visit(join(root, 'platform'));
   visit(join(root, 'dungeons'));
+  visit(join(root, 'apps'));
   return out;
 }
 
@@ -350,6 +377,22 @@ export function analyzeGraph(
           });
         }
       }
+
+      if (PLATFORM_LAYERS.has(mod.layer) && target.layer === 'dungeon') {
+        violations.push({
+          rule: 'platform-no-dungeons',
+          file: mod.relPath,
+          detail: `Platform layer ${mod.layer} imported dungeon via ${specifier}.`,
+        });
+      }
+
+      if (mod.layer === 'apps' && (isAdapterImport(specifier, resolve(root, mod.relPath), root) || TRANSPORT_MODULES.has(specifier))) {
+        violations.push({
+          rule: 'apps-no-provider-impl',
+          file: mod.relPath,
+          detail: `App imported provider implementation ${specifier}; depend on contracts/interfaces.`,
+        });
+      }
     }
   }
 
@@ -377,6 +420,14 @@ function analyzePackageJson(root: string, overlays: Record<string, string>): Vio
   const packages = [
     ['platform/nexus/package.json', 'nexus'],
     ['platform/execution/package.json', 'execution'],
+    ['platform/projects/package.json', 'platform'],
+    ['platform/jobs/package.json', 'platform'],
+    ['platform/events/package.json', 'platform'],
+    ['platform/storage/package.json', 'platform'],
+    ['platform/provenance/package.json', 'platform'],
+    ['platform/permissions/package.json', 'platform'],
+    ['platform/observability/package.json', 'platform'],
+    ['platform/flags/package.json', 'platform'],
     ['dungeons/writing/package.json', 'dungeon'],
     ['dungeons/investigation/package.json', 'dungeon'],
     ['dungeons/research/package.json', 'dungeon'],
@@ -433,6 +484,13 @@ function analyzePackageJson(root: string, overlays: Record<string, string>): Vio
           rule: 'execution-package-deps',
           file: rel,
           detail: `Execution package.json depends on ${name}.`,
+        });
+      }
+      if (kind === 'platform' && name.startsWith('@atlas-vnext/dungeon-')) {
+        violations.push({
+          rule: 'platform-package-deps',
+          file: rel,
+          detail: `Platform package.json depends on product dungeon ${name}.`,
         });
       }
     }

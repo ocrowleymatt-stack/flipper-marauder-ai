@@ -1,4 +1,8 @@
-import type { ProviderHealth, RegisteredModel } from '@atlas-vnext/contracts';
+import {
+  registeredModelSchema,
+  type ProviderHealth,
+  type RegisteredModel,
+} from '@atlas-vnext/contracts';
 
 function modelKey(provider: string, model: string): string {
   return `${provider}/${model}`;
@@ -7,12 +11,17 @@ function modelKey(provider: string, model: string): string {
 /**
  * Declarative provider/model catalogue.
  * Health is recorded here; probing/transport is NOT this package's job.
+ *
+ * Adding or changing a model is a registry/configuration change, not a
+ * router-source change. Malformed metadata is rejected at this boundary.
  */
 export class NexusRegistry {
   private readonly models = new Map<string, RegisteredModel>();
 
-  register(model: RegisteredModel): void {
-    this.models.set(modelKey(model.provider, model.model), model);
+  register(model: RegisteredModel | unknown): RegisteredModel {
+    const parsed = registeredModelSchema.parse(model);
+    this.models.set(modelKey(parsed.provider, parsed.model), parsed);
+    return parsed;
   }
 
   unregister(provider: string, model: string): void {

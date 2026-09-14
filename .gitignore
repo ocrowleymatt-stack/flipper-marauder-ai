@@ -8,3 +8,5 @@ coverage/
 atlas-vnext/node_modules/
 atlas-vnext/**/dist/
 atlas-vnext/**/coverage/
+/packages/
+/docs/

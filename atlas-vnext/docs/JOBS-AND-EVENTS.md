@@ -4,18 +4,21 @@
 
 1. Long-running work is a durable `Job`, including OSINT scans and writing commissions.
 2. Restarts resume from the last checkpoint.
-3. UI progress is SSE/WebSocket. Polling loops are forbidden for active views.
+3. UI progress is SSE first. Polling loops are forbidden for active views.
 4. Workers hold time-bounded leases.
 5. Domain stages are dungeon handlers; the engine is shared.
+6. Enqueue is idempotent when `idempotencyKey` is provided.
 
 ## States
 
 `queued` → `running` → `completed` | `failed` | `cancelled`  
-side states: `waiting_permission`, `paused`.
+side states: `waiting`, `waiting_permission`, `paused`.
+
+Illegal transitions throw (`assertJobTransition`). Failed jobs may return to `queued` for retry; cancelled/completed are terminal.
 
 ## Record (contract)
 
-id, projectId, dungeon, type, status, priority, currentStage, progressRatio, checkpoint, retryCount, maxRetries, leaseOwner, leaseUntil, traceId, timestamps.
+id, projectId, dungeon, type, status, priority, currentStage, progressRatio, checkpoint, retryCount, maxRetries, leaseOwner, leaseUntil, idempotencyKey, traceId, structured `failureReason`, timestamps (`createdAt`, `updatedAt`, `startedAt`, `completedAt`).
 
 ## Events
 
@@ -23,6 +26,6 @@ id, projectId, dungeon, type, status, priority, currentStage, progressRatio, che
 
 Types: `job.created|started|stage_transition|progress|checkpoint|permission_requested|completed|failed|cancelled`.
 
-Heartbeat comments keep proxies from dropping the stream.
+Heartbeat comments keep proxies from dropping the stream. Durable delivery uses a transactional outbox, not a second broker.
 
-This PR ships contracts + `platform/jobs` and `platform/events` interfaces. No in-memory fake runner.
+This PR ships contracts + `platform/jobs` and `platform/events` interfaces plus the transition table. No in-memory fake runner.

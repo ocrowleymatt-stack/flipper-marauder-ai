@@ -79,6 +79,47 @@ describe('Execution broker (transport, retry, streaming)', () => {
     expect(chunks).toEqual([{ type: 'text', text: 'partial' }]);
   });
 
+  it('skips a missing adapter and uses the next candidate', async () => {
+    const broker = new ExecutionBroker(1);
+    broker.register({
+      providerId: 'ollama',
+      async *stream() {
+        yield { type: 'text', text: 'local' };
+      },
+    });
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of broker.execute(decision(['openai/gpt-4o', 'ollama/llama3.2']), { prompt: 'hi' })) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toEqual([{ type: 'text', text: 'local' }]);
+  });
+
+  it('remains usable after a provider adapter exception', async () => {
+    const broker = new ExecutionBroker(1);
+    broker.register({
+      providerId: 'openai',
+      async *stream() {
+        throw new Error('boom');
+      },
+    });
+    await expect(async () => {
+      for await (const _chunk of broker.execute(decision(['openai/gpt-4o']), { prompt: 'hi' })) {
+        // drain
+      }
+    }).rejects.toThrow(/boom|no adapter|Execution failed/);
+    broker.register({
+      providerId: 'gemini',
+      async *stream() {
+        yield { type: 'text', text: 'ok' };
+      },
+    });
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of broker.execute(decision(['gemini/flash']), { prompt: 'hi' })) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toEqual([{ type: 'text', text: 'ok' }]);
+  });
+
   it('buffers tool calls until the stream completes', async () => {
     const broker = new ExecutionBroker(1);
     broker.register({

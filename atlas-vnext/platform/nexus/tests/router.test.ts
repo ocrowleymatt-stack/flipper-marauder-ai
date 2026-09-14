@@ -219,4 +219,26 @@ describe('Nexus router (policy only)', () => {
     expect(() => explodingAdapter.stream()).toThrow(/adapter exploded/);
     expect(router.resolve('nexus/reason').provider).toBe('anthropic');
   });
+
+  it('excludes unavailable providers from alias chains', () => {
+    const { registry, router } = harness();
+    registry.setHealth('openai', 'unavailable');
+    const decision = router.resolve('nexus/fast');
+    expect(decision.candidateChain.every((id) => !id.startsWith('openai/'))).toBe(true);
+  });
+
+  it('enforces runtime requirements on explicit routes', () => {
+    const registry = new NexusRegistry();
+    registry.register(
+      model({
+        provider: 'openai',
+        model: 'gpt-4o',
+        label: 'GPT-4o',
+        runtimeRequirements: ['openai'],
+      }),
+    );
+    const router = new NexusRouter(registry);
+    expect(() => router.resolve('openai/gpt-4o', { availableRuntimes: ['ollama'] })).toThrow(/requires runtime openai/);
+    expect(router.resolve('openai/gpt-4o', { availableRuntimes: ['openai'] }).resolvedRouteId).toBe('openai/gpt-4o');
+  });
 });

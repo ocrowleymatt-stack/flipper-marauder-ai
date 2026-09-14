@@ -14,6 +14,7 @@ export default defineConfig({
     exclude: [
       '**/node_modules/**',
       '**/fixtures/**',
+      'tests/live/**',
     ],
   },
   resolve: {

@@ -292,4 +292,18 @@ describe('streaming and failure behaviour', () => {
     expect(snapshot?.messages.at(-1)?.content).toBe('partial answer');
     expect(snapshot?.executions[0]?.attempts.some((attempt) => attempt.emittedVisibleOutput)).toBe(true);
   });
+
+  it('emits normalised execution events around a successful turn', async () => {
+    const { runtime } = harness();
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'events');
+    const types = stream.map((event) => event.type);
+    expect(types).toContain('execution.started');
+    expect(types).toContain('attempt.started');
+    expect(types).toContain('assistant.delta');
+    expect(types).toContain('assistant.completed');
+    expect(types).toContain('usage');
+    expect(types).toContain('execution.completed');
+    expect(types.at(-1)).toBe('done');
+  });
 });

@@ -193,4 +193,33 @@ describe('architecture boundary graph', () => {
     expect(report.violations.some((v) => v.rule === 'nexus-no-transport')).toBe(true);
     expect(report.violations.some((v) => v.rule === 'nexus-layer-import')).toBe(true);
   });
+
+  it('fails when Nexus reads process.env', () => {
+    const report = analyzeGraph(root, {
+      'platform/nexus/src/forbidden-env.ts': `
+        export const key = process.env.OPENAI_API_KEY;
+      `,
+    });
+    expect(report.violations.some((v) => v.rule === 'nexus-no-secrets')).toBe(true);
+  });
+
+  it('fails when an execution adapter reads process.env instead of SecretStore', () => {
+    const report = analyzeGraph(root, {
+      'platform/execution/src/adapters/leaky.ts': `
+        export function leak() {
+          return process.env.OPENAI_API_KEY;
+        }
+      `,
+    });
+    expect(report.violations.some((v) => v.rule === 'execution-secrets-abstraction')).toBe(true);
+  });
+
+  it('fails when the web UI reads process.env', () => {
+    const report = analyzeGraph(root, {
+      'apps/web/src/forbidden-env.ts': `
+        export const key = process.env.OPENAI_API_KEY;
+      `,
+    });
+    expect(report.violations.some((v) => v.rule === 'apps-no-secrets')).toBe(true);
+  });
 });

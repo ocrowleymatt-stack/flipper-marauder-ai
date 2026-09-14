@@ -29,6 +29,7 @@ export interface ModuleNode {
   fetchCalls: boolean;
   definesCircuitBreaker: boolean;
   definesExecutionBroker: boolean;
+  processEnvAccess: boolean;
 }
 
 export interface Violation {
@@ -88,6 +89,7 @@ const TRANSPORT_MODULES = new Set([
   'node:http2',
   'http2',
   'node:undici',
+  'eventsource',
 ]);
 
 const PROVIDER_CLIENT_MODULES = new Set([
@@ -200,13 +202,17 @@ export function walkSourceFiles(root: string): string[] {
 function parseModule(
   filePath: string,
   sourceText: string,
-): Pick<ModuleNode, 'specifiers' | 'fetchCalls' | 'definesCircuitBreaker' | 'definesExecutionBroker'> {
+): Pick<
+  ModuleNode,
+  'specifiers' | 'fetchCalls' | 'definesCircuitBreaker' | 'definesExecutionBroker' | 'processEnvAccess'
+> {
   const kind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const source = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true, kind);
   const specifiers: string[] = [];
   let fetchCalls = false;
   let definesCircuitBreaker = false;
   let definesExecutionBroker = false;
+  let processEnvAccess = false;
 
   const visit = (node: ts.Node) => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
@@ -240,10 +246,18 @@ function parseModule(
     if (ts.isClassDeclaration(node) && node.name?.text === 'ExecutionBroker') {
       definesExecutionBroker = true;
     }
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      node.name.text === 'env' &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'process'
+    ) {
+      processEnvAccess = true;
+    }
     ts.forEachChild(node, visit);
   };
   visit(source);
-  return { specifiers, fetchCalls, definesCircuitBreaker, definesExecutionBroker };
+  return { specifiers, fetchCalls, definesCircuitBreaker, definesExecutionBroker, processEnvAccess };
 }
 
 function specifierLayer(
@@ -338,6 +352,40 @@ export function analyzeGraph(
           detail: 'CircuitBreaker must live in the execution layer.',
         });
       }
+      if (mod.processEnvAccess) {
+        violations.push({
+          rule: 'nexus-no-secrets',
+          file: mod.relPath,
+          detail: 'Nexus read process.env; secrets and runtime config belong at the host/execution boundary.',
+        });
+      }
+    }
+
+    if (mod.layer === 'conversation' && mod.processEnvAccess) {
+      violations.push({
+        rule: 'conversation-no-secrets',
+        file: mod.relPath,
+        detail: 'Conversation domain read process.env.',
+      });
+    }
+
+    if (mod.layer === 'execution' && mod.processEnvAccess) {
+      const allowed = mod.relPath.endsWith('/secrets.ts') || mod.relPath.endsWith('/config.ts');
+      if (!allowed) {
+        violations.push({
+          rule: 'execution-secrets-abstraction',
+          file: mod.relPath,
+          detail: 'Execution module read process.env; use SecretStore / readExecutionConfig.',
+        });
+      }
+    }
+
+    if (mod.layer === 'apps' && mod.relPath.startsWith('apps/web/') && mod.processEnvAccess) {
+      violations.push({
+        rule: 'apps-no-secrets',
+        file: mod.relPath,
+        detail: 'Web UI read process.env; it must not hold provider secrets.',
+      });
     }
 
     for (const specifier of mod.specifiers) {

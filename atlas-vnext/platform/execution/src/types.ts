@@ -1,4 +1,4 @@
-import type { ExecutionAttempt, RouteDecision, StreamChunk } from '@atlas-vnext/contracts';
+import type { ExecutionAttempt, ProviderHealth, RouteDecision, StreamChunk } from '@atlas-vnext/contracts';
 
 export interface ExecutionContext {
   prompt: string;
@@ -26,6 +26,20 @@ export interface ProviderAdapter {
  * Conversation/domain persistence uses this; Nexus never sees it.
  */
 export interface ExecutionObserver {
-  onAttempt(attempt: Pick<ExecutionAttempt, 'index' | 'provider' | 'model' | 'outcome' | 'error' | 'emittedVisibleOutput'>): void;
+  onAttempt(
+    attempt: Pick<ExecutionAttempt, 'index' | 'provider' | 'model' | 'outcome' | 'error' | 'emittedVisibleOutput'>,
+  ): void;
   onSelected?(decision: Pick<RouteDecision, 'provider' | 'model'>): void;
+}
+
+export interface HealthObserver {
+  onProviderHealth(provider: string, health: ProviderHealth, detail?: string): void;
+}
+
+export interface ProviderHealthSnapshot {
+  provider: string;
+  health: ProviderHealth;
+  checkedAt: string;
+  detail?: string;
+  circuitOpen?: boolean;
 }

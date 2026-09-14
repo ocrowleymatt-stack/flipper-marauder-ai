@@ -38,6 +38,7 @@ export interface ConversationRuntimeDeps {
   provenance: ProvenanceWriter;
   ids?: IdFactory;
   clock?: ConversationClock;
+  availableRuntimes?: string[];
 }
 
 export class ConversationRuntime {
@@ -173,12 +174,14 @@ export class ConversationRuntime {
       }
       execution = await this.transition(execution, 'running');
       yield { type: 'execution', execution };
+      yield { type: 'execution.started', executionId, capability };
 
       let decision: RouteDecision;
       try {
         decision = this.deps.router.resolve(capability, {
           contextTokens: estimateTokens(content),
           traceId: execution.id,
+          availableRuntimes: this.deps.availableRuntimes,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -187,6 +190,7 @@ export class ConversationRuntime {
         });
         await this.publish(conversationId, 'execution.failed', { executionId, code: 'routing_failed' });
         yield { type: 'execution', execution };
+        yield { type: 'execution.failed', executionId, failure: execution.failureReason ?? failure('routing_failed', message, false) };
         yield { type: 'error', failure: execution.failureReason ?? failure('routing_failed', message, false) };
         return;
       }
@@ -209,6 +213,8 @@ export class ConversationRuntime {
       let assembled = '';
       let usage: TokenUsage | null = null;
       const attempts: ExecutionAttempt[] = [];
+      const startedMs = Date.now();
+      const pending: ConversationStreamEvent[] = [];
 
       const observer = {
         onAttempt: (
@@ -228,6 +234,41 @@ export class ConversationRuntime {
           };
           if (existing === -1) attempts.push(record);
           else attempts[existing] = record;
+          if (attempt.outcome === 'started') {
+            pending.push({
+              type: 'attempt.started',
+              executionId,
+              index: attempt.index,
+              provider: attempt.provider,
+              model: attempt.model,
+            });
+          } else if (attempt.outcome === 'failed' && attempt.error) {
+            pending.push({
+              type: 'attempt.failed',
+              executionId,
+              index: attempt.index,
+              provider: attempt.provider,
+              model: attempt.model,
+              failure: attempt.error,
+              emittedVisibleOutput: attempt.emittedVisibleOutput,
+            });
+            pending.push({
+              type: 'provider.failed',
+              executionId,
+              provider: attempt.provider,
+              model: attempt.model,
+              failure: attempt.error,
+            });
+          } else if (attempt.outcome === 'succeeded' || attempt.outcome === 'skipped' || attempt.outcome === 'cancelled') {
+            pending.push({
+              type: 'attempt.completed',
+              executionId,
+              index: attempt.index,
+              provider: attempt.provider,
+              model: attempt.model,
+              outcome: attempt.outcome,
+            });
+          }
         },
         onSelected: (selection: { provider: string; model: string }) => {
           execution.selectedProvider = selection.provider;
@@ -241,8 +282,27 @@ export class ConversationRuntime {
           { prompt: content, signal: controller.signal, traceId: decision.traceId },
           observer,
         )) {
+          for (const event of pending.splice(0)) yield event;
           if (chunk.type === 'usage') {
             usage = chunk.usage;
+            yield { type: 'usage', executionId, usage: chunk.usage };
+            continue;
+          }
+          if (chunk.type === 'warning') {
+            yield {
+              type: 'provider.warning',
+              executionId,
+              provider: chunk.provider ?? execution.selectedProvider ?? decision.provider,
+              message: chunk.message,
+            };
+            continue;
+          }
+          if (chunk.type === 'reasoning') {
+            yield { type: 'reasoning.delta', executionId, text: chunk.text };
+            continue;
+          }
+          if (chunk.type === 'tool_call') {
+            yield { type: 'tool.requested', executionId, call: chunk.call };
             continue;
           }
           if (chunk.type !== 'text' || chunk.text.length === 0) {
@@ -276,20 +336,25 @@ export class ConversationRuntime {
               updatedAt: this.clock.now(),
             });
           }
+          yield { type: 'assistant.delta', executionId, text: assembled };
           yield { type: 'message.delta', messageId: assistant.id, content: assembled };
         }
+        for (const event of pending.splice(0)) yield event;
 
         if (controller.signal.aborted) {
-          execution = await this.finishCancelled(execution, attempts, usage);
+          execution = await this.finishCancelled(execution, attempts, usage, Date.now() - startedMs);
           yield { type: 'execution', execution };
           yield { type: 'done' };
           return;
         }
 
         execution = await this.transition(
-          { ...execution, attempts: [...attempts], usage },
+          { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
           'completed',
         );
+        if (assembled.length > 0) {
+          yield { type: 'assistant.completed', executionId, text: assembled };
+        }
         if (assistant && execution.selectedProvider && execution.selectedModel) {
           await this.recordProvenance(conversation, userMessage, assistant, execution, decision);
         }
@@ -298,18 +363,26 @@ export class ConversationRuntime {
           provider: execution.selectedProvider,
           model: execution.selectedModel,
         });
+        yield {
+          type: 'execution.completed',
+          executionId,
+          provider: execution.selectedProvider,
+          model: execution.selectedModel,
+        };
         yield { type: 'execution', execution };
         yield { type: 'done' };
       } catch (err) {
+        for (const event of pending.splice(0)) yield event;
         const aborted = controller.signal.aborted;
         const message = err instanceof Error ? err.message : String(err);
         const visible = attempts.some((attempt) => attempt.emittedVisibleOutput) || assembled.length > 0;
         const status: ExecutionStatus = aborted ? 'cancelled' : 'failed';
         const code = aborted ? 'cancelled' : visible ? 'partial_stream_failure' : 'provider_error';
+        const structured = failure(code, message, !visible && !aborted);
         execution = await this.transition(
-          { ...execution, attempts: [...attempts], usage },
+          { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
           status,
-          { failureReason: failure(code, message, !visible && !aborted) },
+          { failureReason: structured },
         );
         await this.publish(conversationId, status === 'cancelled' ? 'execution.cancelled' : 'execution.failed', {
           executionId,
@@ -318,7 +391,8 @@ export class ConversationRuntime {
         });
         yield { type: 'execution', execution };
         if (status === 'failed') {
-          yield { type: 'error', failure: execution.failureReason ?? failure(code, message, false) };
+          yield { type: 'execution.failed', executionId, failure: structured };
+          yield { type: 'error', failure: execution.failureReason ?? structured };
         }
         yield { type: 'done' };
       }
@@ -331,9 +405,10 @@ export class ConversationRuntime {
     execution: ExecutionRecord,
     attempts: ExecutionAttempt[],
     usage: TokenUsage | null,
+    latencyMs?: number,
   ): Promise<ExecutionRecord> {
     return this.transition(
-      { ...execution, attempts: [...attempts], usage },
+      { ...execution, attempts: [...attempts], usage, latencyMs: latencyMs ?? execution.latencyMs },
       'cancelled',
       { failureReason: failure('cancelled', 'Execution cancelled.', false) },
     );
@@ -357,6 +432,17 @@ export class ConversationRuntime {
       jobId: execution.id,
       timestamp: this.clock.now(),
       traceId: decision.traceId,
+      capability: execution.capability,
+      usage: execution.usage,
+      locality: decision.localOnly ? 'local' : 'cloud',
+      latencyMs: execution.latencyMs ?? null,
+      selectedRouteId: decision.resolvedRouteId,
+      attemptOutcomes: execution.attempts.map((attempt) => ({
+        provider: attempt.provider,
+        model: attempt.model,
+        outcome: attempt.outcome,
+        emittedVisibleOutput: attempt.emittedVisibleOutput,
+      })),
     };
     await this.deps.provenance.record(entry);
   }

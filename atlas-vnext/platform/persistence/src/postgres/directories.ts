@@ -6,7 +6,7 @@ import { logPlatform } from '@atlas-vnext/observability';
 import { OwnershipError } from '../errors.ts';
 import { assertActor, type PersistenceActor } from '../actor.ts';
 import type { DurableBehaviourStore, PrincipalRecord, TenantRecord, WorkspaceRecord, WorkspaceStore } from '../kernel.ts';
-import { mapPrincipal, mapTenant, mapWorkspace } from './mappers.ts';
+import { mapPrincipal, mapTenant, mapWorkspace, sqlRow } from './mappers.ts';
 import type { PgTx } from './tx.ts';
 
 const ids = new UuidIdFactory();
@@ -14,7 +14,7 @@ const ids = new UuidIdFactory();
 export async function ensureTenant(tx: PgTx, input: { id: string; name: string }, now = new Date().toISOString()): Promise<TenantRecord> {
   if (!input.id.trim()) throw new OwnershipError('Fail-closed: tenant id is required.');
   const existing = await tx.query('SELECT * FROM tenants WHERE id = $1', [input.id]);
-  if (existing.rows[0]) return mapTenant(existing.rows[0]);
+  if (existing.rows[0]) return mapTenant(sqlRow(existing.rows[0]));
   const inserted = await tx.query(
     `INSERT INTO tenants (id, urn, name, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $4)
@@ -22,7 +22,7 @@ export async function ensureTenant(tx: PgTx, input: { id: string; name: string }
      RETURNING *`,
     [input.id, `urn:atlas:tenant:${input.id}`, input.name, now],
   );
-  return mapTenant(inserted.rows[0]!);
+  return mapTenant(sqlRow(inserted.rows[0]!));
 }
 
 export async function ensurePrincipal(
@@ -38,7 +38,7 @@ export async function ensurePrincipal(
      RETURNING *`,
     [input.id, `urn:atlas:principal:${input.id}`, input.displayName ?? null, now],
   );
-  return mapPrincipal(inserted.rows[0]!);
+  return mapPrincipal(sqlRow(inserted.rows[0]!));
 }
 
 export function createWorkspaceStore(tx: PgTx): WorkspaceStore {
@@ -54,7 +54,7 @@ export function createWorkspaceStore(tx: PgTx): WorkspaceStore {
          RETURNING *`,
         [id, ids.urn('conversation', id).replace(':conversation:', ':workspace:'), scoped.tenantId, input.name, input.dungeon ?? null, now],
       );
-      return mapWorkspace(inserted.rows[0]!);
+      return mapWorkspace(sqlRow(inserted.rows[0]!));
     },
     async get(actor, id) {
       const scoped = assertActor(actor, 'read workspace');
@@ -65,7 +65,7 @@ export function createWorkspaceStore(tx: PgTx): WorkspaceStore {
       const row = result.rows[0];
       if (!row) return null;
       if (scoped.workspaceId && scoped.workspaceId !== row.id) return null;
-      return mapWorkspace(row);
+      return mapWorkspace(sqlRow(row));
     },
     async list(actor) {
       const scoped = assertActor(actor, 'list workspaces');
@@ -75,7 +75,7 @@ export function createWorkspaceStore(tx: PgTx): WorkspaceStore {
             scoped.workspaceId,
           ])
         : await tx.query(`SELECT * FROM workspaces WHERE tenant_id = $1 ORDER BY updated_at DESC`, [scoped.tenantId]);
-      return result.rows.map(mapWorkspace);
+      return result.rows.map((row) => mapWorkspace(sqlRow(row)));
     },
     async bindManifest(actor, id, manifestHash) {
       const scoped = assertActor(actor, 'bind workspace manifest');
@@ -89,7 +89,7 @@ export function createWorkspaceStore(tx: PgTx): WorkspaceStore {
         logPlatform('ownership.rejected', { action: 'bindManifest', tenantId: scoped.tenantId, workspaceId: id });
         throw new OwnershipError(`Fail-closed: workspace ${id} is not visible to tenant ${scoped.tenantId}.`);
       }
-      return mapWorkspace(result.rows[0]);
+      return mapWorkspace(sqlRow(result.rows[0]));
     },
   };
 }

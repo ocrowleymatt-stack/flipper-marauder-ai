@@ -3,15 +3,7 @@ import type { Conversation, ExecutionRecord, Message, ProvenanceRecord } from '@
 import { logPlatform } from '@atlas-vnext/observability';
 import { OwnershipError } from '../errors.ts';
 import { assertActor, sameWorkspace, type PersistenceActor } from '../actor.ts';
-import {
-  mapConversation,
-  mapExecution,
-  mapMessage,
-  mapProvenance,
-  type ConversationRow,
-  type ExecutionRow,
-  type MessageRow,
-} from './mappers.ts';
+import { mapConversation, mapExecution, mapMessage, mapProvenance, sqlRow, type ConversationRow, type ExecutionRow, type MessageRow } from './mappers.ts';
 import type { PgTx } from './tx.ts';
 
 const ids = new UuidIdFactory();
@@ -287,7 +279,7 @@ export function createConversationRepos(tx: PgTx, actor: PersistenceActor, clock
         'SELECT * FROM provenance WHERE job_id = $1 AND tenant_id = $2 ORDER BY timestamp ASC',
         [jobId, owner.tenantId],
       );
-      return result.rows.map(mapProvenance);
+      return result.rows.map((row) => mapProvenance(sqlRow(row)));
     },
   };
 

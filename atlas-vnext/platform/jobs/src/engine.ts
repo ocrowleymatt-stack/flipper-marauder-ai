@@ -264,17 +264,22 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
           if (record.status === 'waiting_runtime') continue;
           log('lease.expired', { jobId: record.id, tenantId: record.tenantId, leaseOwner: record.leaseOwner });
           if (record.retryCount < record.maxRetries) {
-            const next = transition(record, 'queued', {
+            const failed = transition(record, 'failed', {
               retryCount: record.retryCount + 1,
               leaseOwner: null,
               leaseUntil: null,
-              startedAt: null,
               failureReason: {
                 code: 'lease_expired',
                 message: 'Worker lease expired; job re-queued from checkpoint.',
                 retryable: true,
                 at: now,
               },
+            });
+            const next = transition(failed, 'queued', {
+              leaseOwner: null,
+              leaseUntil: null,
+              startedAt: null,
+              completedAt: null,
             });
             const saved = await store.save(next);
             await emit(saved, 'job.retry_scheduled', { retryCount: saved.retryCount });
@@ -308,16 +313,20 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
         const released: JobRecord[] = [];
         for (const record of owned) {
           if (record.status !== 'running') continue;
-          const next = transition(record, 'queued', {
+          const failed = transition(record, 'failed', {
             leaseOwner: null,
             leaseUntil: null,
-            startedAt: record.startedAt,
             failureReason: {
               code: 'worker_released',
               message: 'Worker shut down and released the lease.',
               retryable: true,
               at: clock(),
             },
+          });
+          const next = transition(failed, 'queued', {
+            leaseOwner: null,
+            leaseUntil: null,
+            completedAt: null,
           });
           const saved = await store.save(next);
           await emit(saved, 'job.released', { workerId });

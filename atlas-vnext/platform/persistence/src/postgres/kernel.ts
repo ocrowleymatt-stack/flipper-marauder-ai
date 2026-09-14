@@ -22,7 +22,7 @@ import { createBehaviourStore, createWorkspaceStore, ensurePrincipal, ensureTena
 import { createConversationRepos } from './conversations.ts';
 import { applyEventRetention, createEventBus } from './events.ts';
 import { PostgresJobStore } from './jobs.ts';
-import { mapArtefact, mapExecution, mapLease, type ExecutionRow } from './mappers.ts';
+import { mapArtefact, mapExecution, mapLease, sqlRow, type ExecutionRow } from './mappers.ts';
 import { CURRENT_SCHEMA_VERSION, ensureSchema, loadMigrations, migrate } from './migrate.ts';
 import { PgTx, createPool } from './tx.ts';
 
@@ -218,7 +218,7 @@ function createRuntimeLeaseStore(tx: PgTx, clock: () => string): RuntimeLeaseSto
           now,
         ],
       );
-      return mapLease(result.rows[0]!);
+      return mapLease(sqlRow(result.rows[0]!));
     },
     async get(actor, resourceKey) {
       const scoped = assertActor(actor, 'read runtime lease');
@@ -226,7 +226,7 @@ function createRuntimeLeaseStore(tx: PgTx, clock: () => string): RuntimeLeaseSto
         'SELECT * FROM runtime_leases WHERE tenant_id = $1 AND resource_key = $2',
         [scoped.tenantId, resourceKey],
       );
-      return result.rows[0] ? mapLease(result.rows[0]) : null;
+      return result.rows[0] ? mapLease(sqlRow(result.rows[0])) : null;
     },
     async expire(nowStamp) {
       const now = nowStamp ?? clock();
@@ -237,7 +237,7 @@ function createRuntimeLeaseStore(tx: PgTx, clock: () => string): RuntimeLeaseSto
          RETURNING *`,
         [now],
       );
-      return result.rows.map(mapLease);
+      return result.rows.map((row) => mapLease(sqlRow(row)));
     },
   };
 }
@@ -260,7 +260,7 @@ function createArtefactStore(tx: PgTx, clock: () => string): ArtefactMetadataSto
           input.createdAt ?? clock(),
         ],
       );
-      return mapArtefact(result.rows[0]!);
+      return mapArtefact(sqlRow(result.rows[0]!));
     },
     async get(actor, id) {
       const scoped = assertActor(actor, 'read artefact metadata');
@@ -268,7 +268,7 @@ function createArtefactStore(tx: PgTx, clock: () => string): ArtefactMetadataSto
         'SELECT * FROM artefact_metadata WHERE id = $1 AND tenant_id = $2',
         [id, scoped.tenantId],
       );
-      return result.rows[0] ? mapArtefact(result.rows[0]) : null;
+      return result.rows[0] ? mapArtefact(sqlRow(result.rows[0])) : null;
     },
   };
 }

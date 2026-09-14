@@ -12,6 +12,10 @@ import type { DomainEvent } from '@atlas-vnext/events';
 import type { JobRecord } from '@atlas-vnext/contracts';
 import type { ArtefactMetadata, PrincipalRecord, RuntimeLeaseRecord, TenantRecord, WorkspaceRecord } from '../kernel.ts';
 
+export function sqlRow<T>(row: object): T {
+  return row as T;
+}
+
 export function iso(value: Date | string | null | undefined): string | null {
   if (value == null) return null;
   if (value instanceof Date) return value.toISOString();

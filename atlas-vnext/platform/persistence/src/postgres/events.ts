@@ -108,7 +108,9 @@ export function createEventBus(tx: PgTx, actor: PersistenceActor | null, clock: 
       if (!owner && channel !== '*') {
         throw new OwnershipError('Fail-closed: event replay requires a tenant.');
       }
-      logPlatform('event.replay', { channel, tenantId: owner?.tenantId, afterSeq: after?.seq, afterEventId: after?.eventId });
+      if (after) {
+        logPlatform('event.replay', { channel, tenantId: owner?.tenantId, afterSeq: after.seq, afterEventId: after.eventId });
+      }
       let afterSeq = after?.seq;
       if (after?.eventId && afterSeq === undefined) {
         const found = await tx.query<{ seq: string | number }>(

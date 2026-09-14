@@ -1,5 +1,5 @@
 import { decodeUtf8 } from './text.ts';
-import type { ExtractionResult } from './types.ts';
+import type { ExtractedBlock, ExtractionResult } from './types.ts';
 
 function splitRow(line: string): string[] {
   const cells: string[] = [];
@@ -31,7 +31,7 @@ export function extractCsv(bytes: Uint8Array, path: string): ExtractionResult {
   const raw = decodeUtf8(bytes).replace(/^\uFEFF/, '');
   const lines = raw.split(/\r?\n/).filter((line) => line.length > 0);
   const header = lines[0] ? splitRow(lines[0]) : [];
-  const blocks = [];
+  const blocks: ExtractedBlock[] = [];
   if (header.length) {
     blocks.push({
       text: `columns: ${header.join(', ')}`,

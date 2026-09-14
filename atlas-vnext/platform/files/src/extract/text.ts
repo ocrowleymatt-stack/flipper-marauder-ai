@@ -1,9 +1,9 @@
 import { ExtractionError } from '../errors.ts';
-import type { ExtractionResult } from './types.ts';
+import type { ExtractedBlock, ExtractionResult } from './types.ts';
 
 export function extractPlainText(bytes: Uint8Array, path: string, markdown: boolean): ExtractionResult {
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/^\uFEFF/, '');
-  const blocks = [];
+  const blocks: ExtractedBlock[] = [];
   let offset = 0;
   let heading: string | undefined;
   const headings: string[] = [];

@@ -1,6 +1,6 @@
 import { ExtractionError } from '../errors.ts';
 import { readZip, writeZip, zipEntry } from '../zip.ts';
-import type { ExtractionResult } from './types.ts';
+import type { ExtractedBlock, ExtractionResult } from './types.ts';
 
 function xmlText(xml: string): string {
   return xml
@@ -32,7 +32,7 @@ export function extractDocx(bytes: Uint8Array, path: string): ExtractionResult {
   const xml = new TextDecoder('utf-8').decode(document);
   const paragraphs = [...xml.matchAll(/<w:p[\s\S]*?<\/w:p>/g)].map((match) => xmlText(match[0]));
   const tables = [...xml.matchAll(/<w:tbl[\s\S]*?<\/w:tbl>/g)].map((match) => xmlText(match[0]));
-  const blocks = [];
+  const blocks: ExtractedBlock[] = [];
   let offset = 0;
   paragraphs.forEach((text) => {
     if (!text) return;

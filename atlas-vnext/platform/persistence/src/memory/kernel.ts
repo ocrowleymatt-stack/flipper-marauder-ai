@@ -15,7 +15,8 @@ import { createJobEngine, MemoryJobStore, type DurableJobEngine } from '@atlas-v
 import { BehaviourPolicyError, TenantIsolationError } from '@atlas-vnext/permissions';
 import { logPlatform } from '@atlas-vnext/observability';
 import { assertActor, sameWorkspace, type PersistenceActor } from '../actor.ts';
-import { OwnershipError, PersistenceClosedError } from '../errors.ts';
+import { createMemoryFileStores } from './files.ts';
+import { OwnershipError, PersistenceClosedError, ConflictError } from '../errors.ts';
 import type {
   ActorBoundPersistence,
   ArtefactMetadata,
@@ -66,6 +67,7 @@ export class MemoryPersistence implements PlatformPersistence {
   private readonly events = new MemoryEventBus();
   private readonly jobStore = new MemoryJobStore();
   private readonly jobs: DurableJobEngine;
+  private readonly fileStores = createMemoryFileStores(() => this.clock());
 
   constructor(private readonly clock: () => string = () => new Date().toISOString()) {
     this.jobs = createJobEngine({
@@ -101,6 +103,12 @@ export class MemoryPersistence implements PlatformPersistence {
       jobs: this.jobs,
       behaviour: this.behaviourStore(),
       workspaces: this.workspaceStore(),
+      files: this.fileStores.files,
+      fileVersions: this.fileStores.fileVersions,
+      extractions: this.fileStores.extractions,
+      chunks: this.fileStores.chunks,
+      attachments: this.fileStores.attachments,
+      casRefs: this.fileStores.casRefs,
     };
   }
 
@@ -415,27 +423,79 @@ export class MemoryPersistence implements PlatformPersistence {
           urn: `urn:atlas:workspace:${id}`,
           tenantId: scoped.tenantId,
           name: input.name,
+          description: input.description ?? null,
           dungeon: input.dungeon ?? null,
           rootManifestHash: null,
           archived: false,
+          revision: 1,
+          deletedAt: null,
           createdAt: now,
           updatedAt: now,
         };
         this.workspaces.set(id, record);
         return record;
       },
-      get: async (actor, id) => {
+      get: async (actor, id, opts) => {
         const scoped = assertActor(actor, 'read workspace');
         const record = this.workspaces.get(id);
         if (!record || record.tenantId !== scoped.tenantId) return null;
         if (scoped.workspaceId && scoped.workspaceId !== id) return null;
+        if (record.deletedAt && !opts?.includeDeleted) return null;
         return record;
       },
-      list: async (actor) => {
+      list: async (actor, opts) => {
         const scoped = assertActor(actor, 'list workspaces');
         return [...this.workspaces.values()]
           .filter((item) => item.tenantId === scoped.tenantId)
-          .filter((item) => !scoped.workspaceId || item.id === scoped.workspaceId);
+          .filter((item) => !scoped.workspaceId || item.id === scoped.workspaceId)
+          .filter((item) => opts?.includeDeleted || !item.deletedAt)
+          .filter((item) => opts?.includeArchived || !item.archived);
+      },
+      update: async (actor, id, patch) => {
+        const scoped = assertActor(actor, 'update workspace');
+        const record = this.workspaces.get(id);
+        if (!record || record.tenantId !== scoped.tenantId || record.deletedAt) {
+          throw new OwnershipError(`Fail-closed: workspace ${id} is not visible to tenant ${scoped.tenantId}.`);
+        }
+        if (record.revision !== patch.expectedRevision) {
+          throw new ConflictError(
+            `Workspace ${id} revision ${patch.expectedRevision} does not match ${record.revision}.`,
+          );
+        }
+        const next: WorkspaceRecord = {
+          ...record,
+          name: patch.name ?? record.name,
+          description: patch.description === undefined ? record.description : patch.description,
+          dungeon: patch.dungeon === undefined ? record.dungeon : patch.dungeon,
+          revision: record.revision + 1,
+          updatedAt: this.clock(),
+        };
+        this.workspaces.set(id, next);
+        return next;
+      },
+      archive: async (actor, id, expectedRevision) => {
+        const record = await this.requireWorkspace(actor, id, expectedRevision, 'archive workspace');
+        const next = { ...record, archived: true, revision: record.revision + 1, updatedAt: this.clock() };
+        this.workspaces.set(id, next);
+        return next;
+      },
+      restore: async (actor, id, expectedRevision) => {
+        const record = await this.requireWorkspace(actor, id, expectedRevision, 'restore workspace');
+        const next = { ...record, archived: false, revision: record.revision + 1, updatedAt: this.clock() };
+        this.workspaces.set(id, next);
+        return next;
+      },
+      logicalDelete: async (actor, id, expectedRevision) => {
+        const record = await this.requireWorkspace(actor, id, expectedRevision, 'delete workspace');
+        const next = {
+          ...record,
+          archived: true,
+          deletedAt: this.clock(),
+          revision: record.revision + 1,
+          updatedAt: this.clock(),
+        };
+        this.workspaces.set(id, next);
+        return next;
       },
       bindManifest: async (actor, id, manifestHash) => {
         const scoped = assertActor(actor, 'bind workspace manifest');
@@ -443,7 +503,7 @@ export class MemoryPersistence implements PlatformPersistence {
         if (!record || record.tenantId !== scoped.tenantId) {
           throw new OwnershipError(`Fail-closed: workspace ${id} is not visible to tenant ${scoped.tenantId}.`);
         }
-        const next = { ...record, rootManifestHash: manifestHash, updatedAt: this.clock() };
+        const next = { ...record, rootManifestHash: manifestHash, updatedAt: this.clock(), revision: record.revision + 1 };
         this.workspaces.set(id, next);
         return next;
       },
@@ -522,7 +582,56 @@ export class MemoryPersistence implements PlatformPersistence {
         if (scoped.workspaceId && record.workspaceId && scoped.workspaceId !== record.workspaceId) return null;
         return record;
       },
+      list: async (actor, workspaceId) => {
+        const scoped = assertActor(actor, 'list artefact metadata');
+        return [...this.artefactRows.values()]
+          .filter((item) => item.tenantId === scoped.tenantId)
+          .filter((item) => workspaceId == null || item.workspaceId === workspaceId)
+          .filter((item) => !scoped.workspaceId || !item.workspaceId || item.workspaceId === scoped.workspaceId);
+      },
+      createVersion: async (actor, parentId, input) => {
+        const scoped = assertActor(actor, 'version artefact');
+        const parent = await this.createArtefactStore().get(actor, parentId);
+        if (!parent) {
+          throw new OwnershipError(`Fail-closed: artefact ${parentId} is not visible to tenant ${scoped.tenantId}.`);
+        }
+        if (parent.version !== input.expectedVersion) {
+          throw new ConflictError(
+            `Artefact ${parentId} version ${input.expectedVersion} does not match ${parent.version}.`,
+          );
+        }
+        return this.createArtefactStore().record(actor, {
+          id: input.id,
+          workspaceId: parent.workspaceId,
+          type: input.type ?? parent.type,
+          version: parent.version + 1,
+          parentId: parent.id,
+          createdBy: input.createdBy ?? scoped.principalId ?? parent.createdBy,
+          executionId: input.executionId ?? null,
+          jobId: input.jobId ?? null,
+          contentHash: input.contentHash,
+          mimeType: input.mimeType ?? parent.mimeType,
+          sizeBytes: input.sizeBytes ?? parent.sizeBytes,
+        });
+      },
     };
+  }
+
+  private requireWorkspace(
+    actor: PersistenceActor,
+    id: string,
+    expectedRevision: number | undefined,
+    action: string,
+  ): WorkspaceRecord {
+    const scoped = assertActor(actor, action);
+    const record = this.workspaces.get(id);
+    if (!record || record.tenantId !== scoped.tenantId || record.deletedAt) {
+      throw new OwnershipError(`Fail-closed: workspace ${id} is not visible to tenant ${scoped.tenantId}.`);
+    }
+    if (expectedRevision != null && record.revision !== expectedRevision) {
+      throw new ConflictError(`Workspace ${id} revision ${expectedRevision} does not match ${record.revision}.`);
+    }
+    return record;
   }
 
   private ownedWorkspace(actor: PersistenceActor, workspaceId: string): boolean {

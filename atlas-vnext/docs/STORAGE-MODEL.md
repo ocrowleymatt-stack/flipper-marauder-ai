@@ -19,17 +19,18 @@ Caspa’s `hybridCoreRepository` already uses PostgreSQL for immutable manuscrip
 ```text
 storage/
   blobs/sha256/ab/cd/<hex>
-  manifests/sha256/ab/<hex>.json
 ```
 
-Metadata lives in PostgreSQL, not beside the blob directory as a second source of truth.
+On disk this is `<casRoot>/sha256/<aa>/<bb>/<hash>`. Metadata lives in PostgreSQL (`cas_objects`, `cas_refs`, `files`), not beside the blob directory as a second source of truth.
 
-## Metadata (illustrative)
+## Metadata
 
-`projects` — id, name, dungeon, `root_manifest_hash`, settings, timestamps.  
-`blobs` — sha256, size, mime, extracted_text (truncated), refcounts.  
-`manifests` — sha256, project_id, parent, entries_json (or entries as rows).  
-`artefacts` — id, project_id, job_id, blob_hash, provenance_json.
+`workspaces` / projects — id, name, dungeon, `root_manifest_hash`, revision, timestamps.  
+`cas_objects` — sha256, size, created_at.  
+`cas_refs` — tenant-owned references (file, artefact, extraction).  
+`files` / `file_versions` — logical path, mime, size, content hash, version.  
+`artefact_metadata` — id, project/workspace, job, blob hash, type, version lineage.  
+`chunks` — bounded retrieval text + locators (not uploaded file bytes).
 
 ## Manifest
 
@@ -37,6 +38,6 @@ Deterministic JSON: sorted paths, sha256, sizeBytes, mimeType, executable. The m
 
 ## GC
 
-Reference-count from manifests + artefacts; mark-and-sweep orphans older than retention. Quota watermarks prune disposable preview caches first. Production artefacts and custom-domain sites are protected.
+Reference-count from `cas_refs`; `gcUnreferenced` unlinks orphans. Logical file delete does not immediately unlink shared blobs.
 
-This PR ships the contract and `platform/storage` interface only.
+This PR ships the filesystem CAS adapter, metadata schema, and GC hook.

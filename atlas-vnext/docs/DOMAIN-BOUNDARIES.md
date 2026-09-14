@@ -20,8 +20,10 @@ Does not own: route policy, UI, project/CAS writes, dungeon modules.
 
 | Package | Owns |
 |---|---|
-| `projects` | Authoritative project records + current manifest pointer |
-| `storage` | CAS blobs + manifests; never in-DB binaries; retention bounds stub |
+| `projects` | Authoritative project records (named workspaces) + current manifest pointer |
+| `storage` | CAS blobs + manifests; never in-DB binaries; retention bounds |
+| `files` | Ingestion, extraction, chunking, attachments, textual artefacts |
+| `context` | Lexical retrieval, budgeted context assembly, honest citations |
 | `jobs` | Shared state machine, checkpoints, leases |
 | `events` | SSE fan-out |
 | `provenance` | Artefact lineage |
@@ -58,5 +60,5 @@ UI  →  host (composition root)
          →  Nexus.resolve(alias) → RouteDecision
          →  ExecutionBroker.execute(decision)
          →  durable conversations / messages / executions / events
-    →  jobs / artefacts / workspaces (first-class; not chat-only)
+    →  jobs / artefacts / workspaces / files / context (first-class; not chat-only)
 ```

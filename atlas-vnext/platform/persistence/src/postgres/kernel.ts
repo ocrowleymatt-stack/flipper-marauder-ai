@@ -4,7 +4,7 @@ import { createJobEngine, type DurableJobEngine } from '@atlas-vnext/jobs';
 import { logPlatform, redactSecret } from '@atlas-vnext/observability';
 import type { PersistenceActor } from '../actor.ts';
 import type { PersistenceConfig } from '../config.ts';
-import { PersistenceUnavailableError } from '../errors.ts';
+import { PersistenceUnavailableError, ConflictError, OwnershipError } from '../errors.ts';
 import type {
   ActorBoundPersistence,
   ArtefactMetadata,
@@ -22,6 +22,7 @@ import { createBehaviourStore, createWorkspaceStore, ensurePrincipal, ensureTena
 import { createConversationRepos } from './conversations.ts';
 import { applyEventRetention, createEventBus } from './events.ts';
 import { PostgresJobStore } from './jobs.ts';
+import { createFileStores } from './files.ts';
 import { mapArtefact, mapExecution, mapLease, sqlRow, type ExecutionRow } from './mappers.ts';
 import { CURRENT_SCHEMA_VERSION, ensureSchema, loadMigrations, migrate } from './migrate.ts';
 import { PgTx, createPool } from './tx.ts';
@@ -60,6 +61,7 @@ export class PostgresPersistence implements PlatformPersistence {
     const scoped = assertActor(actor, 'bind persistence');
     const repos = createConversationRepos(this.tx, scoped, this.clock);
     const events = createEventBus(this.tx, scoped, this.clock);
+    const fileStores = createFileStores(this.tx, this.clock);
     return {
       actor: scoped,
       conversations: repos.conversations,
@@ -70,6 +72,12 @@ export class PostgresPersistence implements PlatformPersistence {
       jobs: this.jobs,
       behaviour: createBehaviourStore(this.tx),
       workspaces: createWorkspaceStore(this.tx),
+      files: fileStores.files,
+      fileVersions: fileStores.fileVersions,
+      extractions: fileStores.extractions,
+      chunks: fileStores.chunks,
+      attachments: fileStores.attachments,
+      casRefs: fileStores.casRefs,
     };
   }
 
@@ -245,7 +253,7 @@ function createRuntimeLeaseStore(tx: PgTx, clock: () => string): RuntimeLeaseSto
 }
 
 function createArtefactStore(tx: PgTx, clock: () => string): ArtefactMetadataStore {
-  return {
+  const store: ArtefactMetadataStore = {
     async record(actor, input) {
       const scoped = assertActor(actor, 'record artefact metadata');
       const now = clock();
@@ -298,7 +306,46 @@ function createArtefactStore(tx: PgTx, clock: () => string): ArtefactMetadataSto
       if (scoped.workspaceId && mapped.workspaceId && scoped.workspaceId !== mapped.workspaceId) return null;
       return mapped;
     },
+    async list(actor, workspaceId) {
+      const scoped = assertActor(actor, 'list artefact metadata');
+      if (scoped.workspaceId && workspaceId && scoped.workspaceId !== workspaceId) return [];
+      const result = workspaceId
+        ? await tx.query(
+            'SELECT * FROM artefact_metadata WHERE tenant_id = $1 AND workspace_id = $2 ORDER BY created_at',
+            [scoped.tenantId, workspaceId],
+          )
+        : await tx.query('SELECT * FROM artefact_metadata WHERE tenant_id = $1 ORDER BY created_at', [scoped.tenantId]);
+      return result.rows
+        .map((row) => mapArtefact(sqlRow(row)))
+        .filter((item) => !scoped.workspaceId || !item.workspaceId || item.workspaceId === scoped.workspaceId);
+    },
+    async createVersion(actor, parentId, input) {
+      const scoped = assertActor(actor, 'version artefact');
+      const parent = await store.get(actor, parentId);
+      if (!parent) {
+        throw new OwnershipError(`Fail-closed: artefact ${parentId} is not visible to tenant ${scoped.tenantId}.`);
+      }
+      if (parent.version !== input.expectedVersion) {
+        throw new ConflictError(
+          `Artefact ${parentId} version ${input.expectedVersion} does not match ${parent.version}.`,
+        );
+      }
+      return store.record(actor, {
+        id: input.id,
+        workspaceId: parent.workspaceId,
+        type: input.type ?? parent.type,
+        version: parent.version + 1,
+        parentId: parent.id,
+        createdBy: input.createdBy ?? scoped.principalId ?? parent.createdBy,
+        executionId: input.executionId ?? null,
+        jobId: input.jobId ?? null,
+        contentHash: input.contentHash,
+        mimeType: input.mimeType ?? parent.mimeType,
+        sizeBytes: input.sizeBytes ?? parent.sizeBytes,
+      });
+    },
   };
+  return store;
 }
 
 export type { RuntimeLeaseRecord, ArtefactMetadata };

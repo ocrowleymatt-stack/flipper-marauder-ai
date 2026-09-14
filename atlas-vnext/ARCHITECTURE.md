@@ -62,7 +62,7 @@ flipper-marauder-ai/
 ├── README.md
 └── atlas-vnext/
     ├── packages/contracts
-    ├── platform/{nexus,execution,conversation,persistence,projects,jobs,events,storage,provenance,permissions,observability,flags}
+    ├── platform/{nexus,execution,conversation,persistence,projects,jobs,events,storage,files,context,provenance,permissions,observability,flags}
     ├── dungeons/{writing,investigation,research,website,osint,music}
     ├── apps/{web,host}
     └── tests/architecture
@@ -71,7 +71,7 @@ flipper-marauder-ai/
 ## 5. Persistence
 
 - **PostgreSQL** for transactional metadata: tenants, workspaces, conversations, messages, executions, jobs, checkpoints, events, behaviour posture, provenance/artefact pointers, runtime lease metadata. Implemented in `platform/persistence` (see [docs/PERSISTENCE.md](docs/PERSISTENCE.md)).
-- CAS blobs: later. Never file bytes or base64 in relational rows. `artefact_metadata` stores identity, tenancy, type, version lineage, creator/execution provenance, timestamps, and `content_hash` as a future CAS pointer.
+- CAS blobs: `platform/storage` filesystem adapter (`sha256/<aa>/<bb>/<hash>`). Never file bytes or base64 in relational rows. `artefact_metadata` and `files` store identity, tenancy, type, version lineage, and `content_hash` as the CAS pointer. See [docs/FILES-AND-CONTEXT.md](docs/FILES-AND-CONTEXT.md).
 - Local/dev may use the JSON `FileDocument` store. Production cannot; missing PostgreSQL fails closed.
 - SQLite is not a second product database.
-- **Workbench constraint:** this layer must not assume conversation-only or linear-chat-only products. Conversations belong to workspaces; artefacts, jobs, and (later) files are first-class. Do not implement Workbench UI or copy Mountain UI architecture here.
+- **Workbench constraint:** this layer must not assume conversation-only or linear-chat-only products. Conversations belong to workspaces; artefacts, jobs, and files are first-class. Do not implement Workbench UI or copy Mountain UI architecture here.

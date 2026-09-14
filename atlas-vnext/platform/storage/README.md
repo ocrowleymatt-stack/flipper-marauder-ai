@@ -2,6 +2,8 @@
 
 Platform primitive: content-addressed blob store + versioned manifests.
 
-Blobs are immutable SHA-256 objects. PostgreSQL stores metadata and hashes only — never file bytes or base64 payloads. SQLite may be used as a local/dev stand-in with the same schema.
+Blobs are immutable SHA-256 objects at `sha256/<aa>/<bb>/<hash>`. PostgreSQL stores metadata, hashes, and refcounts only — never file bytes or base64 payloads.
 
-This package is a design-gate shell. A filesystem CAS is not implemented in this PR.
+Adapters: `FilesystemCas` (atomic tmp+rename, hash verify, dedup) and `MemoryCas` for tests. GC is a hook: `unlink` only after `cas_refs` reach zero.
+
+See [docs/FILES-AND-CONTEXT.md](../../docs/FILES-AND-CONTEXT.md) and [docs/STORAGE-MODEL.md](../../docs/STORAGE-MODEL.md).

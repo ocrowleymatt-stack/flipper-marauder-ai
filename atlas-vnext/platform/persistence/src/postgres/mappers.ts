@@ -166,9 +166,12 @@ export function mapWorkspace(row: {
   urn: string;
   tenant_id: string;
   name: string;
+  description?: string | null;
   dungeon: string | null;
   root_manifest_hash: string | null;
   archived: boolean;
+  revision?: number | string | null;
+  deleted_at?: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }): WorkspaceRecord {
@@ -177,9 +180,12 @@ export function mapWorkspace(row: {
     urn: row.urn,
     tenantId: row.tenant_id,
     name: row.name,
+    description: row.description ?? null,
     dungeon: row.dungeon,
     rootManifestHash: row.root_manifest_hash,
-    archived: row.archived,
+    archived: Boolean(row.archived),
+    revision: row.revision == null ? 1 : Number(row.revision),
+    deletedAt: row.deleted_at ? isoRequired(row.deleted_at) : null,
     createdAt: isoRequired(row.created_at),
     updatedAt: isoRequired(row.updated_at),
   };

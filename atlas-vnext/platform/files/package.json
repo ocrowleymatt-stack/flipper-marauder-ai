@@ -1,0 +1,13 @@
+{
+  "name": "@atlas-vnext/files",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@atlas-vnext/contracts": "*",
+    "@atlas-vnext/observability": "*",
+    "@atlas-vnext/persistence": "*",
+    "@atlas-vnext/storage": "*"
+  }
+}

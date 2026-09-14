@@ -16,6 +16,8 @@ export type Layer =
   | 'permissions'
   | 'observability'
   | 'flags'
+  | 'files'
+  | 'context'
   | 'dungeon'
   | 'apps'
   | 'tests'
@@ -56,6 +58,8 @@ const PACKAGE_LAYER: Record<string, Layer> = {
   '@atlas-vnext/jobs': 'jobs',
   '@atlas-vnext/events': 'events',
   '@atlas-vnext/storage': 'storage',
+  '@atlas-vnext/files': 'files',
+  '@atlas-vnext/context': 'context',
   '@atlas-vnext/provenance': 'provenance',
   '@atlas-vnext/permissions': 'permissions',
   '@atlas-vnext/observability': 'observability',
@@ -138,6 +142,8 @@ const NEXUS_FORBIDDEN_LAYERS = new Set<Layer>([
   'permissions',
   'observability',
   'flags',
+  'files',
+  'context',
 ]);
 
 const PLATFORM_LAYERS = new Set<Layer>([
@@ -149,6 +155,8 @@ const PLATFORM_LAYERS = new Set<Layer>([
   'permissions',
   'observability',
   'flags',
+  'files',
+  'context',
   'nexus',
   'execution',
   'conversation',
@@ -166,6 +174,8 @@ export function classifyPath(relPath: string): { layer: Layer; dungeon?: string 
   if (normalised.startsWith('platform/jobs/')) return { layer: 'jobs' };
   if (normalised.startsWith('platform/events/')) return { layer: 'events' };
   if (normalised.startsWith('platform/storage/')) return { layer: 'storage' };
+  if (normalised.startsWith('platform/files/')) return { layer: 'files' };
+  if (normalised.startsWith('platform/context/')) return { layer: 'context' };
   if (normalised.startsWith('platform/provenance/')) return { layer: 'provenance' };
   if (normalised.startsWith('platform/permissions/')) return { layer: 'permissions' };
   if (normalised.startsWith('platform/observability/')) return { layer: 'observability' };
@@ -527,6 +537,8 @@ function analyzePackageJson(root: string, overlays: Record<string, string>): Vio
     ['platform/jobs/package.json', 'platform'],
     ['platform/events/package.json', 'platform'],
     ['platform/storage/package.json', 'platform'],
+    ['platform/files/package.json', 'platform'],
+    ['platform/context/package.json', 'platform'],
     ['platform/provenance/package.json', 'platform'],
     ['platform/permissions/package.json', 'platform'],
     ['platform/observability/package.json', 'platform'],
@@ -555,6 +567,8 @@ function analyzePackageJson(root: string, overlays: Record<string, string>): Vio
           name.startsWith('@atlas-vnext/dungeon-') ||
           name === '@atlas-vnext/jobs' ||
           name === '@atlas-vnext/storage' ||
+          name === '@atlas-vnext/files' ||
+          name === '@atlas-vnext/context' ||
           STORAGE_MODULES.has(name) ||
           TRANSPORT_MODULES.has(name) ||
           LEGACY_MODULES.some((prefix) => name === prefix || name.startsWith(prefix))

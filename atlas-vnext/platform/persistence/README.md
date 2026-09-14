@@ -62,6 +62,9 @@ Tables (see `platform/persistence/migrations/`):
 - `provenance`, `artefact_metadata` (hashes/metadata only; no blobs)
 - `cas_objects`, `cas_refs`, `files`, `file_versions`, `extractions`, `chunks`, `attachments`
 - `site_records`, `site_revisions`, `site_revision_entries` (logical site + current revision pointer; no copied trees)
+- `sessions`, `tenant_memberships`, `workspace_memberships`, `authority_grants`
+- `tool_invocations`, `tool_approvals`, `tool_results`, `tool_effects`
+- `plugin_records`, `secret_refs` (names/versions only; no secret values), `audit_events`
 
 IDs are opaque strings (`cnv_…`, `job_…`). Ownership is `(tenant_id)` plus optional `workspace_id`. Looking up by ID without a tenant fails closed.
 
@@ -73,9 +76,9 @@ IDs are opaque strings (`cnv_…`, `job_…`). Ownership is `(tenant_id)` plus o
 4. Failed SQL rolls back that migration and throws `MigrationError`. Data already committed is left intact; the bad version is not recorded.
 5. Migrations are additive. They must not `DROP SCHEMA` / `DROP DATABASE` or recreate the world.
 
-Empty database: apply 001…005. Repeat startup: all skipped.
+Empty database: apply 001…006. Repeat startup: all skipped.
 
-Upgrade fixture: apply frozen v1 SQL + `schema_migrations` row 1, then run the migrator (applies 002–005).
+Upgrade fixture: apply frozen v1 SQL + `schema_migrations` row 1, then run the migrator (applies 002–006).
 
 ## Transaction boundaries
 

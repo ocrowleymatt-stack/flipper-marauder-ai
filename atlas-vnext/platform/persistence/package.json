@@ -13,6 +13,8 @@
     "@atlas-vnext/jobs": "*",
     "@atlas-vnext/observability": "*",
     "@atlas-vnext/permissions": "*",
+    "@atlas-vnext/auth": "*",
+    "@atlas-vnext/tools": "*",
     "pg": "^8.23.0"
   }
 }

@@ -26,6 +26,8 @@ import type {
   FileVersionStore,
 } from './file-types.ts';
 import type { SiteStore } from './site-types.ts';
+import type { DirectoryStore, SessionStore } from '@atlas-vnext/auth';
+import type { ToolApprovalStore, ToolInvocationStore } from '@atlas-vnext/tools';
 
 export type {
   AttachmentRecord,
@@ -210,12 +212,17 @@ export interface ActorBoundPersistence {
   attachments: AttachmentStore;
   casRefs: CasRefStore;
   sites: SiteStore;
+  sessions: SessionStore;
+  directory: DirectoryStore;
+  toolInvocations: ToolInvocationStore;
+  toolApprovals: ToolApprovalStore;
 }
 
 export interface RestartRecoveryResult {
   executions: ExecutionRecord[];
   jobs: Awaited<ReturnType<DurableJobEngine['recoverExpiredLeases']>>;
   runtimeLeases: RuntimeLeaseRecord[];
+  tools: { uncertain: number; failed: number };
 }
 
 export interface PlatformPersistence extends UnitOfWork {

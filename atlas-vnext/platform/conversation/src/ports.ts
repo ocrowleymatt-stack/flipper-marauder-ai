@@ -48,6 +48,10 @@ export interface CapabilityRouter {
       privacy?: 'any' | 'local_only';
       availableRuntimes?: string[];
       traceId?: string;
+      requireTools?: boolean;
+      requireVision?: boolean;
+      requireReasoning?: boolean;
+      requireCode?: boolean;
     },
   ): RouteDecision;
 }

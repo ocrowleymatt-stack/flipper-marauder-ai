@@ -27,5 +27,7 @@ jobs:
         run: npm test
       - name: Architecture boundary tests
         run: npm run test:boundaries
+      - name: Mountain behavioural compatibility
+        run: npm run test:compat
       - name: Build
         run: npm run build

@@ -39,6 +39,8 @@ export interface ConversationRuntimeDeps {
   ids?: IdFactory;
   clock?: ConversationClock;
   availableRuntimes?: string[];
+  /** Local-only Private routing. Default `any` does not change existing callers. */
+  privacy?: 'any' | 'local_only';
 }
 
 export class ConversationRuntime {
@@ -112,7 +114,7 @@ export class ConversationRuntime {
 
   async *sendMessage(
     conversationId: string,
-    input: { content: string; capability?: string },
+    input: { content: string; capability?: string; privacy?: 'any' | 'local_only' },
   ): AsyncGenerator<ConversationStreamEvent> {
     const content = input.content.trim();
     if (!content) {
@@ -182,6 +184,7 @@ export class ConversationRuntime {
           contextTokens: estimateTokens(content),
           traceId: execution.id,
           availableRuntimes: this.deps.availableRuntimes,
+          privacy: input.privacy ?? this.deps.privacy ?? 'any',
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

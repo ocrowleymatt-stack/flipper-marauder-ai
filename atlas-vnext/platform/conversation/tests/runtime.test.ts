@@ -260,7 +260,7 @@ describe('streaming and failure behaviour', () => {
     expect(snapshot?.messages.at(-1)?.content).toBe('recovered locally');
   });
 
-  it('does not Frankenstein a second model after partial assistant output', async () => {
+  it('mountain-compat: does not Frankenstein a second model after partial assistant output', async () => {
     const { runtime } = harness({
       executor: {
         async *execute(_routed, _ctx, observer) {

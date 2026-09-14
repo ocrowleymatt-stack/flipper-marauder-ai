@@ -141,7 +141,7 @@ describe('Nexus router (policy only)', () => {
     expect(() => router.resolve('ollama/llama3.2', { contextTokens: 50_000 })).toThrow(/exceeds context limit/);
   });
 
-  it('keeps nexus/local on local models only', () => {
+  it('mountain-compat: keeps nexus/local on local models only', () => {
     const { router } = harness();
     const decision = router.resolve('nexus/local');
     expect(decision.localOnly).toBe(true);
@@ -149,7 +149,7 @@ describe('Nexus router (policy only)', () => {
     expect(decision.candidateChain.every((id) => id.startsWith('ollama/'))).toBe(true);
   });
 
-  it('enforces local-only privacy policy even on non-local aliases', () => {
+  it('mountain-compat: enforces local-only privacy policy even on non-local aliases', () => {
     const { router } = harness();
     const decision = router.resolve('nexus/fast', { privacy: 'local_only' });
     expect(decision.localOnly).toBe(true);
@@ -228,7 +228,7 @@ describe('Nexus router (policy only)', () => {
     expect(decision.candidateChain.every((id) => !id.startsWith('openai/'))).toBe(true);
   });
 
-  it('does not wake expensive burst capacity when private-hosted Forge can satisfy', () => {
+  it('mountain-compat: does not wake expensive burst capacity when private-hosted Forge can satisfy', () => {
     const { registry, router } = harness();
     registry.register(
       model({

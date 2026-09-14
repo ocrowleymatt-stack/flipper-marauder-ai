@@ -1,9 +1,8 @@
+import { DEFAULT_ATTEMPTS_PER_CANDIDATE, MAX_ATTEMPTS_PER_CANDIDATE } from '@atlas-vnext/contracts';
 import type { RouteDecision, StreamChunk, StructuredFailure } from '@atlas-vnext/contracts';
 import { CircuitBreaker } from './circuit-breaker.ts';
-import { isRetryableError, ProviderHttpError } from './errors.ts';
+import { classifyProviderFailure, ProviderHttpError } from './errors.ts';
 import type { ExecutionContext, ExecutionObserver, HealthObserver, ProviderAdapter, ProviderHealthSnapshot } from './types.ts';
-
-const DEFAULT_ATTEMPTS = 2;
 
 /**
  * Execution broker: HOW a RouteDecision runs.
@@ -15,9 +14,16 @@ export class ExecutionBroker {
   private readonly breakers = new Map<string, CircuitBreaker>();
 
   constructor(
-    private readonly attemptsPerCandidate = DEFAULT_ATTEMPTS,
+    attemptsPerCandidate = DEFAULT_ATTEMPTS_PER_CANDIDATE,
     private readonly options: { health?: HealthObserver } = {},
-  ) {}
+  ) {
+    this.attemptsPerCandidate = Math.min(
+      Math.max(1, attemptsPerCandidate),
+      MAX_ATTEMPTS_PER_CANDIDATE,
+    );
+  }
+
+  private readonly attemptsPerCandidate: number;
 
   register(adapter: ProviderAdapter): void {
     this.adapters.set(adapter.providerId, adapter);
@@ -140,7 +146,8 @@ export class ExecutionBroker {
           breaker.failure();
           lastError = err instanceof Error ? err : new Error(String(err));
           const aborted = context.signal?.aborted || lastError.message === 'Execution aborted.';
-          const retryable = !visibleOutput && !aborted && isRetryableError(err);
+          const classified = classifyProviderFailure(err);
+          const retryable = !visibleOutput && !aborted && classified.retryable;
           observer?.onAttempt({
             index: attemptIndex,
             provider,
@@ -151,7 +158,7 @@ export class ExecutionBroker {
                 ? 'cancelled'
                 : err instanceof ProviderHttpError
                   ? err.failure.code
-                  : 'provider_error',
+                  : classified.code,
               lastError.message,
               retryable,
             ),

@@ -1,11 +1,15 @@
 import { randomUUID } from 'node:crypto';
+import { DEFAULT_RETENTION_BOUNDS } from '@atlas-vnext/contracts';
 import type { DomainEvent, EventBus } from './types.ts';
 
 export class MemoryEventBus implements EventBus {
   private readonly records: DomainEvent[] = [];
   private readonly listeners = new Map<string, Set<(event: DomainEvent) => void>>();
 
-  constructor(private readonly now: () => string = () => new Date().toISOString()) {}
+  constructor(
+    private readonly now: () => string = () => new Date().toISOString(),
+    private readonly maxRecords: number = DEFAULT_RETENTION_BOUNDS.maxEventLogEntries,
+  ) {}
 
   async publish(event: Omit<DomainEvent, 'eventId' | 'timestamp'>): Promise<DomainEvent> {
     const recorded: DomainEvent = {
@@ -14,6 +18,9 @@ export class MemoryEventBus implements EventBus {
       ...event,
     };
     this.records.push(recorded);
+    if (this.records.length > this.maxRecords) {
+      this.records.splice(0, this.records.length - this.maxRecords);
+    }
     const listeners = this.listeners.get(recorded.channel);
     if (listeners) {
       for (const listener of listeners) listener(recorded);

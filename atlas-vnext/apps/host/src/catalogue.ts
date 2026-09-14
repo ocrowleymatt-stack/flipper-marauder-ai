@@ -6,6 +6,8 @@ import type { RegisteredModel } from '@atlas-vnext/contracts';
  * upstreamId is the provider API model id when it differs from the registry key.
  *
  * Grok IDs are the current xAI canonical chat models (docs.x.ai/developers/models).
+ * `grok-build` is the catalogue alias for upstream `grok-build-0.1` (docs also list
+ * grok-code-fast-1). Do not invent additional model IDs.
  * Forge is the private inference service on Hetzner — one provider, not two catalogues.
  * RunPod is a single on-demand GPU profile, not a fake placeholder model.
  */
@@ -180,7 +182,9 @@ export const MODEL_CATALOGUE: RegisteredModel[] = [
     model: 'grok-build',
     label: 'Grok Build',
     upstreamId: 'grok-build-0.1',
-    capabilities: { text: true, reasoning: false, tools: true, vision: false, code: true },
+    // docs.x.ai/developers/models/grok-code-fast-1 — model id grok-build-0.1:
+    // text + image input → text, function calling, structured outputs, reasoning, agentic coding.
+    capabilities: { text: true, reasoning: true, tools: true, vision: true, code: true },
     contextWindow: 256_000,
     costClass: 'medium',
     latencyClass: 'fast',

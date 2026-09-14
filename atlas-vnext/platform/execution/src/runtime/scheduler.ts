@@ -205,7 +205,20 @@ export class RuntimeScheduler {
       }
 
       const active = pods.filter((pod) => podIsActive(pod));
-      const configured = this.runtime.podId ? pods.find((pod) => pod.id === this.runtime.podId) : undefined;
+      let probed: Awaited<ReturnType<RunPodClient['getPod']>> = null;
+      if (this.runtime.podId) {
+        try {
+          probed = await this.options.client.getPod(this.runtime.podId);
+        } catch (err) {
+          this.runtime.lastError = sanitizeText(err instanceof Error ? err.message : String(err));
+          this.runtime.healthFailure = this.runtime.lastError;
+          await this.persist('reconcile_probe_failed');
+          this.event('health_failed', this.runtime.healthFailure);
+          return structuredClone(this.runtime);
+        }
+      }
+      const listed = this.runtime.podId ? pods.find((pod) => pod.id === this.runtime.podId) : undefined;
+      const configured = probed ?? listed;
       const discovered = configured ?? active[0];
 
       if (discovered) {
@@ -214,27 +227,40 @@ export class RuntimeScheduler {
       }
 
       if (discovered && podIsActive(discovered)) {
-        if (this.runtime.lease) {
-          this.event('lease_orphaned', 'Recovered running pod after process restart; in-flight lease cannot be resumed.', {
-            leaseId: this.runtime.lease.id,
-            jobId: this.runtime.lease.jobId,
-          });
-          this.runtime.lease = null;
+        // Remote is still running. Never claim local `stopped` from a failed stop.
+        if (this.hasUnresolvedStop()) {
+          this.runtime.state = 'stopping';
+          await this.commitIdleStop();
+        } else {
+          if (this.runtime.lease) {
+            this.event('lease_orphaned', 'Recovered running pod after process restart; in-flight lease cannot be resumed.', {
+              leaseId: this.runtime.lease.id,
+              jobId: this.runtime.lease.jobId,
+            });
+            this.runtime.lease = null;
+          }
+          this.runtime.state = this.runtime.queue.length > 0 ? 'ready' : 'idle';
+          this.runtime.idleSince = this.runtime.idleSince ?? this.clock.iso();
+          this.runtime.readyAt = this.runtime.readyAt ?? this.clock.iso();
+          this.runtime.startupFailure = null;
+          this.event('rediscovered', 'Discovered already-running shared RunPod after restart.');
+          await this.armIdleStop('reconcile');
+          await this.commitIdleStop();
         }
-        this.runtime.state = this.runtime.queue.length > 0 ? 'ready' : 'idle';
-        this.runtime.idleSince = this.runtime.idleSince ?? this.clock.iso();
-        this.runtime.readyAt = this.runtime.readyAt ?? this.clock.iso();
-        this.runtime.startupFailure = null;
-        this.event('rediscovered', 'Discovered already-running shared RunPod after restart.');
-        await this.armIdleStop('reconcile');
-        await this.commitIdleStop();
       } else {
+        // Claim stopped only after the remote probe showed the pod is not active.
         if (this.runtime.state !== 'stopped' && this.runtime.state !== 'failed') {
           this.runtime.stopReason = this.runtime.stopReason ?? 'rediscovered_stopped';
         }
-        this.runtime.state = this.runtime.lease ? 'failed' : 'stopped';
-        this.runtime.lease = null;
-        this.runtime.idleSince = null;
+        if (this.runtime.lease) {
+          this.runtime.state = 'failed';
+          this.runtime.lease = null;
+          this.runtime.idleSince = null;
+        } else if (this.runtime.state !== 'stopped') {
+          this.markLocalStopped(this.runtime.stopReason ?? 'rediscovered_stopped');
+        } else {
+          this.runtime.idleSince = null;
+        }
       }
 
       if (active.length > this.maxActivePods) {
@@ -410,14 +436,21 @@ export class RuntimeScheduler {
     if (current && podIsRunning(current)) {
       this.runtime.podId = current.id;
       this.applyCost(current.costPerHr);
-      if (this.runtime.state === 'idle' || this.runtime.state === 'ready' || this.runtime.state === 'stopped' || this.runtime.state === 'stopping') {
-        if (this.runtime.state === 'idle' || this.runtime.state === 'stopping') {
+      if (
+        this.runtime.state === 'idle' ||
+        this.runtime.state === 'ready' ||
+        this.runtime.state === 'stopped' ||
+        this.runtime.state === 'stopping' ||
+        this.runtime.state === 'failed'
+      ) {
+        if (this.runtime.state === 'idle' || this.runtime.state === 'stopping' || this.runtime.state === 'failed') {
           this.event('idle_cancelled', 'New work arrived during idle grace; shutdown cancelled.');
         }
         this.runtime.state = 'ready';
         this.runtime.idleSince = null;
         this.runtime.stoppingAt = null;
         this.runtime.stopReason = null;
+        this.runtime.lastError = null;
       }
       if (!profilesCompatible(this.runtime.profile, profile) && RUNTIME_PROFILE_CATALOGUE[profile].requiresImageChange) {
         this.event('profile_change', `Runtime profile changing ${this.runtime.profile} → ${profile}.`);
@@ -632,9 +665,26 @@ export class RuntimeScheduler {
     return this.runtime.state === 'idle' || this.runtime.state === 'ready' || this.runtime.state === 'stopping';
   }
 
+  private hasUnresolvedStop(): boolean {
+    return (
+      this.runtime.podId != null &&
+      this.runtime.stoppedAt == null &&
+      this.runtime.stopReason != null &&
+      (this.runtime.state === 'failed' || this.runtime.state === 'stopping') &&
+      !this.runtime.lease &&
+      !this.hasRunnableQueuedWork() &&
+      !this.hasActiveWork() &&
+      !this.keepWarmActive()
+    );
+  }
+
   private async armIdleStop(reason: string): Promise<boolean> {
     if (!this.canConsiderIdleStop()) return false;
-    if (this.runtime.state !== 'idle' && this.runtime.state !== 'ready') return this.runtime.state === 'stopping';
+    if (this.runtime.state !== 'idle' && this.runtime.state !== 'ready') {
+      // Already stopping, but a failed stop must not be retried by the idle watcher.
+      if (this.runtime.state === 'stopping' && this.runtime.lastError && this.runtime.stopReason) return false;
+      return this.runtime.state === 'stopping';
+    }
     if (!this.runtime.idleSince) {
       this.runtime.state = 'idle';
       this.runtime.idleSince = this.clock.iso();
@@ -667,16 +717,33 @@ export class RuntimeScheduler {
     try {
       await this.options.client.stopPod(this.runtime.podId);
     } catch (err) {
-      this.runtime.lastError = sanitizeText(err instanceof Error ? err.message : String(err));
+      await this.recordStopFailure(err);
+      return;
     }
+    this.runtime.lastError = null;
+    this.markLocalStopped(this.runtime.stopReason);
+    await this.persist('stopped');
+    this.event('stopped', this.runtime.stopReason ?? 'stopped');
+    this.notify();
+  }
+
+  private markLocalStopped(reason: string | null): void {
     this.runtime.state = 'stopped';
+    this.runtime.stopReason = reason ?? this.runtime.stopReason;
     this.runtime.stoppedAt = this.clock.iso();
     this.runtime.durationMs =
       this.runtime.startedAt != null ? this.clock.now() - Date.parse(this.runtime.startedAt) : null;
     this.runtime.idleSince = null;
     this.applyCost(this.runtime.costPerHr);
-    await this.persist('stopped');
-    this.event('stopped', this.runtime.stopReason ?? 'stopped');
+  }
+
+  private async recordStopFailure(err: unknown): Promise<void> {
+    const message = sanitizeText(err instanceof Error ? err.message : String(err));
+    this.runtime.lastError = message;
+    this.runtime.state = 'failed';
+    this.runtime.stoppedAt = null;
+    await this.persist('stop_failed');
+    this.event('stop_failed', message);
     this.notify();
   }
 

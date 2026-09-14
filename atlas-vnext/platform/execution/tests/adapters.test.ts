@@ -253,7 +253,7 @@ describe('Gemini adapter contract', () => {
     });
     const chunks = await collect(adapter.stream('flash', { prompt: 'search' }));
     expect(chunks.filter((chunk) => chunk.type === 'tool_call')).toEqual([
-      { type: 'tool_call', call: { id: 'lookup', toolId: 'lookup', arguments: { q: 'atlas' } } },
+      { type: 'tool_call', call: { id: 'gcall:0', toolId: 'lookup', arguments: { q: 'atlas' } } },
     ]);
 
     const incomplete = new GeminiAdapter({
@@ -272,6 +272,36 @@ describe('Gemini adapter contract', () => {
     const dropped = await collect(incomplete.stream('flash', { prompt: 'search' }));
     expect(dropped.some((chunk) => chunk.type === 'tool_call')).toBe(false);
     expect(dropped.some((chunk) => chunk.type === 'warning')).toBe(true);
+  });
+
+  it('keeps two same-name functionCall parts as distinct tool calls', async () => {
+    const adapter = new GeminiAdapter({
+      secrets: new MapSecretStore({ GEMINI_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      transport: transportFor(() => ({
+        status: 200,
+        body: sse([
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    { functionCall: { name: 'lookup', args: { q: 'one' } } },
+                    { functionCall: { name: 'lookup', args: { q: 'two' } } },
+                  ],
+                },
+              },
+            ],
+          }),
+        ]),
+      })),
+    });
+    const chunks = await collect(adapter.stream('flash', { prompt: 'search' }));
+    expect(chunks.filter((chunk) => chunk.type === 'tool_call')).toEqual([
+      { type: 'tool_call', call: { id: 'gcall:0', toolId: 'lookup', arguments: { q: 'one' } } },
+      { type: 'tool_call', call: { id: 'gcall:1', toolId: 'lookup', arguments: { q: 'two' } } },
+    ]);
   });
 });
 

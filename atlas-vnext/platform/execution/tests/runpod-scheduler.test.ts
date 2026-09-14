@@ -654,3 +654,99 @@ describe('RunPod failover and unrelated providers', () => {
     expect(observer.list()).toHaveLength(MAX_RUNTIME_EVENTS);
   });
 });
+
+describe('RunPod idle stop failure must never report stopped', () => {
+  class FlakyStopClient extends MemoryRunPodClient {
+    failStop = true;
+    async stopPod(id: string): Promise<RunPodPod> {
+      this.stopCalls.push(id);
+      if (this.failStop) throw new Error('stop refused: Bearer rp-secret-value-do-not-leak');
+      return super.stopPod(id);
+    }
+  }
+
+  class CountingStore extends MemoryRuntimeStateStore {
+    saves = 0;
+    async save(runtime: Parameters<MemoryRuntimeStateStore['save']>[0]): Promise<void> {
+      this.saves += 1;
+      await super.save(runtime);
+    }
+  }
+
+  async function idleThenStop(client: FlakyStopClient, store?: CountingStore) {
+    const harnessed = harness({ client, store, idleShutdownSeconds: 5 });
+    const lease = await harnessed.scheduler.acquire({ id: 'job-1', profile: 'llm' });
+    await harnessed.scheduler.release(lease.id);
+    harnessed.clock.advance(6_000);
+    await harnessed.scheduler.tick();
+    return harnessed;
+  }
+
+  it('does not mark the runtime stopped when stopPod throws', async () => {
+    const client = new FlakyStopClient();
+    client.seed({ id: 'pod-shared', desiredStatus: 'EXITED' });
+    const { scheduler, observer } = await idleThenStop(client);
+    const snap = scheduler.snapshot();
+    expect(client.stopCalls).toEqual(['pod-shared']);
+    expect(snap.runtime.state).not.toBe('stopped');
+    expect(snap.runtime.state).toBe('failed');
+    expect(snap.runtime.stoppedAt).toBeNull();
+    expect(snap.runtime.podId).toBe('pod-shared');
+    expect(snap.runtime.lastError).toMatch(/stop refused/);
+    expect(snap.runtime.lastError).not.toContain('rp-secret-value-do-not-leak');
+    expect(observer.list().some((event) => event.type === 'stopped')).toBe(false);
+    expect(observer.list().some((event) => event.type === 'stop_failed')).toBe(true);
+    expect(client.pods.get('pod-shared')?.desiredStatus).toBe('RUNNING');
+  });
+
+  it('reconcile observes the remote still running and does not start a second pod', async () => {
+    const client = new FlakyStopClient();
+    client.seed({ id: 'pod-shared', desiredStatus: 'EXITED' });
+    const { scheduler } = await idleThenStop(client);
+    const starts = [...client.startCalls];
+    const recovered = await scheduler.reconcile();
+    expect(recovered.state).not.toBe('stopped');
+    expect(recovered.podId).toBe('pod-shared');
+    expect(client.pods.get('pod-shared')?.desiredStatus).toBe('RUNNING');
+    expect(client.startCalls).toEqual(starts);
+    expect(client.createCalls).toBe(0);
+    const lease = await scheduler.acquire({ id: 'job-reuse', profile: 'llm' });
+    expect(lease.jobId).toBe('job-reuse');
+    expect(client.startCalls).toEqual(starts);
+    expect(client.createCalls).toBe(0);
+    await scheduler.release(lease.id);
+  });
+
+  it('a later successful stop/reconcile can reach stopped', async () => {
+    const client = new FlakyStopClient();
+    client.seed({ id: 'pod-shared', desiredStatus: 'EXITED' });
+    const { scheduler } = await idleThenStop(client);
+    expect(scheduler.snapshot().runtime.state).toBe('failed');
+    client.failStop = false;
+    const recovered = await scheduler.reconcile();
+    expect(recovered.state).toBe('stopped');
+    expect(recovered.stoppedAt).toBeTruthy();
+    expect(recovered.stopReason).toMatch(/idle_timeout/);
+    expect(recovered.podId).toBe('pod-shared');
+    expect(client.pods.get('pod-shared')?.desiredStatus).toBe('EXITED');
+    expect(client.createCalls).toBe(0);
+  });
+
+  it('idle watcher does not tight-loop retry, event, or disk after stop failure', async () => {
+    const client = new FlakyStopClient();
+    client.seed({ id: 'pod-shared', desiredStatus: 'EXITED' });
+    const store = new CountingStore();
+    const { scheduler, observer, clock } = await idleThenStop(client, store);
+    const stops = client.stopCalls.length;
+    const events = observer.list().length;
+    const saves = store.saves;
+    clock.advance(30_000);
+    await scheduler.tick();
+    await scheduler.tick();
+    await scheduler.tick();
+    expect(client.stopCalls.length).toBe(stops);
+    expect(observer.list().length).toBe(events);
+    expect(store.saves).toBe(saves);
+    expect(scheduler.snapshot().runtime.state).not.toBe('stopped');
+  });
+});

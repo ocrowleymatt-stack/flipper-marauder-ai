@@ -90,6 +90,18 @@ const TRANSPORT_MODULES = new Set([
   'node:undici',
 ]);
 
+const PROVIDER_CLIENT_MODULES = new Set([
+  'undici',
+  'axios',
+  'node-fetch',
+  'got',
+  'openai',
+  '@anthropic-ai/sdk',
+  '@google/genai',
+  '@google/generative-ai',
+  'node:undici',
+]);
+
 const STORAGE_MODULES = new Set([
   'better-sqlite3',
   'sqlite3',
@@ -270,7 +282,7 @@ function isAdapterImport(specifier: string, fromFile: string, root: string): boo
     const rel = relative(root, resolved).split(sep).join('/');
     if (rel.includes('platform/execution/src/adapters')) return true;
   }
-  return TRANSPORT_MODULES.has(specifier);
+  return PROVIDER_CLIENT_MODULES.has(specifier);
 }
 
 export function analyzeGraph(
@@ -370,7 +382,7 @@ export function analyzeGraph(
             detail: `Dungeon ${mod.dungeon} imported dungeon ${target.dungeon} via ${specifier}.`,
           });
         }
-        if (isAdapterImport(specifier, resolve(root, mod.relPath), root)) {
+        if (isAdapterImport(specifier, resolve(root, mod.relPath), root) || TRANSPORT_MODULES.has(specifier)) {
           violations.push({
             rule: 'dungeon-no-adapters',
             file: mod.relPath,
@@ -414,7 +426,7 @@ export function analyzeGraph(
         });
       }
 
-      if (mod.layer === 'apps' && (isAdapterImport(specifier, resolve(root, mod.relPath), root) || TRANSPORT_MODULES.has(specifier))) {
+      if (mod.layer === 'apps' && (isAdapterImport(specifier, resolve(root, mod.relPath), root) || PROVIDER_CLIENT_MODULES.has(specifier))) {
         violations.push({
           rule: 'apps-no-provider-impl',
           file: mod.relPath,

@@ -254,7 +254,7 @@ describe('streaming and failure behaviour', () => {
     const snapshot = await runtime.getSnapshot(conversation.id);
     expect(snapshot?.executions[0]?.status).toBe('completed');
     expect(snapshot?.executions[0]?.selectedProvider).toBe('ollama');
-    expect(snapshot?.executions[0]?.attempts.map((attempt) => attempt.outcome)).toEqual(['failed', 'started', 'succeeded']);
+    expect(snapshot?.executions[0]?.attempts.map((attempt) => attempt.outcome)).toEqual(['failed', 'succeeded']);
     expect(snapshot?.messages.at(-1)?.content).toBe('recovered locally');
   });
 

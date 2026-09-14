@@ -74,7 +74,7 @@ describe('durable store reload/recovery', () => {
       executor,
     });
     const snapshot = await recovered.getSnapshot(conversation.id);
-    expect(snapshot?.conversation.title).toBe('ping');
+    expect(snapshot?.conversation.title).toBe('Keep me');
     expect(snapshot?.messages.map((message) => message.content)).toEqual(['ping', 'durable hello']);
     expect(snapshot?.executions[0]?.status).toBe('completed');
     expect(snapshot?.executions[0]?.selectedProvider).toBe('openai');

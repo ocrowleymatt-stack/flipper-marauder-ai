@@ -66,13 +66,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
       const content = typeof body.content === 'string' ? body.content : '';
       const capability = typeof body.capability === 'string' ? body.capability : 'nexus/fast';
       sseHeaders(res);
-      for await (const event of options.runtime.sendMessage(decodeURIComponent(messageMatch[1]!), {
-        content,
-        capability,
-      })) {
-        writeSse(res, event.type, event);
-        if (req.destroyed) break;
-      }
+          for await (const event of options.runtime.sendMessage(decodeURIComponent(messageMatch[1]!), {
+            content,
+            capability,
+          })) {
+            writeSse(res, event.type, event);
+            if (res.destroyed) break;
+          }
       res.end();
       return;
     }

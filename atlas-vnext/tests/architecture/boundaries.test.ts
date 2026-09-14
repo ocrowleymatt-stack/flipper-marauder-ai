@@ -13,6 +13,8 @@ describe('architecture boundary graph', () => {
     expect(report.modules.some((m) => m.layer === 'nexus')).toBe(true);
     expect(report.modules.some((m) => m.layer === 'execution' && m.definesCircuitBreaker)).toBe(true);
     expect(report.modules.some((m) => m.layer === 'execution' && m.definesExecutionBroker)).toBe(true);
+    expect(report.modules.some((m) => m.layer === 'conversation')).toBe(true);
+    expect(report.modules.some((m) => m.layer === 'apps')).toBe(true);
   });
 
   it('fails when Nexus imports fetch transport', () => {
@@ -142,6 +144,45 @@ describe('architecture boundary graph', () => {
       `,
     });
     expect(report.violations.some((v) => v.rule === 'apps-no-provider-impl')).toBe(true);
+  });
+
+  it('fails when the web UI imports execution or Nexus', () => {
+    const report = analyzeGraph(root, {
+      'apps/web/src/forbidden-execution.ts': `
+        import { ExecutionBroker } from '@atlas-vnext/execution';
+        import { NexusRouter } from '@atlas-vnext/nexus';
+        export { ExecutionBroker, NexusRouter };
+      `,
+    });
+    expect(report.violations.some((v) => v.rule === 'apps-no-provider-impl' && v.detail.includes('execution'))).toBe(true);
+    expect(report.violations.some((v) => v.rule === 'apps-no-provider-impl' && v.detail.includes('nexus'))).toBe(true);
+  });
+
+  it('fails when conversation domain imports Nexus, execution, or adapters', () => {
+    const report = analyzeGraph(root, {
+      'platform/conversation/src/forbidden-wiring.ts': `
+        import { NexusRouter } from '@atlas-vnext/nexus';
+        import { MockAdapter } from '../../execution/src/adapters/mock.ts';
+        export { NexusRouter, MockAdapter };
+      `,
+    });
+    expect(report.violations.some((v) => v.rule === 'conversation-ports-only')).toBe(true);
+    expect(report.violations.some((v) => v.rule === 'conversation-no-adapters')).toBe(true);
+  });
+
+  it('fails when conversation package.json depends on execution', () => {
+    const report = analyzeGraph(root, {
+      'platform/conversation/package.json': JSON.stringify({
+        name: '@atlas-vnext/conversation',
+        dependencies: {
+          '@atlas-vnext/contracts': '*',
+          '@atlas-vnext/execution': '*',
+        },
+      }),
+    });
+    expect(report.violations.some((v) => v.rule === 'conversation-package-deps' && v.detail.includes('execution'))).toBe(
+      true,
+    );
   });
 
   it('fails CI when the committed negative fixture is treated as Nexus source', () => {

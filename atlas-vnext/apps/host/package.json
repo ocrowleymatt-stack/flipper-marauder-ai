@@ -1,0 +1,16 @@
+{
+  "name": "@atlas-vnext/host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@atlas-vnext/contracts": "*",
+    "@atlas-vnext/conversation": "*",
+    "@atlas-vnext/execution": "*",
+    "@atlas-vnext/nexus": "*",
+    "@atlas-vnext/persistence": "*"
+  }
+}

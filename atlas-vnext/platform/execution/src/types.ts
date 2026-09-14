@@ -1,4 +1,4 @@
-import type { StreamChunk } from '@atlas-vnext/contracts';
+import type { ExecutionAttempt, RouteDecision, StreamChunk } from '@atlas-vnext/contracts';
 
 export interface ExecutionContext {
   prompt: string;
@@ -19,4 +19,13 @@ export interface ExecutionContext {
 export interface ProviderAdapter {
   readonly providerId: string;
   stream(model: string, context: ExecutionContext): AsyncGenerator<StreamChunk>;
+}
+
+/**
+ * Lifecycle observer for a single broker invocation.
+ * Conversation/domain persistence uses this; Nexus never sees it.
+ */
+export interface ExecutionObserver {
+  onAttempt(attempt: Pick<ExecutionAttempt, 'index' | 'provider' | 'model' | 'outcome' | 'error' | 'emittedVisibleOutput'>): void;
+  onSelected?(decision: Pick<RouteDecision, 'provider' | 'model'>): void;
 }

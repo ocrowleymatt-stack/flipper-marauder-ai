@@ -12,29 +12,36 @@ Zero-downtime cutover is a later concern. This repository is a greenfield design
 - [x] Explicit non-port list
 - [x] CI: install, lint, typecheck, unit tests, architecture tests, build
 
-## Phase 1 — platform durability
+## Phase 1 — conversation spine (this PR)
 
-- CAS + PostgreSQL metadata migrations
-- Job engine with leases and SSE
+- [x] Conversation create/list/retrieve with durable messages
+- [x] Execution lifecycle, streaming, provenance, reload/recovery
+- [x] Host HTTP/SSE + workspace UI
+- [x] File-backed metadata store matching the PostgreSQL schema target
+
+## Phase 2 — platform durability
+
+- PostgreSQL metadata migrations (replace the local file adapter)
+- Job engine with leases and SSE for long-running dungeon work
 - Permissions grant persistence
 - Auth
 
-## Phase 2 — real adapters
+## Phase 3 — real adapters
 
 - OpenAI, Anthropic, Gemini, Ollama, Venice in **execution**
 - Runtime health probes writing snapshots into Nexus
 
-## Phase 3 — first dungeon
+## Phase 4 — first dungeon
 
 Pick one (likely writing or investigation). Port behaviour, not files. No Nexus domain modules.
 
-## Phase 4 — OSINT
+## Phase 5 — OSINT
 
 `dungeons/osint` behind jobs + contracts. Bridge BigBrother; do not vendor it. Do not embed `who()` in Nexus.
 
-## Phase 5 — shell and ops
+## Phase 6 — shell and ops
 
-New `apps/web`. New deploy path without `/v12`.
+Harden `apps/web` / `apps/host`. New deploy path without `/v12`. Auth and multi-user workspace.
 
 ## Data (when a legacy instance must be imported)
 

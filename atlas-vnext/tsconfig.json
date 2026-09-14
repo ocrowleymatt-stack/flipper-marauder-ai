@@ -18,13 +18,19 @@
     "paths": {
       "@atlas-vnext/contracts": ["./packages/contracts/src/index.ts"],
       "@atlas-vnext/nexus": ["./platform/nexus/src/index.ts"],
-      "@atlas-vnext/execution": ["./platform/execution/src/index.ts"]
+      "@atlas-vnext/execution": ["./platform/execution/src/index.ts"],
+      "@atlas-vnext/conversation": ["./platform/conversation/src/index.ts"],
+      "@atlas-vnext/events": ["./platform/events/src/index.ts"],
+      "@atlas-vnext/persistence": ["./platform/persistence/src/index.ts"],
+      "@atlas-vnext/provenance": ["./platform/provenance/src/index.ts"],
+      "@atlas-vnext/jobs": ["./platform/jobs/src/index.ts"]
     }
   },
   "include": [
     "packages/**/*.ts",
     "platform/**/*.ts",
     "dungeons/**/*.ts",
+    "apps/host/**/*.ts",
     "tests/**/*.ts",
     "vitest.config.ts"
   ]

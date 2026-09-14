@@ -1,6 +1,6 @@
-import type { RouteDecision, StreamChunk } from '@atlas-vnext/contracts';
+import type { RouteDecision, StreamChunk, StructuredFailure } from '@atlas-vnext/contracts';
 import { CircuitBreaker } from './circuit-breaker.ts';
-import type { ExecutionContext, ProviderAdapter } from './types.ts';
+import type { ExecutionContext, ExecutionObserver, ProviderAdapter } from './types.ts';
 
 const DEFAULT_ATTEMPTS = 2;
 
@@ -28,8 +28,13 @@ export class ExecutionBroker {
     return breaker;
   }
 
-  async *execute(decision: RouteDecision, context: ExecutionContext): AsyncGenerator<StreamChunk> {
+  async *execute(
+    decision: RouteDecision,
+    context: ExecutionContext,
+    observer?: ExecutionObserver,
+  ): AsyncGenerator<StreamChunk> {
     let lastError: Error | null = null;
+    let attemptIndex = 0;
 
     for (const candidate of decision.candidateChain) {
       const slash = candidate.indexOf('/');
@@ -38,14 +43,45 @@ export class ExecutionBroker {
       if (!provider || !model) continue;
 
       const adapter = this.adapters.get(provider);
-      if (!adapter) continue;
+      if (!adapter) {
+        attemptIndex += 1;
+        observer?.onAttempt({
+          index: attemptIndex,
+          provider,
+          model,
+          outcome: 'skipped',
+          error: failure('no_adapter', `No adapter registered for ${provider}.`, false),
+          emittedVisibleOutput: false,
+        });
+        continue;
+      }
 
       const breaker = this.breaker(provider);
-      if (breaker.isOpen()) continue;
+      if (breaker.isOpen()) {
+        attemptIndex += 1;
+        observer?.onAttempt({
+          index: attemptIndex,
+          provider,
+          model,
+          outcome: 'skipped',
+          error: failure('circuit_open', `Circuit open for ${provider}.`, true),
+          emittedVisibleOutput: false,
+        });
+        continue;
+      }
 
       for (let attempt = 1; attempt <= this.attemptsPerCandidate; attempt += 1) {
         const bufferedTools: StreamChunk[] = [];
         let visibleText = false;
+        attemptIndex += 1;
+        observer?.onAttempt({
+          index: attemptIndex,
+          provider,
+          model,
+          outcome: 'started',
+          error: null,
+          emittedVisibleOutput: false,
+        });
 
         try {
           for await (const chunk of adapter.stream(model, context)) {
@@ -66,12 +102,30 @@ export class ExecutionBroker {
             yield call;
           }
           breaker.success();
+          observer?.onAttempt({
+            index: attemptIndex,
+            provider,
+            model,
+            outcome: context.signal?.aborted ? 'cancelled' : 'succeeded',
+            error: null,
+            emittedVisibleOutput: visibleText,
+          });
+          observer?.onSelected?.({ provider, model });
           return;
         } catch (err) {
           breaker.failure();
           lastError = err instanceof Error ? err : new Error(String(err));
+          const aborted = context.signal?.aborted || lastError.message === 'Execution aborted.';
+          observer?.onAttempt({
+            index: attemptIndex,
+            provider,
+            model,
+            outcome: aborted ? 'cancelled' : 'failed',
+            error: failure(aborted ? 'cancelled' : 'provider_error', lastError.message, !visibleText && !aborted),
+            emittedVisibleOutput: visibleText,
+          });
 
-          if (visibleText || context.signal?.aborted) {
+          if (visibleText || aborted) {
             throw lastError;
           }
         }
@@ -82,4 +136,8 @@ export class ExecutionBroker {
       `Execution failed for ${decision.candidateChain.join(' → ')}: ${lastError?.message ?? 'no adapter'}`,
     );
   }
+}
+
+function failure(code: string, message: string, retryable: boolean): StructuredFailure {
+  return { code, message, retryable, at: new Date().toISOString() };
 }

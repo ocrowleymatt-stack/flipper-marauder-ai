@@ -28,6 +28,8 @@ Does not own: route policy, UI, project/CAS writes, dungeon modules.
 | `permissions` | Capability scopes; default deny |
 | `observability` | Route/attempt traces |
 | `flags` | Feature flags |
+| `conversation` | Conversation, message, and execution state |
+| `persistence` | Local/dev durable metadata adapter |
 
 None of these are dungeon modules. None may import dungeons.
 
@@ -44,11 +46,16 @@ None of these are dungeon modules. None may import dungeons.
 
 Dungeons may call Nexus (route) and the Execution **broker** (run). They may not import `platform/execution/src/adapters/*` or provider SDKs.
 
+## Conversation domain (`platform/conversation`)
+
+Owns conversation, message, and execution records. Does not import Nexus or execution adapters. The host injects a capability router and a model executor.
+
 ## Flow
 
 ```text
-Dungeon  →  permissions gate (default deny)
-         →  projects / storage / jobs / events / provenance
+UI  →  host (composition root)
+    →  conversation runtime
          →  Nexus.resolve(alias) → RouteDecision
          →  ExecutionBroker.execute(decision)
+         →  durable conversations / messages / executions / events
 ```

@@ -6,7 +6,13 @@ Greenfield rebuild of Atlas.
 
 This repository is starting from a clean architectural foundation. Existing Atlas-related repositories are reference sources for proven behaviour, contracts, tests and operational lessons; they are not copied wholesale.
 
-The **design gate** lives in [`atlas-vnext/`](atlas-vnext/README.md). Canonical branch: `cursor/atlas-vnext-design-gate-2e35`.
+The **design gate** and conversation spine live in [`atlas-vnext/`](atlas-vnext/README.md).
+
+```bash
+cd atlas-vnext
+npm ci
+npm run dev
+```
 
 Do not bulk-copy implementation from Atlas Mountain or other legacy repositories. Product implementation proceeds subsystem-by-subsystem after this gate.
 

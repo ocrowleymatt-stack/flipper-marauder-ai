@@ -83,10 +83,18 @@ export const toolCallRequestSchema = z.object({
 });
 export type ToolCallRequest = z.infer<typeof toolCallRequestSchema>;
 
+export const tokenUsageSchema = z.object({
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+});
+export type TokenUsage = z.infer<typeof tokenUsageSchema>;
+
 export const streamChunkSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text'), text: z.string() }),
   z.object({ type: z.literal('reasoning'), text: z.string() }),
   z.object({ type: z.literal('tool_call'), call: toolCallRequestSchema }),
+  z.object({ type: z.literal('usage'), usage: tokenUsageSchema }),
 ]);
 export type StreamChunk = z.infer<typeof streamChunkSchema>;
 
@@ -279,3 +287,123 @@ export const outboxRecordSchema = z.object({
   publishedAt: z.string().nullable(),
 });
 export type OutboxRecord = z.infer<typeof outboxRecordSchema>;
+
+/**
+ * Conversation spine contracts.
+ *
+ * Conversations and executions are platform/domain state, not UI memory
+ * and not Nexus routing policy. Message bodies of conversational scale
+ * live in metadata storage; CAS remains for artefacts/blobs.
+ */
+export const conversationSchema = z.object({
+  id: z.string().min(1),
+  urn: z.string().min(1),
+  title: z.string().min(1),
+  projectId: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Conversation = z.infer<typeof conversationSchema>;
+
+export const messageRoleSchema = z.enum(['user', 'assistant', 'system']);
+export type MessageRole = z.infer<typeof messageRoleSchema>;
+
+export const messageSchema = z.object({
+  id: z.string().min(1),
+  urn: z.string().min(1),
+  conversationId: z.string().min(1),
+  role: messageRoleSchema,
+  content: z.string(),
+  sequence: z.number().int().nonnegative(),
+  executionId: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Message = z.infer<typeof messageSchema>;
+
+export const executionStatusSchema = z.enum([
+  'queued',
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+]);
+export type ExecutionStatus = z.infer<typeof executionStatusSchema>;
+
+export const executionAttemptOutcomeSchema = z.enum([
+  'started',
+  'succeeded',
+  'failed',
+  'skipped',
+  'cancelled',
+]);
+export type ExecutionAttemptOutcome = z.infer<typeof executionAttemptOutcomeSchema>;
+
+export const executionAttemptSchema = z.object({
+  index: z.number().int().nonnegative(),
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  startedAt: z.string(),
+  endedAt: z.string().nullable(),
+  outcome: executionAttemptOutcomeSchema,
+  error: structuredFailureSchema.nullable(),
+  emittedVisibleOutput: z.boolean(),
+});
+export type ExecutionAttempt = z.infer<typeof executionAttemptSchema>;
+
+export const executionRecordSchema = z.object({
+  id: z.string().min(1),
+  urn: z.string().min(1),
+  conversationId: z.string().min(1),
+  userMessageId: z.string().min(1),
+  assistantMessageId: z.string().nullable(),
+  status: executionStatusSchema,
+  capability: z.string().min(1),
+  route: routeDecisionSchema.nullable(),
+  selectedProvider: z.string().nullable(),
+  selectedModel: z.string().nullable(),
+  attempts: z.array(executionAttemptSchema),
+  usage: tokenUsageSchema.nullable(),
+  failureReason: structuredFailureSchema.nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  startedAt: z.string().nullable(),
+  completedAt: z.string().nullable(),
+});
+export type ExecutionRecord = z.infer<typeof executionRecordSchema>;
+
+export const conversationEventTypeSchema = z.enum([
+  'conversation.created',
+  'message.appended',
+  'execution.created',
+  'execution.started',
+  'execution.routed',
+  'execution.attempt_started',
+  'execution.attempt_failed',
+  'execution.attempt_succeeded',
+  'execution.attempt_skipped',
+  'execution.completed',
+  'execution.failed',
+  'execution.cancelled',
+]);
+export type ConversationEventType = z.infer<typeof conversationEventTypeSchema>;
+
+export const conversationStreamEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('message'), message: messageSchema }),
+  z.object({
+    type: z.literal('message.delta'),
+    messageId: z.string(),
+    content: z.string(),
+  }),
+  z.object({ type: z.literal('execution'), execution: executionRecordSchema }),
+  z.object({ type: z.literal('error'), failure: structuredFailureSchema }),
+  z.object({ type: z.literal('done') }),
+]);
+export type ConversationStreamEvent = z.infer<typeof conversationStreamEventSchema>;
+
+export const conversationSnapshotSchema = z.object({
+  conversation: conversationSchema,
+  messages: z.array(messageSchema),
+  executions: z.array(executionRecordSchema),
+});
+export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema>;

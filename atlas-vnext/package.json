@@ -20,6 +20,7 @@
     "test:nexus": "vitest run platform/nexus",
     "test:execution": "vitest run platform/execution",
     "test:providers": "vitest run platform/execution/tests",
+    "test:runtime": "vitest run platform/execution/tests/runpod-scheduler.test.ts platform/execution/tests/forge.test.ts platform/execution/tests/xai.test.ts",
     "test:live": "vitest run tests/live",
     "smoke:live": "tsx scripts/live-smoke.ts",
     "build": "tsc -p tsconfig.json --noEmit && tsc -p apps/web/tsconfig.json --noEmit && npm run build -w @atlas-vnext/web"

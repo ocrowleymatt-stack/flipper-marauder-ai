@@ -434,7 +434,7 @@ export class ConversationRuntime {
       traceId: decision.traceId,
       capability: execution.capability,
       usage: execution.usage,
-      locality: decision.localOnly ? 'local' : 'cloud',
+      locality: decision.locality,
       latencyMs: execution.latencyMs ?? null,
       selectedRouteId: decision.resolvedRouteId,
       attemptOutcomes: execution.attempts.map((attempt) => ({

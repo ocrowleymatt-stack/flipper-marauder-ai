@@ -4,6 +4,7 @@ import {
   getSnapshot,
   listConversations,
   sendMessage,
+  runtimeWaitingLabel,
   type Capability,
   type Conversation,
   type ConversationSnapshot,
@@ -20,6 +21,7 @@ export function App() {
   const [capability, setCapability] = useState<Capability>('nexus/fast');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [waitLabel, setWaitLabel] = useState<string | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -90,10 +92,17 @@ export function App() {
   async function runPrompt(conversationId: string, content: string, selected: Capability) {
     setBusy(true);
     setError(null);
+    setWaitLabel(null);
     try {
       for await (const event of sendMessage(conversationId, content, selected)) {
         if (event.type === 'error' && event.failure && typeof event.failure === 'object' && 'message' in event.failure) {
           setError(String((event.failure as { message: string }).message));
+        }
+        if (event.type === 'provider.warning' && typeof event.message === 'string') {
+          setWaitLabel(runtimeWaitingLabel(event.message));
+        }
+        if (event.type === 'assistant.delta' || event.type === 'message.delta' || event.type === 'assistant.completed') {
+          setWaitLabel(null);
         }
         setSnapshot((current) => applyStream(current, conversationId, event));
       }
@@ -107,6 +116,7 @@ export function App() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+      setWaitLabel(null);
     }
   }
 
@@ -180,6 +190,12 @@ export function App() {
               </article>
             ))
           )}
+          {busy && waitLabel ? (
+            <article className="message assistant waiting" aria-live="polite">
+              <div className="role">Atlas</div>
+              <div className="body waiting-runtime">{waitLabel}</div>
+            </article>
+          ) : null}
           <div ref={bottom} />
         </section>
         {error ? (

@@ -5,6 +5,7 @@ import type {
   LatencyClass,
   RegisteredModel,
   RouteDecision,
+  RuntimeClass,
 } from '@atlas-vnext/contracts';
 import { capabilityAliasSchema } from '@atlas-vnext/contracts';
 import { ALIAS_POLICIES } from './alias-policy.ts';
@@ -72,6 +73,8 @@ export class NexusRouter {
       model,
       candidateChain: [target],
       localOnly: registered.locality === 'local' || request.privacy === 'local_only',
+      locality: registered.locality,
+      runtimeClass: registered.runtimeClass,
       decisionReason: `Explicit route ${target}`,
       traceId,
       evaluatedAt,
@@ -111,6 +114,8 @@ export class NexusRouter {
       model: primary.model,
       candidateChain,
       localOnly,
+      locality: primary.locality,
+      runtimeClass: primary.runtimeClass,
       decisionReason: `${policy.reason} → ${primary.provider}/${primary.model}`,
       traceId,
       evaluatedAt,
@@ -133,6 +138,8 @@ export class NexusRouter {
 
   private sortCandidates(candidates: RegisteredModel[], sort: 'latency' | 'cost'): RegisteredModel[] {
     return [...candidates].sort((a, b) => {
+      const byRuntime = runtimeRank(a.runtimeClass) - runtimeRank(b.runtimeClass);
+      if (byRuntime !== 0) return byRuntime;
       if (sort === 'cost') {
         const byCost = costRank(a.costClass) - costRank(b.costClass);
         if (byCost !== 0) return byCost;
@@ -190,4 +197,9 @@ function costRank(cost: CostClass): number {
 
 function latencyRank(latency: LatencyClass): number {
   return { fast: 0, medium: 1, slow: 2 }[latency];
+}
+
+/** Prefer local/private always-on capacity over waking a paid burst GPU. */
+function runtimeRank(runtime: RuntimeClass): number {
+  return { always_available: 0, private_hosted: 1, on_demand: 2, expensive_burst: 3 }[runtime];
 }

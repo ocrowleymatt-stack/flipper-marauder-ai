@@ -1,5 +1,6 @@
 import type { RouteDecision, StreamChunk, StructuredFailure } from '@atlas-vnext/contracts';
 import { CircuitBreaker } from './circuit-breaker.ts';
+import { isRetryableError, ProviderHttpError } from './errors.ts';
 import type { ExecutionContext, ExecutionObserver, HealthObserver, ProviderAdapter, ProviderHealthSnapshot } from './types.ts';
 
 const DEFAULT_ATTEMPTS = 2;
@@ -139,12 +140,21 @@ export class ExecutionBroker {
           breaker.failure();
           lastError = err instanceof Error ? err : new Error(String(err));
           const aborted = context.signal?.aborted || lastError.message === 'Execution aborted.';
+          const retryable = !visibleOutput && !aborted && isRetryableError(err);
           observer?.onAttempt({
             index: attemptIndex,
             provider,
             model,
             outcome: aborted ? 'cancelled' : 'failed',
-            error: failure(aborted ? 'cancelled' : 'provider_error', lastError.message, !visibleOutput && !aborted),
+            error: failure(
+              aborted
+                ? 'cancelled'
+                : err instanceof ProviderHttpError
+                  ? err.failure.code
+                  : 'provider_error',
+              lastError.message,
+              retryable,
+            ),
             emittedVisibleOutput: visibleOutput,
           });
           if (breaker.isOpen()) {
@@ -153,6 +163,9 @@ export class ExecutionBroker {
 
           if (visibleOutput || aborted) {
             throw lastError;
+          }
+          if (!retryable) {
+            break;
           }
         }
       }

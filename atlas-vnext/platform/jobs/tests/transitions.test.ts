@@ -14,6 +14,12 @@ describe('job state machine', () => {
     expect(() => assertJobTransition('paused', 'running')).not.toThrow();
   });
 
+  it('allows waiting_runtime while a shared GPU warms', () => {
+    expect(() => assertJobTransition('queued', 'waiting_runtime')).not.toThrow();
+    expect(() => assertJobTransition('running', 'waiting_runtime')).not.toThrow();
+    expect(() => assertJobTransition('waiting_runtime', 'running')).not.toThrow();
+  });
+
   it('rejects illegal transitions', () => {
     expect(() => assertJobTransition('completed', 'running')).toThrow(/Illegal job transition/);
     expect(() => assertJobTransition('cancelled', 'queued')).toThrow(/Illegal job transition/);

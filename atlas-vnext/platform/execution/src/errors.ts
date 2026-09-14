@@ -11,8 +11,13 @@ export class ProviderHttpError extends Error {
   }
 }
 
-export function httpFailure(provider: string, status: number, body: string): StructuredFailure {
-  const safeBody = sanitizeText(body).slice(0, 400);
+export function httpFailure(
+  provider: string,
+  status: number,
+  body: string,
+  secrets: Array<string | undefined | null> = [],
+): StructuredFailure {
+  const safeBody = sanitizeText(body, secrets).slice(0, 400);
   const retryable = status === 408 || status === 409 || status === 429 || status >= 500;
   const code =
     status === 401 || status === 403
@@ -32,10 +37,14 @@ export function httpFailure(provider: string, status: number, body: string): Str
   };
 }
 
-export function connectionFailure(provider: string, reason: string): StructuredFailure {
+export function connectionFailure(
+  provider: string,
+  reason: string,
+  secrets: Array<string | undefined | null> = [],
+): StructuredFailure {
   return {
     code: 'connection_failure',
-    message: `${provider} connection failed: ${sanitizeText(reason)}`,
+    message: `${provider} connection failed: ${sanitizeText(reason, secrets)}`,
     retryable: true,
     at: new Date().toISOString(),
   };
@@ -58,4 +67,13 @@ export function throwIfSecretLeaked(message: string, secret: string | undefined)
   if (secret && message.includes(secret)) {
     throw new Error('Refusing to throw an error that contains a provider secret.');
   }
+}
+
+/** Auth failures are not retried on the same provider; 429/5xx and transport blips are. */
+export function isRetryableError(err: unknown): boolean {
+  if (err instanceof ProviderHttpError) return err.failure.retryable;
+  const message = err instanceof Error ? err.message : String(err);
+  if (/missing credentials|authentication_failure|not implemented/i.test(message)) return false;
+  if (/Execution aborted|aborted/i.test(message)) return false;
+  return true;
 }

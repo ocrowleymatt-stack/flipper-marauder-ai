@@ -59,11 +59,22 @@ export type StreamEvent =
   | { type: 'attempt.failed'; failure: { message: string }; emittedVisibleOutput: boolean }
   | { type: 'assistant.delta'; text: string }
   | { type: 'assistant.completed'; text: string }
-  | { type: 'provider.warning'; message: string }
+  | { type: 'provider.warning'; message: string; provider?: string }
   | { type: 'provider.failed'; failure: { message: string } }
   | { type: 'execution.failed'; failure: { code: string; message: string } }
   | { type: 'execution.completed'; provider: string | null; model: string | null }
   | { type: string; [key: string]: unknown };
+
+export function runtimeWaitingLabel(message: string | null | undefined): string | null {
+  if (!message) return null;
+  if (/gpu runtime starting|waiting_runtime|pod_starting|warming|starting the shared/i.test(message)) {
+    return 'GPU runtime starting';
+  }
+  if (/waiting for (the )?shared gpu|pod_busy|profile_change/i.test(message)) {
+    return 'Waiting for the shared GPU';
+  }
+  return message;
+}
 
 const jsonHeaders = { 'content-type': 'application/json' };
 

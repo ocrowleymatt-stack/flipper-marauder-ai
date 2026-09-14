@@ -1,5 +1,5 @@
 import type { StreamChunk, TokenUsage } from '@atlas-vnext/contracts';
-import { ProviderHttpError, httpFailure, usageFromCounts } from '../errors.ts';
+import { ProviderHttpError, httpFailure, throwIfSecretLeaked } from '../errors.ts';
 import { sanitizeText } from '../sanitize.ts';
 import { parseSse } from '../stream-parse.ts';
 import { OpenAIToolCallAssembler } from '../tool-call-buffer.ts';
@@ -17,10 +17,14 @@ export interface OpenAICompatibleOptions {
   authHeaders: (apiKey: string) => Record<string, string>;
   extraBody?: Record<string, unknown>;
   modelMap?: Record<string, string>;
+  chatPath?: string;
+  includeStreamUsage?: boolean;
+  /** Private LAN inference may omit a bearer token. */
+  credentialsOptional?: boolean;
 }
 
 /**
- * OpenAI Chat Completions SSE protocol. Used by OpenAI and Venice.
+ * OpenAI Chat Completions SSE protocol. Used by OpenAI, Venice, xAI, Forge, and RunPod inference.
  * Protocol details terminate here; callers only see StreamChunk.
  */
 export class OpenAICompatibleAdapter implements ProviderAdapter {
@@ -32,37 +36,47 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
   async *stream(model: string, context: ExecutionContext): AsyncGenerator<StreamChunk> {
     const apiKey = this.options.secrets.get(this.options.secretName);
-    if (!apiKey) {
+    if (!apiKey && !this.options.credentialsOptional) {
       throw new Error(`${this.providerId} is unavailable: missing credentials.`);
     }
     const upstream = this.options.modelMap?.[model] ?? model;
-    const body = {
+    const body: Record<string, unknown> = {
       model: upstream,
       stream: true,
-      stream_options: { include_usage: true },
       messages: messagesFrom(context),
       ...this.options.extraBody,
     };
+    if (this.options.includeStreamUsage !== false) {
+      body.stream_options = { include_usage: true };
+    }
+    const tools = toolsFrom(context);
+    if (tools) body.tools = tools;
+
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+    };
+    if (apiKey) Object.assign(headers, this.options.authHeaders(apiKey));
+
+    const chatPath = this.options.chatPath ?? '/chat/completions';
     let response;
     try {
       response = await this.options.transport.send({
-        url: `${this.options.baseUrl}/chat/completions`,
+        url: `${this.options.baseUrl}${chatPath.startsWith('/') ? chatPath : `/${chatPath}`}`,
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...this.options.authHeaders(apiKey),
-        },
+        headers,
         body: JSON.stringify(body),
         signal: context.signal,
         timeoutMs: this.options.timeoutMs,
       });
     } catch (err) {
-      throw new Error(sanitizeText(err instanceof Error ? err.message : String(err)));
+      throw new Error(sanitizeText(err instanceof Error ? err.message : String(err), [apiKey]));
     }
 
     if (response.status >= 400) {
       const text = await readAllText(response.stream);
-      throw new ProviderHttpError(httpFailure(this.providerId, response.status, text));
+      const failure = httpFailure(this.providerId, response.status, text, [apiKey]);
+      throwIfSecretLeaked(failure.message, apiKey);
+      throw new ProviderHttpError(failure);
     }
 
     const toolCalls = new OpenAIToolCallAssembler();
@@ -80,12 +94,13 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         continue;
       }
       if (parsed.error?.message) {
-        throw new ProviderHttpError(httpFailure(this.providerId, 400, parsed.error.message));
+        throw new ProviderHttpError(httpFailure(this.providerId, 400, parsed.error.message, [apiKey]));
       }
       const choice = parsed.choices?.[0];
       const delta = choice?.delta;
-      if (delta?.reasoning_content) {
-        yield { type: 'reasoning', text: delta.reasoning_content };
+      const reasoning = delta?.reasoning_content ?? delta?.reasoning;
+      if (reasoning) {
+        yield { type: 'reasoning', text: reasoning };
       }
       if (delta?.content) {
         yield { type: 'text', text: delta.content };
@@ -107,6 +122,7 @@ interface OpenAIStreamPayload {
     delta?: {
       content?: string;
       reasoning_content?: string;
+      reasoning?: string;
       tool_calls?: Array<{
         index?: number;
         id?: string;
@@ -119,7 +135,12 @@ interface OpenAIStreamPayload {
 
 function usageFromOpenAI(usage: OpenAIStreamPayload['usage']): TokenUsage | null {
   if (!usage) return null;
-  return usageFromCounts(usage.prompt_tokens, usage.completion_tokens, usage.total_tokens);
+  if (usage.prompt_tokens == null || usage.completion_tokens == null) return null;
+  return {
+    inputTokens: usage.prompt_tokens,
+    outputTokens: usage.completion_tokens,
+    totalTokens: usage.total_tokens ?? usage.prompt_tokens + usage.completion_tokens,
+  };
 }
 
 function messagesFrom(context: ExecutionContext): Array<{ role: string; content: string }> {
@@ -127,4 +148,16 @@ function messagesFrom(context: ExecutionContext): Array<{ role: string; content:
   if (context.systemPrompt) messages.push({ role: 'system', content: context.systemPrompt });
   messages.push({ role: 'user', content: context.prompt });
   return messages;
+}
+
+function toolsFrom(context: ExecutionContext): Array<Record<string, unknown>> | null {
+  if (!context.tools?.length) return null;
+  return context.tools.map((tool) => ({
+    type: 'function',
+    function: {
+      name: tool.id,
+      description: tool.description,
+      parameters: tool.inputSchema,
+    },
+  }));
 }

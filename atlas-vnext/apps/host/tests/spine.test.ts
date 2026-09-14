@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Server } from 'node:http';
 import { composeSpine, createHost, listen } from '../src/index.ts';
+import { MapSecretStore, MemoryRunPodClient } from '@atlas-vnext/execution';
 
 const servers: Server[] = [];
 
@@ -198,5 +199,40 @@ describe('conversation spine HTTP/SSE', () => {
     const health = (await created.json()) as { ok: boolean; providers: Record<string, string> };
     expect(health.ok).toBe(true);
     expect(health.providers.openai).toBe('unavailable');
+  });
+
+  it('exposes live RunPod runtime on health without starting a paid pod', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-host-'));
+    const client = new MemoryRunPodClient();
+    client.seed({ id: 'pod-shared', desiredStatus: 'EXITED' });
+    const spine = await composeSpine({
+      dataPath: join(dir, 'live.json'),
+      mode: 'live',
+      env: { RUNPOD_API_KEY: 'rp-test', RUNPOD_POD_ID: 'pod-shared', OPENAI_API_KEY: 'sk-test' },
+      secrets: new MapSecretStore({ RUNPOD_API_KEY: 'rp-test', OPENAI_API_KEY: 'sk-test' }),
+      runpodClient: client,
+      transport: {
+        async send() {
+          throw new Error('connect ECONNREFUSED');
+        },
+      },
+    });
+    expect(spine.health.runpod).toBe('configured');
+    expect(client.startCalls).toEqual([]);
+    const server = createHost({
+      runtime: spine.runtime,
+      health: { mode: spine.mode, providers: spine.health, runtime: () => spine.runtimeSnapshot() },
+    });
+    servers.push(server);
+    const bound = await listen(server, 0, '127.0.0.1');
+    const created = await fetch(`${bound.url}/api/health`);
+    const health = (await created.json()) as {
+      ok: boolean;
+      runtime: { runtime: { state: string }; maxActivePods: number; scaleOutDisabled: boolean } | null;
+    };
+    expect(health.ok).toBe(true);
+    expect(health.runtime?.runtime.state).toBe('stopped');
+    expect(health.runtime?.maxActivePods).toBe(1);
+    expect(health.runtime?.scaleOutDisabled).toBe(true);
   });
 });

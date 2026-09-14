@@ -202,6 +202,13 @@ select {
   color: var(--danger);
 }
 
+.waiting-runtime {
+  color: var(--muted);
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
 .empty {
   margin: auto;
   text-align: center;

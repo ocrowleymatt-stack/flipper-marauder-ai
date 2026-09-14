@@ -124,3 +124,180 @@ function incompleteToolCallMessage(buf: BufferedToolCall): string {
   const label = buf.name ?? buf.id ?? (buf.index != null ? `index ${buf.index}` : 'unknown');
   return `Dropped incomplete tool call (${label}); streamed arguments were not structurally complete.`;
 }
+
+interface AnthropicBufferedTool {
+  index: number;
+  id?: string;
+  name?: string;
+  json: string;
+  emitted: boolean;
+}
+
+/**
+ * Assembles Anthropic `input_json_delta` fragments. Never parse or execute
+ * a tool call until the JSON object is structurally complete.
+ */
+export class AnthropicToolCallAssembler {
+  private readonly blocks = new Map<number, AnthropicBufferedTool>();
+
+  start(index: number, block: { type?: string; id?: string; name?: string }): void {
+    if (block.type && block.type !== 'tool_use') return;
+    this.blocks.set(index, {
+      index,
+      id: block.id,
+      name: block.name,
+      json: '',
+      emitted: false,
+    });
+  }
+
+  ingestDelta(index: number, delta: { type?: string; partial_json?: string }): void {
+    if (delta.type !== 'input_json_delta') return;
+    const buf = this.blocks.get(index) ?? {
+      index,
+      json: '',
+      emitted: false,
+    };
+    if (typeof delta.partial_json === 'string') buf.json += delta.partial_json;
+    this.blocks.set(index, buf);
+  }
+
+  finishBlock(index: number, providerId: string): StreamChunk[] {
+    const buf = this.blocks.get(index);
+    if (!buf || buf.emitted) return [];
+    return this.emit(buf, providerId);
+  }
+
+  finish(providerId: string): StreamChunk[] {
+    const out: StreamChunk[] = [];
+    for (const buf of this.blocks.values()) {
+      if (buf.emitted) continue;
+      out.push(...this.emit(buf, providerId));
+    }
+    return out;
+  }
+
+  private emit(buf: AnthropicBufferedTool, providerId: string): StreamChunk[] {
+    buf.emitted = true;
+    const name = buf.name?.trim();
+    const id = buf.id?.trim();
+    if (!name || !id) {
+      return [
+        {
+          type: 'warning',
+          message: `Dropped incomplete tool call (${name ?? id ?? `index ${buf.index}`}); streamed arguments were not structurally complete.`,
+          provider: providerId,
+        },
+      ];
+    }
+    const raw = buf.json.trim();
+    if (raw.length === 0) {
+      return [{ type: 'tool_call', call: { id, toolId: name, arguments: {} } }];
+    }
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!isPlainObject(parsed)) {
+        return [
+          {
+            type: 'warning',
+            message: `Dropped incomplete tool call (${name}); streamed arguments were not structurally complete.`,
+            provider: providerId,
+          },
+        ];
+      }
+      return [{ type: 'tool_call', call: { id, toolId: name, arguments: parsed } }];
+    } catch {
+      return [
+        {
+          type: 'warning',
+          message: `Dropped incomplete tool call (${name}); streamed arguments were not structurally complete.`,
+          provider: providerId,
+        },
+      ];
+    }
+  }
+}
+
+interface GeminiBufferedTool {
+  key: string;
+  name?: string;
+  argsJson: string;
+  argsObject: Record<string, unknown>;
+  hasObjectArgs: boolean;
+  emitted: boolean;
+}
+
+/**
+ * Assembles Gemini `functionCall` parts that may arrive split across SSE
+ * events (name first, args later, or JSON-string fragments).
+ */
+export class GeminiFunctionCallAssembler {
+  private readonly calls = new Map<string, GeminiBufferedTool>();
+  private currentKey: string | null = null;
+
+  ingest(part: { functionCall?: { name?: string; args?: unknown } }, index = 0): void {
+    const call = part.functionCall;
+    if (!call) return;
+    const key = call.name?.trim() ? `name:${call.name}` : this.currentKey ?? `part:${index}:${this.calls.size}`;
+    this.currentKey = key;
+    const buf = this.calls.get(key) ?? {
+      key,
+      name: call.name,
+      argsJson: '',
+      argsObject: {},
+      hasObjectArgs: false,
+      emitted: false,
+    };
+    if (call.name) buf.name = call.name;
+    if (typeof call.args === 'string') {
+      buf.argsJson += call.args;
+    } else if (isPlainObject(call.args)) {
+      buf.hasObjectArgs = true;
+      buf.argsObject = { ...buf.argsObject, ...call.args };
+    }
+    this.calls.set(key, buf);
+  }
+
+  finish(providerId: string): StreamChunk[] {
+    const out: StreamChunk[] = [];
+    for (const buf of this.calls.values()) {
+      if (buf.emitted) continue;
+      buf.emitted = true;
+      const name = buf.name?.trim();
+      if (!name) {
+        out.push({
+          type: 'warning',
+          message: 'Dropped incomplete tool call (unknown); streamed arguments were not structurally complete.',
+          provider: providerId,
+        });
+        continue;
+      }
+      if (buf.argsJson.length > 0) {
+        try {
+          const parsed: unknown = JSON.parse(buf.argsJson);
+          if (!isPlainObject(parsed)) {
+            out.push({
+              type: 'warning',
+              message: `Dropped incomplete tool call (${name}); streamed arguments were not structurally complete.`,
+              provider: providerId,
+            });
+            continue;
+          }
+          out.push({ type: 'tool_call', call: { id: name, toolId: name, arguments: parsed } });
+        } catch {
+          out.push({
+            type: 'warning',
+            message: `Dropped incomplete tool call (${name}); streamed arguments were not structurally complete.`,
+            provider: providerId,
+          });
+        }
+        continue;
+      }
+      out.push({
+        type: 'tool_call',
+        call: { id: name, toolId: name, arguments: buf.hasObjectArgs ? buf.argsObject : {} },
+      });
+    }
+    return out;
+  }
+}

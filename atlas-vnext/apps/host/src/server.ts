@@ -3,6 +3,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { ProviderHealth } from '@atlas-vnext/contracts';
+import { sanitizeText, type RuntimeSnapshot } from '@atlas-vnext/execution';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -20,6 +21,7 @@ export interface HostOptions {
   health?: {
     mode: string;
     providers: Record<string, ProviderHealth>;
+    runtime?: RuntimeSnapshot | null | (() => RuntimeSnapshot | null);
   };
 }
 
@@ -40,11 +42,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
 
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') {
+      const runtime =
+        typeof options.health?.runtime === 'function' ? options.health.runtime() : (options.health?.runtime ?? null);
       json(res, 200, {
         ok: true,
         service: 'atlas-vnext-host',
         mode: options.health?.mode ?? 'unknown',
         providers: options.health?.providers ?? {},
+        runtime,
       });
       return;
     }
@@ -99,7 +104,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
 
     json(res, 404, { error: 'Not found.' });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = sanitizeText(err instanceof Error ? err.message : String(err));
     if (!res.headersSent) {
       json(res, 500, { error: message });
       return;

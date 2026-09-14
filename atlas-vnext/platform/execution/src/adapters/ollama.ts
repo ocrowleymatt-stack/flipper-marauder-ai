@@ -6,7 +6,7 @@ import { readAllText, type HttpTransport } from '../transport.ts';
 import type { ExecutionContext, ProviderAdapter } from '../types.ts';
 
 export class OllamaAdapter implements ProviderAdapter {
-  readonly providerId = 'ollama';
+  readonly providerId: string;
 
   constructor(
     private readonly options: {
@@ -14,8 +14,11 @@ export class OllamaAdapter implements ProviderAdapter {
       timeoutMs: number;
       baseUrl: string;
       modelMap?: Record<string, string>;
+      providerId?: string;
     },
-  ) {}
+  ) {
+    this.providerId = options.providerId ?? 'ollama';
+  }
 
   get baseUrl(): string {
     return this.options.baseUrl;

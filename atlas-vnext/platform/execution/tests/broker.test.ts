@@ -12,6 +12,8 @@ function decision(chain: string[]): RouteDecision {
     model: model ?? 'gpt',
     candidateChain: chain,
     localOnly: false,
+    locality: 'public_cloud',
+    runtimeClass: 'always_available',
     decisionReason: 'test',
     traceId: 'trc_test',
     evaluatedAt: new Date().toISOString(),

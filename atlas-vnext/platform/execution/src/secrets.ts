@@ -12,11 +12,29 @@ export const SECRET_KEYS = {
   anthropic: 'ANTHROPIC_API_KEY',
   gemini: 'GEMINI_API_KEY',
   venice: 'VENICE_API_KEY',
+  xai: 'XAI_API_KEY',
+  grok: 'GROK_API_KEY',
+  forge: 'FORGE_API_KEY',
+  runpod: 'RUNPOD_API_KEY',
 } as const;
 
 /** Gemini accepts either Google AI Studio key name. */
 export function geminiApiKey(secrets: SecretStore): string | undefined {
   return secrets.get(SECRET_KEYS.gemini) ?? secrets.get('GOOGLE_API_KEY');
+}
+
+/** xAI Grok accepts the official xAI key or the historical GROK_API_KEY alias. */
+export function xaiApiKey(secrets: SecretStore): string | undefined {
+  return secrets.get(SECRET_KEYS.xai) ?? secrets.get(SECRET_KEYS.grok);
+}
+
+/** Private Forge/Hetzner inference may be unauthenticated on a trusted network. */
+export function forgeApiKey(secrets: SecretStore): string | undefined {
+  return (
+    secrets.get(SECRET_KEYS.forge) ??
+    secrets.get('ATLAS_FORGE_API_KEY') ??
+    secrets.get('HETZNER_INFERENCE_API_KEY')
+  );
 }
 
 export type CloudProviderId = keyof typeof SECRET_KEYS;

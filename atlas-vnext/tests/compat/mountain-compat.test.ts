@@ -489,11 +489,15 @@ describe('mountain-compat 8: Auto/Power-Pod specialist/fallback (specified; insp
     expect(auto.candidateChain.indexOf('forge/qwen3')).toBeLessThan(auto.candidateChain.indexOf('runpod/llm'));
     expect(auto.candidateChain).toContain('xai/grok-build');
 
-    const privateReason = router.resolve('nexus/reason', { privacy: 'local_only' });
-    expect(privateReason.resolvedRouteId).not.toBe('xai/grok-build');
-    expect(privateReason.rejectedCandidates?.some((row) => row.provider === 'xai' && row.reason === 'privacy_local_only')).toBe(
-      true,
-    );
+    expect(() => router.resolve('nexus/reason', { privacy: 'local_only' })).toThrow(/No healthy candidates/);
+    try {
+      router.resolve('nexus/reason', { privacy: 'local_only' });
+    } catch (error) {
+      expect(error).toBeInstanceOf(RouteResolutionError);
+      const rejected = error instanceof RouteResolutionError ? error.rejectedCandidates : [];
+      expect(rejected.some((row) => row.provider === 'xai' && row.reason === 'privacy_local_only')).toBe(true);
+      expect(rejected.some((row) => row.model === 'grok-build')).toBe(true);
+    }
   });
 });
 

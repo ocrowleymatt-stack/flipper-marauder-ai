@@ -32,4 +32,4 @@ Product direction: Atlas vNext UX will be a progressive Workbench, substantially
 - Restart: new process, same PG schema + CAS root, reconstructs projects, files, conversations, artefacts, source-backed context, and current site pointers.
 - Repeated temporary website generation cannot unbounded-grow physical CAS: identical bytes dedup, revision history is retained by policy, expired revisions release refs, GC is reference-safe.
 
-Deferred: Workbench UI, embeddings as the primary retriever, OCR, Tools, Caspa, Dungeon migration, production cutover, replacing the RunPod file runtime store.
+Deferred: embeddings as the primary retriever, OCR, Caspa, Dungeon migration, production cutover, replacing the RunPod file runtime store.

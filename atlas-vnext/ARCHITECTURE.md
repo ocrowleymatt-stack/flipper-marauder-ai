@@ -74,4 +74,4 @@ flipper-marauder-ai/
 - CAS blobs: `platform/storage` filesystem adapter (`sha256/<aa>/<bb>/<hash>`). Never file bytes or base64 in relational rows. `artefact_metadata` and `files` store identity, tenancy, type, version lineage, and `content_hash` as the CAS pointer. See [docs/FILES-AND-CONTEXT.md](docs/FILES-AND-CONTEXT.md).
 - Local/dev may use the JSON `FileDocument` store. Production cannot; missing PostgreSQL fails closed.
 - SQLite is not a second product database.
-- **Workbench constraint:** this layer must not assume conversation-only or linear-chat-only products. Conversations belong to workspaces; artefacts, jobs, and files are first-class. Do not implement Workbench UI or copy Mountain UI architecture here.
+- **Workbench constraint:** this layer must not assume conversation-only or linear-chat-only products. Conversations belong to workspaces; artefacts, jobs, and files are first-class. Workbench UI lives in `apps/web` and consumes host APIs; see [docs/WORKBENCH.md](docs/WORKBENCH.md).

@@ -29,8 +29,8 @@ Default runtime is **live** adapters. Missing keys mark that provider unavailabl
 - Execution broker + production adapters (`platform/execution`)
 - Conversation domain + PostgreSQL persistence kernel (JSON file remains local/dev)
 - Tool platform, plugins, Authority, authentication, secrets, health/recovery (`docs/TOOLS-AUTH-AUTHORITY.md`)
-- Projects/files/CAS/context foundation (`docs/FILES-AND-CONTEXT.md`) — no Workbench UI
-- Workspace UI (`apps/web`) and HTTP/SSE host (`apps/host`)
+- Projects/files/CAS/context foundation (`docs/FILES-AND-CONTEXT.md`)
+- Workbench UI (`apps/web`) over host HTTP/SSE (`apps/host`) — session, projects, runs, files, tools, Authority approval (`docs/WORKBENCH.md`)
 - Import-graph architecture tests
 
 ## What this does not ship

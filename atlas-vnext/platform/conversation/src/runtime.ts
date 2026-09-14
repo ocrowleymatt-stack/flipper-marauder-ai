@@ -85,6 +85,10 @@ export class ConversationRuntime {
     return { conversation, messages, executions };
   }
 
+  async getExecution(executionId: string): Promise<ExecutionRecord | null> {
+    return this.deps.executions.get(executionId);
+  }
+
   async recoverInFlight(reason = 'Process restarted before the execution finished.'): Promise<ExecutionRecord[]> {
     const inflight = await this.deps.executions.listInFlight();
     const recovered: ExecutionRecord[] = [];

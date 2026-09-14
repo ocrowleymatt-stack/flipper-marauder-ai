@@ -1,6 +1,6 @@
 # Tools, plugins, Authority, authentication, secrets, and operations
 
-This is the production backend tranche for Atlas vNext. It does **not** add Generative Workbench UI. The host exposes server-side APIs and state; a later Workbench only **renders** that state.
+This is the production backend tranche for Atlas vNext. Workbench UI that **renders** this state is documented in [WORKBENCH.md](./WORKBENCH.md).
 
 ## Frozen contracts (unchanged)
 

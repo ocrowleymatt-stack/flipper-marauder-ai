@@ -34,7 +34,7 @@ Handoff: caller passes the decision to `ExecutionBroker`. Nexus does not invoke 
 ## Invariants (tested)
 
 1. `nexus/fast` → fast healthy candidate (deterministic fixture)
-2. `nexus/reason` → reasoning
+2. `nexus/reason` → reasoning. vNext ranks registered reasoners (host catalogue `grok-build` is fast); this is **not** historical Mountain’s anthropic-primary table. Public xAI never satisfies `local_only`.
 3. `nexus/code` → code
 4. `nexus/vision` → vision
 5. `nexus/cheap` → lowest cost class

@@ -76,7 +76,9 @@ export function routingHarness() {
       provider: 'xai',
       model: 'grok-build',
       label: 'Grok Build',
-      // Host catalogue on main: alias grok-build → upstream grok-build-0.1.
+      // vNext host catalogue (not Mountain): alias grok-build → grok-build-0.1.
+      // Historical Mountain nexus/reason primary was anthropic (5cc7a96).
+      // Public xAI must still lose local_only even when registered as fast reasoning.
       capabilities: { text: true, reasoning: true, tools: true, vision: true, code: true },
       contextWindow: 256_000,
       costClass: 'medium',

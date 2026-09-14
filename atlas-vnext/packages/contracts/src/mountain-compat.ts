@@ -3,18 +3,26 @@ import { z } from 'zod';
 /**
  * Mountain behavioural compatibility contracts.
  *
- * Provenance of each requirement is labelled **specified** (user-authoritative
- * Mountain semantics; TypeScript Atlas Mountain tree was not inspectable this
- * run) or **inspected** (verified against accessible vNext / Caspa / commons).
+ * Provenance labels (see atlas-vnext/docs/MOUNTAIN-COMPAT.md):
+ * verified_historical — quoted from ocrowleymatt-stack/atlas-mountain @ 5cc7a96
+ * user_requirement — required for vNext; not quoted from Mountain this run
+ * inspected_vnext — verified against this tree / Caspa / commons
+ *
+ * Current Mountain main / issue #172 / PR #221 were not readable this run
+ * (GitHub App installation is scoped to flipper-marauder-ai only).
  *
  * Architecture remains vNext: Nexus = WHERE, Execution = HOW. These schemas
- * lock *externally meaningful* Mountain behaviour, not Mountain's folder layout.
+ * lock *externally meaningful* behaviour, not Mountain's folder layout.
  */
 
-export const mountainCompatProvenanceSchema = z.enum(['specified', 'inspected']);
+export const mountainCompatProvenanceSchema = z.enum([
+  'verified_historical',
+  'user_requirement',
+  'inspected_vnext',
+]);
 export type MountainCompatProvenance = z.infer<typeof mountainCompatProvenanceSchema>;
 
-/** Specified: Standard vs Open response posture. Open must not change Authority. */
+/** User requirement + historical Mountain `behaviour/` vs `permissions/` split. Open must not change Authority. */
 export const behaviourModeSchema = z.enum(['standard', 'open']);
 export type BehaviourMode = z.infer<typeof behaviourModeSchema>;
 
@@ -30,8 +38,9 @@ export const tenantBehaviourRecordSchema = z.object({
 export type TenantBehaviourRecord = z.infer<typeof tenantBehaviourRecordSchema>;
 
 /**
- * Specified (Mountain PRs #172 / #221, uninspected): Open changes response
- * posture only. These scopes must stay independent of Behaviour.
+ * User requirement (issue #172 / PR #221 not readable this run). Historical
+ * Mountain kept `behaviour/` separate from `permissions/` (5cc7a96). Open
+ * changes response posture only; these scopes stay independent of Behaviour.
  */
 export const AUTHORITY_SCOPES_UNCHANGED_BY_BEHAVIOUR = [
   'filesystem.read',
@@ -96,7 +105,7 @@ export const observedRouteAttemptSchema = z.object({
 });
 export type ObservedRouteAttempt = z.infer<typeof observedRouteAttemptSchema>;
 
-/** Specified: Auto/Power-Pod is specialist/fallback, not a registry alias key. */
+/** Historical Mountain hybrid-auto-policy / Power-Pod-first; vNext ranking, not an alias key. */
 export const routingDelegationSchema = z.enum(['auto', 'power_pod']);
 export type RoutingDelegation = z.infer<typeof routingDelegationSchema>;
 
@@ -104,8 +113,9 @@ export const retryClassSchema = z.enum(['transient', 'terminal']);
 export type RetryClass = z.infer<typeof retryClassSchema>;
 
 /**
- * Specified: timeout/reset/429/5xx are transient; 400/401/unsupported/
- * permission/context overflow are terminal (bounded retry must not continue).
+ * Historical Mountain provider-error taxonomy (timeout/unavailable/abrupt_end
+ * vs invalid_request/context_length/cancelled) plus vNext HTTP 429/5xx mapping.
+ * Bounded retry must not continue for terminal classes.
  */
 export const classifiedFailureSchema = z.object({
   retryClass: retryClassSchema,
@@ -115,8 +125,8 @@ export const classifiedFailureSchema = z.object({
 export type ClassifiedFailure = z.infer<typeof classifiedFailureSchema>;
 
 /**
- * Specified: bounded artefact/workspace/release/event retention under disk pressure.
- * Caps are fail-closed defaults, not "keep forever".
+ * User-requirement caps inspired by historical Mountain storage-pressure
+ * recovery (census §9, 5cc7a96). Caps are fail-closed defaults, not "keep forever".
  */
 export const retentionBoundsSchema = z.object({
   maxArtefacts: z.number().int().positive(),

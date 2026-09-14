@@ -97,6 +97,7 @@ export function authorityBoundary(
   gate: AuthorityGate,
   projectId?: string,
 ): BehaviourAuthorityBoundary {
+  const parsed = behaviourModeSchema.parse(behaviour);
   const granted: CapabilityScope[] = [];
   const denied: CapabilityScope[] = [];
   for (const scope of AUTHORITY_SCOPES_UNCHANGED_BY_BEHAVIOUR) {
@@ -105,8 +106,7 @@ export function authorityBoundary(
     if (decision === 'ALLOW') granted.push(typed);
     else denied.push(typed);
   }
-  void behaviour;
-  return { behaviour, grantedScopes: granted, deniedScopes: denied };
+  return { behaviour: parsed, grantedScopes: granted, deniedScopes: denied };
 }
 
 export function behaviourGrantsNoAuthority(behaviour: BehaviourMode, gate: AuthorityGate): boolean {
@@ -134,7 +134,8 @@ export function composeBehaviourPrompt(input: {
       'Fail-closed: Behaviour posture cannot replace capability or runtime policy.',
     );
   }
-  const behaviourPosture = input.behaviour === 'open' ? OPEN_POSTURE : STANDARD_POSTURE;
+  const parsedBehaviour = behaviourModeSchema.parse(input.behaviour);
+  const behaviourPosture = parsedBehaviour === 'open' ? OPEN_POSTURE : STANDARD_POSTURE;
   const parsed = composedPromptSchema.parse({
     layers: { capabilityPolicy, runtimePolicy, behaviourPosture },
     text: [capabilityPolicy, runtimePolicy, behaviourPosture].join('\n\n'),

@@ -63,7 +63,7 @@ async function collect(
   return chunks;
 }
 
-describe('mountain-compat 1: failover-before-output / never-after-output (specified AM; inspected vNext broker)', () => {
+describe('mountain-compat 1: failover-before-output / never-after-output (historical Mountain failover-provider.ts @ 5cc7a96; inspected vNext broker)', () => {
   it('retries/fails over before visible assistant output', async () => {
     const broker = new ExecutionBroker(1);
     broker.register({
@@ -169,7 +169,7 @@ describe('mountain-compat 1: failover-before-output / never-after-output (specif
   });
 });
 
-describe('mountain-compat 2: transactional tool-call buffering (specified AM; inspected assembler + broker)', () => {
+describe('mountain-compat 2: transactional tool-call buffering (historical Mountain failover-provider.ts @ 5cc7a96; inspected assembler + broker)', () => {
   it('does not emit tool calls from a failed attempt (no duplicate side effects)', async () => {
     const broker = new ExecutionBroker(1);
     let sideEffects = 0;
@@ -221,7 +221,7 @@ describe('mountain-compat 2: transactional tool-call buffering (specified AM; in
   });
 });
 
-describe('mountain-compat 3: transient retry classification (specified; Caspa cooldown inspected, not copied)', () => {
+describe('mountain-compat 3: transient retry classification (historical Mountain provider-error.ts @ 5cc7a96; 429/5xx is vNext/Caspa-adjacent mapping)', () => {
   it('classifies timeout/reset/429/5xx as transient and 400/401/unsupported/permission/context overflow as terminal', () => {
     expect(classifyProviderFailure(new Error('timeout before tokens')).retryable).toBe(true);
     expect(classifyProviderFailure(new Error('ECONNRESET')).retryable).toBe(true);
@@ -301,7 +301,7 @@ describe('mountain-compat 3: transient retry classification (specified; Caspa co
   });
 });
 
-describe('mountain-compat 4: local-only Private routing (specified Private=local-only; inspected Nexus privacy)', () => {
+describe('mountain-compat 4: local-only Private routing (historical Mountain nexus/private @ 5cc7a96; inspected Nexus privacy)', () => {
   it('never selects public-cloud under local_only privacy', () => {
     const { router } = routingHarness();
     const routed = router.resolve('nexus/fast', { privacy: 'local_only' });
@@ -345,7 +345,7 @@ describe('mountain-compat 4: local-only Private routing (specified Private=local
   });
 });
 
-describe('mountain-compat 5: Behaviour ≠ Authority (specified Mountain #172/#221, uninspected)', () => {
+describe('mountain-compat 5: Behaviour ≠ Authority (historical Mountain behaviour/ vs permissions/ @ 5cc7a96; #172/#221 unread)', () => {
   it('Open posture grants no extra filesystem, shell, network, publishing, compute, or admin capability', () => {
     const gate = new DefaultDenyGate();
     const open = authorityBoundary('open', gate);
@@ -368,6 +368,11 @@ describe('mountain-compat 5: Behaviour ≠ Authority (specified Mountain #172/#2
     }
   });
 
+  it('invalid Behaviour modes fail closed at the authority boundary', () => {
+    const gate = new DefaultDenyGate();
+    expect(() => authorityBoundary('unrestricted' as never, gate)).toThrow();
+  });
+
   it('explicit grants stay independent of Behaviour mode', () => {
     const gate = new DefaultDenyGate();
     gate.grant('filesystem.read', 'proj_1');
@@ -377,7 +382,7 @@ describe('mountain-compat 5: Behaviour ≠ Authority (specified Mountain #172/#2
   });
 });
 
-describe('mountain-compat 6: tenant-isolated Behaviour persistence (specified #172/#221 stub)', () => {
+describe('mountain-compat 6: tenant-isolated Behaviour persistence (historical tenancy/database-router + posture-store @ 5cc7a96; stub)', () => {
   it('resolves per tenant, isolates A from B, and fail-closes to Standard', () => {
     const store = new TenantBehaviourStore();
     expect(store.resolve('tenant-a')).toBe(DEFAULT_BEHAVIOUR_MODE);
@@ -390,9 +395,22 @@ describe('mountain-compat 6: tenant-isolated Behaviour persistence (specified #1
     expect(() => store.resolve('')).toThrow(/Fail-closed/);
     expect(store.read('tenant-b', 'tenant-b')).toBeNull();
   });
+
+  it('invalid Behaviour modes fail closed and do not persist', () => {
+    const store = new TenantBehaviourStore();
+    expect(() => store.write('tenant-a', 'tenant-a', 'unrestricted' as never)).toThrow();
+    expect(store.resolve('tenant-a')).toBe('standard');
+    expect(() =>
+      composeBehaviourPrompt({
+        behaviour: 'jailbreak' as never,
+        capabilityPolicy: 'DENY shell.execute',
+        runtimePolicy: 'local-only',
+      }),
+    ).toThrow();
+  });
 });
 
-describe('mountain-compat 7: Behaviour prompt composed with capability/runtime policy (specified #172/#221 stub)', () => {
+describe('mountain-compat 7: Behaviour prompt composed with capability/runtime policy (historical posture + mode-policy @ 5cc7a96; vNext fail-closed compose)', () => {
   it('composes posture with policy and refuses to replace capability or runtime layers', () => {
     const open = composeBehaviourPrompt({
       behaviour: 'open',
@@ -418,7 +436,7 @@ describe('mountain-compat 7: Behaviour prompt composed with capability/runtime p
   });
 });
 
-describe('mountain-compat 8: Auto/Power-Pod specialist/fallback (specified; inspected Forge-before-RunPod)', () => {
+describe('mountain-compat 8: Auto/Power-Pod specialist/fallback (historical hybrid-auto-policy @ 5cc7a96; inspected Forge-before-RunPod ranking)', () => {
   it('is not a dumb alias lookup and is not in ALIAS_POLICIES', () => {
     expect(capabilityAliasSchema.safeParse('auto').success).toBe(false);
     expect(capabilityAliasSchema.safeParse('power-pod').success).toBe(false);
@@ -471,7 +489,9 @@ describe('mountain-compat 8: Auto/Power-Pod specialist/fallback (specified; insp
     expect(privateFirst.decisionReason).toMatch(/specialist/);
   });
 
-  it('keeps grok-build-0.1 (fast reasoning) on nexus/reason without waking burst GPU or bypassing local Auto', () => {
+  it('vNext ranking (not a Mountain alias): fastest healthy reasoner wins nexus/reason; Auto still prefers local', () => {
+    // Historical Mountain 5cc7a96 capability table: nexus/reason primary was anthropic.
+    // vNext ranks registered reasoners by runtime then latency. Fixture grok-build is fast.
     const { router } = routingHarness();
     const reason = router.resolve('nexus/reason', {
       availableRuntimes: ['xai', 'anthropic', 'ollama', 'forge', 'runpod'],
@@ -488,7 +508,10 @@ describe('mountain-compat 8: Auto/Power-Pod specialist/fallback (specified; insp
     expect(auto.resolvedRouteId).toBe('ollama/llama3.2');
     expect(auto.candidateChain.indexOf('forge/qwen3')).toBeLessThan(auto.candidateChain.indexOf('runpod/llm'));
     expect(auto.candidateChain).toContain('xai/grok-build');
+  });
 
+  it('local_only never selects public grok-build for nexus/reason merely because it is a strong reasoner', () => {
+    const { router } = routingHarness();
     expect(() => router.resolve('nexus/reason', { privacy: 'local_only' })).toThrow(/No healthy candidates/);
     try {
       router.resolve('nexus/reason', { privacy: 'local_only' });
@@ -498,10 +521,18 @@ describe('mountain-compat 8: Auto/Power-Pod specialist/fallback (specified; insp
       expect(rejected.some((row) => row.provider === 'xai' && row.reason === 'privacy_local_only')).toBe(true);
       expect(rejected.some((row) => row.model === 'grok-build')).toBe(true);
     }
+
+    const autoLocal = router.resolve('auto', {
+      privacy: 'local_only',
+      availableRuntimes: ['xai', 'ollama', 'forge', 'runpod'],
+    });
+    expect(autoLocal.resolvedRouteId).toBe('ollama/llama3.2');
+    expect(autoLocal.candidateChain).not.toContain('xai/grok-build');
+    expect(autoLocal.candidateChain.every((id) => id.startsWith('ollama/'))).toBe(true);
   });
 });
 
-describe('mountain-compat 9: route observability records attempts and rejects (inspected attempts; specified rejects)', () => {
+describe('mountain-compat 9: route observability records attempts and rejects (historical performance/trace @ 5cc7a96; inspected vNext attempts)', () => {
   it('records actual attempted providers including failures, skips, and ranking rejects — not only the winner', async () => {
     const { router } = routingHarness();
     const routed = router.resolve('nexus/fast', { privacy: 'local_only' });
@@ -560,7 +591,7 @@ describe('mountain-compat 9: route observability records attempts and rejects (i
   });
 });
 
-describe('mountain-compat 10: deployment/resource hygiene — bounded retention (specified; inspected RuntimeObserver cap)', () => {
+describe('mountain-compat 10: deployment/resource hygiene — bounded retention (historical storage-pressure @ 5cc7a96; inspected RuntimeObserver cap)', () => {
   it('prunes artefacts, workspaces, releases, and events instead of growing unbounded', () => {
     const guard = new RetentionGuard({
       maxArtefacts: 3,

@@ -61,9 +61,9 @@ export function throwIfSecretLeaked(message: string, secret: string | undefined)
 }
 
 /**
- * Mountain-compat retry classification (specified):
- * timeout/reset/429/5xx → transient, bounded retry;
- * 400/401/unsupported/permission/context overflow → terminal.
+ * Retry classification: historical Mountain provider-error taxonomy
+ * (timeout/unavailable/abrupt_end retryable; invalid_request/context_length/
+ * cancelled terminal) plus vNext HTTP 429/5xx → transient mapping.
  */
 export function classifyProviderFailure(err: unknown): ClassifiedFailure {
   if (err instanceof ProviderHttpError) {

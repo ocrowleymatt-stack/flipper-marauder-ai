@@ -12,7 +12,7 @@ Does not own: fetch, streaming parsers, retries, circuit breakers, jobs, SQL, du
 
 ## Execution (`platform/execution`)
 
-Owns: adapters, HTTP, stream normalisation, timeouts, failover before visible text, tool-call buffering, circuit breakers, worker leases.
+Owns: adapters, HTTP, stream normalisation, timeouts, failover before visible text, tool-call buffering, circuit breakers, worker leases, the secrets port.
 
 Does not own: route policy, UI, project/CAS writes, dungeon modules.
 

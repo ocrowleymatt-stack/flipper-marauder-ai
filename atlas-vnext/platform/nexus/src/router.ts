@@ -18,6 +18,8 @@ export interface RouteRequest {
   contextTokens?: number;
   /** Local-only privacy: cloud models are ineligible regardless of alias. */
   privacy?: 'any' | 'local_only';
+  /** Satisfied runtime tags (provider ids, local engines). Host-supplied. */
+  availableRuntimes?: string[];
   traceId?: string;
 }
 
@@ -150,6 +152,11 @@ export class NexusRouter {
     if (request.privacy === 'local_only' && model.locality !== 'local' && model.privacyEligibility !== 'local_only') {
       return false;
     }
+    if (request.availableRuntimes && model.runtimeRequirements.length > 0) {
+      if (!model.runtimeRequirements.every((requirement) => request.availableRuntimes!.includes(requirement))) {
+        return false;
+      }
+    }
     return true;
   }
 
@@ -159,6 +166,12 @@ export class NexusRouter {
         throw new Error(
           `Prompt size (${request.contextTokens}) exceeds context limit of ${model.provider}/${model.model} (${model.contextWindow}).`,
         );
+      }
+      if (request.availableRuntimes && model.runtimeRequirements.length > 0) {
+        const missing = model.runtimeRequirements.filter((requirement) => !request.availableRuntimes!.includes(requirement));
+        if (missing.length > 0) {
+          throw new Error(`Model ${model.provider}/${model.model} requires runtime ${missing.join(', ')}.`);
+        }
       }
       throw new Error(`Model ${model.provider}/${model.model} does not meet route requirements.`);
     }

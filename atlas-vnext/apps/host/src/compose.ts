@@ -1,19 +1,34 @@
+import type { ProviderHealth } from '@atlas-vnext/contracts';
 import { ConversationRuntime } from '@atlas-vnext/conversation';
-import { ExecutionBroker, MockAdapter } from '@atlas-vnext/execution';
+import {
+  createExecutionPlane,
+  EnvSecretStore,
+  type ExecutionMode,
+  type HttpTransport,
+  type SecretStore,
+} from '@atlas-vnext/execution';
 import { NexusRegistry, NexusRouter } from '@atlas-vnext/nexus';
 import { openDurableStore, type DurableConversationStore } from '@atlas-vnext/persistence';
-import { DEV_CATALOGUE } from './catalogue.ts';
+import { MODEL_CATALOGUE } from './catalogue.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
   store: DurableConversationStore;
   router: NexusRouter;
-  broker: ExecutionBroker;
+  registry: NexusRegistry;
+  broker: ReturnType<typeof createExecutionPlane>['broker'];
+  health: Record<string, ProviderHealth>;
+  mode: ExecutionMode;
+  availableRuntimes: string[];
 }
 
 export interface ComposeOptions {
   dataPath: string;
   streamDelayMs?: number;
+  mode?: ExecutionMode;
+  secrets?: SecretStore;
+  env?: Record<string, string | undefined>;
+  transport?: HttpTransport;
 }
 
 /**
@@ -21,19 +36,38 @@ export interface ComposeOptions {
  * Nexus (WHERE) to Execution (HOW) and the conversation domain (WHAT).
  */
 export async function composeSpine(options: ComposeOptions): Promise<Spine> {
+  const mode: ExecutionMode = options.mode ?? 'live';
   const store = openDurableStore(options.dataPath);
   const registry = new NexusRegistry();
-  for (const model of DEV_CATALOGUE) {
+  for (const model of MODEL_CATALOGUE) {
     registry.register(model);
   }
-  const router = new NexusRouter(registry);
-  const broker = new ExecutionBroker(1);
-  const delayMs = options.streamDelayMs ?? 0;
-  broker.register(new MockAdapter('openai', { delayMs }));
-  broker.register(new MockAdapter('anthropic', { delayMs }));
-  broker.register(new MockAdapter('gemini', { delayMs }));
-  broker.register(new MockAdapter('ollama', { delayMs }));
 
+  const env = options.env ?? (mode === 'live' ? process.env : {});
+  const secrets = options.secrets ?? new EnvSecretStore(env);
+  const plane = createExecutionPlane({
+    mode,
+    secrets,
+    env,
+    transport: options.transport,
+    streamDelayMs: options.streamDelayMs,
+    catalogue: MODEL_CATALOGUE,
+    health: {
+      onProviderHealth(provider, health) {
+        registry.setHealth(provider, health);
+      },
+    },
+  });
+
+  for (const [provider, health] of Object.entries(plane.health)) {
+    registry.setHealth(provider, health);
+  }
+
+  if (mode === 'live') {
+    await plane.refreshOllamaHealth();
+  }
+
+  const router = new NexusRouter(registry);
   const runtime = new ConversationRuntime({
     conversations: store.conversations,
     messages: store.messages,
@@ -41,8 +75,18 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     provenance: store.provenance,
     events: store.events,
     router,
-    executor: broker,
+    executor: plane.broker,
+    availableRuntimes: plane.available,
   });
   await runtime.recoverInFlight();
-  return { runtime, store, router, broker };
+  return {
+    runtime,
+    store,
+    router,
+    registry,
+    broker: plane.broker,
+    health: { ...plane.health },
+    mode,
+    availableRuntimes: plane.available,
+  };
 }

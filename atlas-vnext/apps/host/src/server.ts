@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
+import type { ProviderHealth } from '@atlas-vnext/contracts';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -16,6 +17,10 @@ const MIME: Record<string, string> = {
 export interface HostOptions {
   runtime: ConversationRuntime;
   staticDir?: string;
+  health?: {
+    mode: string;
+    providers: Record<string, ProviderHealth>;
+  };
 }
 
 export function createHost(options: HostOptions): Server {
@@ -35,7 +40,12 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
 
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') {
-      json(res, 200, { ok: true, service: 'atlas-vnext-host' });
+      json(res, 200, {
+        ok: true,
+        service: 'atlas-vnext-host',
+        mode: options.health?.mode ?? 'unknown',
+        providers: options.health?.providers ?? {},
+      });
       return;
     }
     if (req.method === 'POST' && url.pathname === '/api/conversations') {

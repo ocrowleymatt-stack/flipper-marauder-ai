@@ -20,7 +20,7 @@ afterEach(async () => {
 
 async function start() {
   const dir = mkdtempSync(join(tmpdir(), 'atlas-host-'));
-  const spine = await composeSpine({ dataPath: join(dir, 'state.json') });
+  const spine = await composeSpine({ dataPath: join(dir, 'state.json'), mode: 'mock' });
   const server = createHost({ runtime: spine.runtime });
   servers.push(server);
   const bound = await listen(server, 0, '127.0.0.1');
@@ -112,7 +112,7 @@ describe('conversation spine HTTP/SSE', () => {
 
   it('failes over before visible output and refuses to switch after partial text', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'atlas-host-'));
-    const spine = await composeSpine({ dataPath: join(dir, 'state.json') });
+    const spine = await composeSpine({ dataPath: join(dir, 'state.json'), mode: 'mock' });
     spine.broker.register({
       providerId: 'openai',
       async *stream() {
@@ -143,7 +143,7 @@ describe('conversation spine HTTP/SSE', () => {
       true,
     );
 
-    const partialSpine = await composeSpine({ dataPath: join(dir, 'partial.json') });
+    const partialSpine = await composeSpine({ dataPath: join(dir, 'partial.json'), mode: 'mock' });
     partialSpine.broker.register({
       providerId: 'openai',
       async *stream() {
@@ -174,5 +174,29 @@ describe('conversation spine HTTP/SSE', () => {
     expect(failed.execution.failureReason?.code).toBe('partial_stream_failure');
     const snapshot = await partialSpine.runtime.getSnapshot(partialConversation.id);
     expect(snapshot?.messages.at(-1)?.content).toBe('visible');
+  });
+
+  it('starts in live mode without credentials instead of crashing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-host-'));
+    const spine = await composeSpine({
+      dataPath: join(dir, 'live.json'),
+      mode: 'live',
+      env: {},
+      transport: {
+        async send() {
+          throw new Error('connect ECONNREFUSED');
+        },
+      },
+    });
+    expect(spine.mode).toBe('live');
+    expect(spine.health.openai).toBe('unavailable');
+    expect(spine.health.ollama).toBe('unhealthy');
+    const server = createHost({ runtime: spine.runtime, health: { mode: spine.mode, providers: spine.health } });
+    servers.push(server);
+    const bound = await listen(server, 0, '127.0.0.1');
+    const created = await fetch(`${bound.url}/api/health`);
+    const health = (await created.json()) as { ok: boolean; providers: Record<string, string> };
+    expect(health.ok).toBe(true);
+    expect(health.providers.openai).toBe('unavailable');
   });
 });

@@ -53,7 +53,17 @@ export type StreamEvent =
   | { type: 'message.delta'; messageId: string; content: string }
   | { type: 'execution'; execution: ExecutionRecord }
   | { type: 'error'; failure: { code: string; message: string } }
-  | { type: 'done' };
+  | { type: 'done' }
+  | { type: 'execution.started'; executionId: string; capability: string }
+  | { type: 'attempt.started'; executionId: string; provider: string; model: string }
+  | { type: 'attempt.failed'; failure: { message: string }; emittedVisibleOutput: boolean }
+  | { type: 'assistant.delta'; text: string }
+  | { type: 'assistant.completed'; text: string }
+  | { type: 'provider.warning'; message: string }
+  | { type: 'provider.failed'; failure: { message: string } }
+  | { type: 'execution.failed'; failure: { code: string; message: string } }
+  | { type: 'execution.completed'; provider: string | null; model: string | null }
+  | { type: string; [key: string]: unknown };
 
 const jsonHeaders = { 'content-type': 'application/json' };
 

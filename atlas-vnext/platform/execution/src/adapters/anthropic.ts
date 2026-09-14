@@ -1,0 +1,100 @@
+import type { StreamChunk, TokenUsage } from '@atlas-vnext/contracts';
+import { ProviderHttpError, httpFailure, usageFromCounts } from '../errors.ts';
+import { sanitizeText } from '../sanitize.ts';
+import type { SecretStore } from '../secrets.ts';
+import { parseSse } from '../stream-parse.ts';
+import { readAllText, type HttpTransport } from '../transport.ts';
+import type { ExecutionContext, ProviderAdapter } from '../types.ts';
+
+export class AnthropicAdapter implements ProviderAdapter {
+  readonly providerId = 'anthropic';
+
+  constructor(
+    private readonly options: {
+      secrets: SecretStore;
+      transport: HttpTransport;
+      timeoutMs: number;
+      baseUrl: string;
+      modelMap?: Record<string, string>;
+    },
+  ) {}
+
+  async *stream(model: string, context: ExecutionContext): AsyncGenerator<StreamChunk> {
+    const apiKey = this.options.secrets.get('ANTHROPIC_API_KEY');
+    if (!apiKey) {
+      throw new Error('anthropic is unavailable: missing credentials.');
+    }
+    const upstream = this.options.modelMap?.[model] ?? model;
+    const body = {
+      model: upstream,
+      max_tokens: 4096,
+      stream: true,
+      system: context.systemPrompt,
+      messages: [{ role: 'user', content: context.prompt }],
+    };
+    let response;
+    try {
+      response = await this.options.transport.send({
+        url: `${this.options.baseUrl}/v1/messages`,
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'anthropic-version': '2023-06-01',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify(body),
+        signal: context.signal,
+        timeoutMs: this.options.timeoutMs,
+      });
+    } catch (err) {
+      throw new Error(sanitizeText(err instanceof Error ? err.message : String(err)));
+    }
+
+    if (response.status >= 400) {
+      const text = await readAllText(response.stream);
+      throw new ProviderHttpError(httpFailure(this.providerId, response.status, text));
+    }
+
+    let inputTokens: number | undefined;
+    let outputTokens: number | undefined;
+    for await (const frame of parseSse(response.stream)) {
+      if (context.signal?.aborted) throw new Error('Execution aborted.');
+      let parsed: AnthropicEvent;
+      try {
+        parsed = JSON.parse(frame.data) as AnthropicEvent;
+      } catch {
+        yield { type: 'warning', message: 'Ignored malformed Anthropic SSE frame.', provider: this.providerId };
+        continue;
+      }
+      const type = parsed.type ?? frame.event;
+      if (type === 'error' && parsed.error?.message) {
+        throw new ProviderHttpError(httpFailure(this.providerId, 400, parsed.error.message));
+      }
+      if (type === 'content_block_delta' && parsed.delta?.type === 'text_delta' && parsed.delta.text) {
+        yield { type: 'text', text: parsed.delta.text };
+      }
+      if (type === 'content_block_delta' && parsed.delta?.type === 'thinking_delta' && parsed.delta.thinking) {
+        yield { type: 'reasoning', text: parsed.delta.thinking };
+      }
+      if (type === 'message_start' && parsed.message?.usage) {
+        inputTokens = parsed.message.usage.input_tokens;
+      }
+      if (type === 'message_delta' && parsed.usage) {
+        outputTokens = parsed.usage.output_tokens;
+        if (parsed.usage.input_tokens != null) inputTokens = parsed.usage.input_tokens;
+      }
+    }
+    const usage = usageFromCounts(inputTokens, outputTokens);
+    if (usage) yield { type: 'usage', usage };
+  }
+}
+
+interface AnthropicEvent {
+  type?: string;
+  error?: { message?: string };
+  delta?: { type?: string; text?: string; thinking?: string };
+  message?: { usage?: { input_tokens?: number; output_tokens?: number } };
+  usage?: { input_tokens?: number; output_tokens?: number };
+}
+
+export type { TokenUsage };

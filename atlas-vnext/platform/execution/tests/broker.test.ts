@@ -162,4 +162,100 @@ describe('Execution broker (transport, retry, streaming)', () => {
     }
     expect(chunks.filter((chunk) => chunk.type === 'text')).toEqual([{ type: 'text', text: 'fallback' }]);
   });
+
+  it('retries the same candidate before failover and records both attempts', async () => {
+    const broker = new ExecutionBroker(2);
+    let calls = 0;
+    broker.register({
+      providerId: 'openai',
+      async *stream() {
+        calls += 1;
+        if (calls === 1) throw new Error('transient');
+        yield { type: 'text', text: 'second try' };
+      },
+    });
+    const chunks: StreamChunk[] = [];
+    const attempts: string[] = [];
+    for await (const chunk of broker.execute(decision(['openai/gpt-4o']), { prompt: 'hi' }, {
+      onAttempt: (attempt) => attempts.push(`${attempt.outcome}:${attempt.provider}`),
+    })) {
+      chunks.push(chunk);
+    }
+    expect(calls).toBe(2);
+    expect(chunks).toEqual([{ type: 'text', text: 'second try' }]);
+    expect(attempts).toEqual(['started:openai', 'failed:openai', 'started:openai', 'succeeded:openai']);
+  });
+
+  it('skips a provider when its circuit is open', async () => {
+    const broker = new ExecutionBroker(1);
+    broker.register({
+      providerId: 'openai',
+      async *stream() {
+        throw new Error('down');
+      },
+    });
+    broker.register({
+      providerId: 'ollama',
+      async *stream() {
+        yield { type: 'text', text: 'local' };
+      },
+    });
+    const breaker = broker.breaker('openai');
+    breaker.failure();
+    breaker.failure();
+    breaker.failure();
+    expect(breaker.isOpen()).toBe(true);
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of broker.execute(decision(['openai/gpt-4o', 'ollama/llama3.2']), { prompt: 'hi' })) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toEqual([{ type: 'text', text: 'local' }]);
+  });
+
+  it('treats reasoning deltas as visible output and refuses a second provider', async () => {
+    const broker = new ExecutionBroker(1);
+    broker.register({
+      providerId: 'openai',
+      async *stream() {
+        yield { type: 'reasoning', text: 'thinking' };
+        throw new Error('cut');
+      },
+    });
+    broker.register({
+      providerId: 'ollama',
+      async *stream() {
+        yield { type: 'text', text: 'contradiction' };
+      },
+    });
+    const chunks: StreamChunk[] = [];
+    await expect(async () => {
+      for await (const chunk of broker.execute(decision(['openai/gpt-4o', 'ollama/llama3.2']), { prompt: 'hi' })) {
+        chunks.push(chunk);
+      }
+    }).rejects.toThrow('cut');
+    expect(chunks).toEqual([{ type: 'reasoning', text: 'thinking' }]);
+  });
+
+  it('does not treat provider warnings as visible output', async () => {
+    const broker = new ExecutionBroker(1);
+    broker.register({
+      providerId: 'openai',
+      async *stream() {
+        yield { type: 'warning', message: 'rate limit approaching', provider: 'openai' };
+        throw new Error('died after warning');
+      },
+    });
+    broker.register({
+      providerId: 'ollama',
+      async *stream() {
+        yield { type: 'text', text: 'ok' };
+      },
+    });
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of broker.execute(decision(['openai/gpt-4o', 'ollama/llama3.2']), { prompt: 'hi' })) {
+      chunks.push(chunk);
+    }
+    expect(chunks.filter((chunk) => chunk.type === 'text')).toEqual([{ type: 'text', text: 'ok' }]);
+    expect(chunks.some((chunk) => chunk.type === 'warning')).toBe(true);
+  });
 });

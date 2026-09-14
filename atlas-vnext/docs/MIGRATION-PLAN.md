@@ -26,10 +26,13 @@ Zero-downtime cutover is a later concern. This repository is a greenfield design
 - Permissions grant persistence
 - Auth
 
-## Phase 3 — real adapters
+## Phase 3 — real adapters (this PR)
 
-- OpenAI, Anthropic, Gemini, Ollama, Venice in **execution**
-- Runtime health probes writing snapshots into Nexus
+- [x] OpenAI, Anthropic, Gemini, Ollama, Venice in **execution**
+- [x] Runtime health probes writing snapshots into Nexus (Ollama discovery; circuit-breaker snapshots)
+- RunPod / Forge / Hetzner remain placeholders
+
+The local file metadata store is **not** final; Phase 2 still owes PostgreSQL.
 
 ## Phase 4 — first dungeon
 

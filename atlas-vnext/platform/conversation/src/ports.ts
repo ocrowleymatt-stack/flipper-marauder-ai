@@ -46,6 +46,7 @@ export interface CapabilityRouter {
     request?: {
       contextTokens?: number;
       privacy?: 'any' | 'local_only';
+      availableRuntimes?: string[];
       traceId?: string;
     },
   ): RouteDecision;

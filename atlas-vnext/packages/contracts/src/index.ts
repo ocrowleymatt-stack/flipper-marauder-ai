@@ -45,6 +45,7 @@ export const providerHealthSchema = z.enum([
   'configured',
   'unhealthy',
   'authentication_failure',
+  'unavailable',
 ]);
 export type ProviderHealth = z.infer<typeof providerHealthSchema>;
 
@@ -60,6 +61,8 @@ export const registeredModelSchema = z.object({
   health: providerHealthSchema.default('configured'),
   privacyEligibility: privacyEligibilitySchema.default('any'),
   runtimeRequirements: z.array(z.string().min(1)).default([]),
+  /** Provider API model id when it differs from the registry `model` key. */
+  upstreamId: z.string().min(1).optional(),
 });
 export type RegisteredModel = z.infer<typeof registeredModelSchema>;
 
@@ -95,6 +98,11 @@ export const streamChunkSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('reasoning'), text: z.string() }),
   z.object({ type: z.literal('tool_call'), call: toolCallRequestSchema }),
   z.object({ type: z.literal('usage'), usage: tokenUsageSchema }),
+  z.object({
+    type: z.literal('warning'),
+    message: z.string(),
+    provider: z.string().optional(),
+  }),
 ]);
 export type StreamChunk = z.infer<typeof streamChunkSchema>;
 
@@ -200,6 +208,22 @@ export const provenanceRecordSchema = z.object({
   jobId: z.string().nullable(),
   timestamp: z.string(),
   traceId: z.string(),
+  capability: z.string().optional(),
+  /** Provider-reported usage only. Never invent token counts. */
+  usage: tokenUsageSchema.nullable().optional(),
+  locality: localitySchema.optional(),
+  latencyMs: z.number().int().nonnegative().nullable().optional(),
+  selectedRouteId: z.string().optional(),
+  attemptOutcomes: z
+    .array(
+      z.object({
+        provider: z.string().min(1),
+        model: z.string().min(1),
+        outcome: z.string().min(1),
+        emittedVisibleOutput: z.boolean(),
+      }),
+    )
+    .optional(),
 });
 export type ProvenanceRecord = z.infer<typeof provenanceRecordSchema>;
 
@@ -365,6 +389,7 @@ export const executionRecordSchema = z.object({
   attempts: z.array(executionAttemptSchema),
   usage: tokenUsageSchema.nullable(),
   failureReason: structuredFailureSchema.nullable(),
+  latencyMs: z.number().int().nonnegative().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   startedAt: z.string().nullable(),
@@ -398,6 +423,80 @@ export const conversationStreamEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('execution'), execution: executionRecordSchema }),
   z.object({ type: z.literal('error'), failure: structuredFailureSchema }),
   z.object({ type: z.literal('done') }),
+  z.object({
+    type: z.literal('execution.started'),
+    executionId: z.string(),
+    capability: z.string(),
+  }),
+  z.object({
+    type: z.literal('attempt.started'),
+    executionId: z.string(),
+    index: z.number(),
+    provider: z.string(),
+    model: z.string(),
+  }),
+  z.object({
+    type: z.literal('attempt.completed'),
+    executionId: z.string(),
+    index: z.number(),
+    provider: z.string(),
+    model: z.string(),
+    outcome: executionAttemptOutcomeSchema,
+  }),
+  z.object({
+    type: z.literal('attempt.failed'),
+    executionId: z.string(),
+    index: z.number(),
+    provider: z.string(),
+    model: z.string(),
+    failure: structuredFailureSchema,
+    emittedVisibleOutput: z.boolean(),
+  }),
+  z.object({
+    type: z.literal('assistant.delta'),
+    executionId: z.string(),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal('assistant.completed'),
+    executionId: z.string(),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal('reasoning.delta'),
+    executionId: z.string(),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal('tool.requested'),
+    executionId: z.string(),
+    call: toolCallRequestSchema,
+  }),
+  z.object({ type: z.literal('usage'), executionId: z.string(), usage: tokenUsageSchema }),
+  z.object({
+    type: z.literal('provider.warning'),
+    executionId: z.string(),
+    provider: z.string(),
+    message: z.string(),
+  }),
+  z.object({
+    type: z.literal('provider.failed'),
+    executionId: z.string(),
+    provider: z.string(),
+    model: z.string(),
+    failure: structuredFailureSchema,
+  }),
+  z.object({
+    type: z.literal('execution.completed'),
+    executionId: z.string(),
+    provider: z.string().nullable(),
+    model: z.string().nullable(),
+  }),
+  z.object({
+    type: z.literal('execution.failed'),
+    executionId: z.string(),
+    failure: structuredFailureSchema,
+  }),
 ]);
 export type ConversationStreamEvent = z.infer<typeof conversationStreamEventSchema>;
 

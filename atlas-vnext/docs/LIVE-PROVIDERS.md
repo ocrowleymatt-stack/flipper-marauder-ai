@@ -24,7 +24,7 @@ One abstraction: `SecretStore` / `EnvSecretStore` in `platform/execution`. Adapt
 |---|---|
 | `OPENAI_API_KEY` | OpenAI |
 | `ANTHROPIC_API_KEY` | Anthropic |
-| `GEMINI_API_KEY` | Gemini |
+| `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Gemini |
 | `VENICE_API_KEY` | Venice |
 | `ATLAS_OLLAMA_URL` (optional, not a secret) | Ollama endpoint, default `http://127.0.0.1:11434` |
 

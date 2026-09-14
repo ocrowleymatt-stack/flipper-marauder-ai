@@ -14,6 +14,11 @@ export const SECRET_KEYS = {
   venice: 'VENICE_API_KEY',
 } as const;
 
+/** Gemini accepts either Google AI Studio key name. */
+export function geminiApiKey(secrets: SecretStore): string | undefined {
+  return secrets.get(SECRET_KEYS.gemini) ?? secrets.get('GOOGLE_API_KEY');
+}
+
 export type CloudProviderId = keyof typeof SECRET_KEYS;
 
 export class EnvSecretStore implements SecretStore {

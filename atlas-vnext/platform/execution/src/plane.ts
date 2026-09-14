@@ -7,7 +7,7 @@ import { createOpenAIAdapter, createVeniceAdapter } from './adapters/openai.ts';
 import { PLACEHOLDER_PROVIDERS } from './adapters/placeholder.ts';
 import { ExecutionBroker } from './broker.ts';
 import { readExecutionConfig, type ExecutionConfig } from './config.ts';
-import { EnvSecretStore, SECRET_KEYS, type SecretStore } from './secrets.ts';
+import { EnvSecretStore, geminiApiKey, SECRET_KEYS, type SecretStore } from './secrets.ts';
 import { FetchTransport, type HttpTransport } from './transport.ts';
 import type { HealthObserver, ProviderAdapter } from './types.ts';
 
@@ -110,8 +110,8 @@ export function createExecutionPlane(options: ExecutionPlaneOptions): ExecutionP
     },
     {
       id: 'gemini',
-      ready: Boolean(secrets.get(SECRET_KEYS.gemini)),
-      adapter: secrets.get(SECRET_KEYS.gemini)
+      ready: Boolean(geminiApiKey(secrets)),
+      adapter: geminiApiKey(secrets)
         ? new GeminiAdapter({
             secrets,
             transport,

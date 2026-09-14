@@ -2,6 +2,7 @@ import type { StreamChunk, TokenUsage } from '@atlas-vnext/contracts';
 import { ProviderHttpError, httpFailure, usageFromCounts } from '../errors.ts';
 import { sanitizeText } from '../sanitize.ts';
 import { parseSse } from '../stream-parse.ts';
+import { OpenAIToolCallAssembler } from '../tool-call-buffer.ts';
 import { readAllText, type HttpTransport } from '../transport.ts';
 import type { SecretStore } from '../secrets.ts';
 import type { ExecutionContext, ProviderAdapter } from '../types.ts';
@@ -64,9 +65,13 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       throw new ProviderHttpError(httpFailure(this.providerId, response.status, text));
     }
 
+    const toolCalls = new OpenAIToolCallAssembler();
     for await (const frame of parseSse(response.stream)) {
       if (context.signal?.aborted) throw new Error('Execution aborted.');
-      if (frame.data === '[DONE]') return;
+      if (frame.data === '[DONE]') {
+        yield* toolCalls.finish(this.providerId);
+        return;
+      }
       let parsed: OpenAIStreamPayload;
       try {
         parsed = JSON.parse(frame.data) as OpenAIStreamPayload;
@@ -86,30 +91,27 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         yield { type: 'text', text: delta.content };
       }
       if (delta?.tool_calls) {
-        for (const call of delta.tool_calls) {
-          if (!call.id || !call.function?.name) continue;
-          let args: Record<string, unknown> = {};
-          try {
-            args = call.function.arguments ? (JSON.parse(call.function.arguments) as Record<string, unknown>) : {};
-          } catch {
-            args = { raw: call.function.arguments };
-          }
-          yield { type: 'tool_call', call: { id: call.id, toolId: call.function.name, arguments: args } };
-        }
+        toolCalls.ingest(delta.tool_calls);
       }
       const usage = usageFromOpenAI(parsed.usage);
       if (usage) yield { type: 'usage', usage };
     }
+    yield* toolCalls.finish(this.providerId);
   }
 }
 
 interface OpenAIStreamPayload {
   error?: { message?: string };
   choices?: Array<{
+    finish_reason?: string | null;
     delta?: {
       content?: string;
       reasoning_content?: string;
-      tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
     };
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };

@@ -1,7 +1,7 @@
 import type { StreamChunk } from '@atlas-vnext/contracts';
 import { ProviderHttpError, httpFailure, usageFromCounts } from '../errors.ts';
 import { sanitizeText } from '../sanitize.ts';
-import type { SecretStore } from '../secrets.ts';
+import { geminiApiKey, type SecretStore } from '../secrets.ts';
 import { parseSse } from '../stream-parse.ts';
 import { readAllText, type HttpTransport } from '../transport.ts';
 import type { ExecutionContext, ProviderAdapter } from '../types.ts';
@@ -20,7 +20,7 @@ export class GeminiAdapter implements ProviderAdapter {
   ) {}
 
   async *stream(model: string, context: ExecutionContext): AsyncGenerator<StreamChunk> {
-    const apiKey = this.options.secrets.get('GEMINI_API_KEY');
+    const apiKey = geminiApiKey(this.options.secrets);
     if (!apiKey) {
       throw new Error('gemini is unavailable: missing credentials.');
     }

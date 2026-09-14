@@ -101,6 +101,47 @@ describe('OpenAI adapter contract', () => {
     });
     await expect(collect(adapter.stream('gpt-4o', { prompt: 'hi' }))).rejects.toThrow(/missing credentials/);
   });
+
+  it('assembles fragmented tool-call arguments across SSE deltas before emitting', async () => {
+    const adapter = createOpenAIAdapter({
+      secrets: new MapSecretStore({ OPENAI_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://api.openai.com/v1',
+      transport: transportFor(() => ({
+        status: 200,
+        body: sse([
+          '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_lookup","function":{"name":"lookup","arguments":"{\\"q\\":\\""}}]}}]}',
+          '{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"atlas"}}]}}]}',
+          '{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"}"}}]}}]}',
+          '{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+          '[DONE]',
+        ]),
+      })),
+    });
+    const chunks = await collect(adapter.stream('gpt-4o', { prompt: 'search' }));
+    expect(chunks.filter((chunk) => chunk.type === 'tool_call')).toEqual([
+      { type: 'tool_call', call: { id: 'call_lookup', toolId: 'lookup', arguments: { q: 'atlas' } } },
+    ]);
+    expect(chunks.some((chunk) => chunk.type === 'warning')).toBe(false);
+  });
+
+  it('does not emit a tool_call from a JSON-invalid argument fragment', async () => {
+    const adapter = createOpenAIAdapter({
+      secrets: new MapSecretStore({ OPENAI_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://api.openai.com/v1',
+      transport: transportFor(() => ({
+        status: 200,
+        body: sse([
+          '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_bad","function":{"name":"lookup","arguments":"{\\"q\\":"}}]}}]}',
+          '[DONE]',
+        ]),
+      })),
+    });
+    const chunks = await collect(adapter.stream('gpt-4o', { prompt: 'search' }));
+    expect(chunks.some((chunk) => chunk.type === 'tool_call')).toBe(false);
+    expect(chunks.some((chunk) => chunk.type === 'warning')).toBe(true);
+  });
 });
 
 describe('Anthropic adapter contract', () => {
@@ -173,6 +214,26 @@ describe('Venice adapter contract', () => {
     expect(adapter.providerId).toBe('venice');
     const chunks = await collect(adapter.stream('uncensored', { prompt: 'hi' }));
     expect(chunks.filter((chunk) => chunk.type === 'text')).toEqual([{ type: 'text', text: 'local-ish' }]);
+  });
+
+  it('assembles fragmented Venice tool-call arguments rather than parsing each delta', async () => {
+    const adapter = createVeniceAdapter({
+      secrets: new MapSecretStore({ VENICE_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://api.venice.ai/api/v1',
+      transport: transportFor(() => ({
+        status: 200,
+        body: sse([
+          '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_v","function":{"name":"search","arguments":"{\\"q\\":"}}]}}]}',
+          '{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"venice\\"}"}}]}}]}',
+          '[DONE]',
+        ]),
+      })),
+    });
+    const chunks = await collect(adapter.stream('uncensored', { prompt: 'hi' }));
+    expect(chunks.filter((chunk) => chunk.type === 'tool_call')).toEqual([
+      { type: 'tool_call', call: { id: 'call_v', toolId: 'search', arguments: { q: 'venice' } } },
+    ]);
   });
 });
 
@@ -248,5 +309,15 @@ describe('execution plane availability', () => {
     expect(live.mode).toBe('live');
     expect(mock.mode).toBe('mock');
     expect(live.broker.registeredProviders()).not.toEqual(mock.broker.registeredProviders());
+  });
+
+  it('treats GOOGLE_API_KEY as a Gemini credential', () => {
+    const plane = createExecutionPlane({
+      mode: 'live',
+      env: { GOOGLE_API_KEY: KEY },
+      secrets: new MapSecretStore({ GOOGLE_API_KEY: KEY }),
+    });
+    expect(plane.available).toContain('gemini');
+    expect(plane.unavailable).not.toContain('gemini');
   });
 });

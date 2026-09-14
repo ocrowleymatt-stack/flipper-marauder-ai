@@ -107,8 +107,9 @@ describe('conversation spine HTTP/SSE', () => {
       execution: { selectedProvider: string; selectedModel: string; capability: string };
     };
     expect(execution.execution.capability).toBe('nexus/reason');
-    expect(execution.execution.selectedProvider).toBe('anthropic');
-    expect(execution.execution.selectedModel).toBe('claude-sonnet');
+    // grok-build is the catalogue's lowest-latency reasoning model (docs.x.ai grok-build-0.1).
+    expect(execution.execution.selectedProvider).toBe('xai');
+    expect(execution.execution.selectedModel).toBe('grok-build');
   });
 
   it('failes over before visible output and refuses to switch after partial text', async () => {

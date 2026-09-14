@@ -26,8 +26,8 @@ describe('schema bootstrap and migrations', () => {
     const versions = await second.kernel.tx.query<{ version: number }>(
       'SELECT version FROM schema_migrations ORDER BY version',
     );
-    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6]);
-    expect(CURRENT_SCHEMA_VERSION).toBe(6);
+    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(CURRENT_SCHEMA_VERSION).toBe(7);
     const tenant = await second.kernel.tx.query('SELECT id FROM tenants WHERE id = $1', ['tenant_a']);
     expect(tenant.rows).toHaveLength(1);
     const artefact = await second.kernel.tx.query('SELECT COUNT(*)::int AS n FROM artefact_metadata');
@@ -58,7 +58,7 @@ describe('schema bootstrap and migrations', () => {
          VALUES ('tenant_keep', 'urn:atlas:tenant:keep', 'Keep', now(), now())`,
       );
       const result = await migrate(client, loadMigrations());
-      expect(result.applied).toEqual([2, 3, 4, 5, 6]);
+      expect(result.applied).toEqual([2, 3, 4, 5, 6, 7]);
       expect(result.skipped).toEqual([1]);
       const tenants = await client.query('SELECT id FROM tenants');
       expect(tenants.rows.map((row) => row.id)).toContain('tenant_keep');
@@ -106,7 +106,7 @@ describe('schema bootstrap and migrations', () => {
       await client.query(`SET search_path TO ${assertIdent(handle.schema)}`);
       const again = await migrate(client, loadMigrations());
       expect(again.applied).toEqual([]);
-      expect(again.skipped).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(again.skipped).toEqual([1, 2, 3, 4, 5, 6, 7]);
     } finally {
       client.release();
     }
@@ -120,13 +120,13 @@ describe('schema bootstrap and migrations', () => {
     for (const migration of loadMigrations(defaultMigrationsDir())) {
       writeFileSync(join(dir, migration.filename), readFileSync(join(defaultMigrationsDir(), migration.filename)));
     }
-    writeFileSync(join(dir, '007_bad.sql'), 'THIS IS NOT SQL;');
+    writeFileSync(join(dir, '008_bad.sql'), 'THIS IS NOT SQL;');
     const client = await handle.kernel.tx.pool.connect();
     try {
       await client.query(`SET search_path TO ${assertIdent(handle.schema)}`);
-      await expect(migrate(client, loadMigrations(dir))).rejects.toThrow(/Migration 7/);
+      await expect(migrate(client, loadMigrations(dir))).rejects.toThrow(/Migration 8/);
       const versions = await client.query('SELECT version FROM schema_migrations ORDER BY version');
-      expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
       const tenant = await client.query('SELECT id FROM tenants WHERE id = $1', ['tenant_a']);
       expect(tenant.rows).toHaveLength(1);
     } finally {

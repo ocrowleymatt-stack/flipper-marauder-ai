@@ -41,6 +41,7 @@ import {
   ToolEngine,
   ToolRegistry,
 } from '@atlas-vnext/tools';
+import { WritingService } from '@atlas-vnext/dungeon-writing';
 import { MODEL_CATALOGUE } from './catalogue.ts';
 import { ShutdownController, readOperationalLimits, type HealthProbe } from './ops.ts';
 
@@ -51,6 +52,7 @@ export interface Spine {
   files: FilesService | null;
   projects: ProjectService | null;
   context: ContextService | null;
+  writing: WritingService | null;
   cas: CasStore | null;
   router: NexusRouter;
   registry: NexusRegistry;
@@ -137,6 +139,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   let files: FilesService | null = null;
   let projects: ProjectService | null = null;
   let context: ContextService | null = null;
+  let writing: WritingService | null = null;
   let cas: CasStore | null = null;
   let runtime: ConversationRuntime;
   const tenantId = persistenceConfig.defaultTenantId ?? (persistenceConfig.production ? '' : 'tenant_local');
@@ -150,6 +153,8 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     'project.read',
     'file.read',
     'artifact.read',
+    'artifact.write',
+    'project.write',
     'tool.invoke.readonly',
     'tool.invoke',
   ] as const) {
@@ -270,6 +275,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     files = new FilesService(persistence, cas);
     projects = new ProjectService(persistence);
     context = new ContextService(persistence);
+    writing = new WritingService({ persistence, projects, files, context, runtime, authority });
   } else {
     store = openDurableStore(options.dataPath);
     tools = new ToolEngine({
@@ -336,6 +342,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     files,
     projects,
     context,
+    writing,
     cas,
     router,
     registry,

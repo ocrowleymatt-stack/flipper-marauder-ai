@@ -27,6 +27,7 @@ export interface Project {
   urn: string;
   name: string;
   description: string | null;
+  dungeon?: string | null;
   archived: boolean;
   createdAt: string;
   updatedAt: string;
@@ -255,13 +256,13 @@ export async function listProjects(): Promise<Project[]> {
   return parseJson(await fetch('/api/projects', { credentials: 'include' }));
 }
 
-export async function createProject(name: string): Promise<Project> {
+export async function createProject(name: string, dungeon?: string): Promise<Project> {
   return parseJson(
     await fetch('/api/projects', {
       method: 'POST',
       credentials: 'include',
       headers: mutatingHeaders(),
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(dungeon ? { name, dungeon } : { name }),
     }),
   );
 }
@@ -398,6 +399,138 @@ export function runtimeWaitingLabel(message: string | null | undefined): string 
 export function citationsFromBackend(context: AssembledContext | null): Citation[] {
   if (!context) return [];
   return context.citations.filter((citation) => citation.confidence === 'sourced' || citation.confidence === 'unknown');
+}
+
+export interface DungeonRegistration {
+  id: string;
+  slug: string;
+  title: string;
+  navLabel: string;
+  description: string;
+  surface: string;
+  featureAvailable: boolean;
+}
+
+export interface WritingDocument {
+  id: string;
+  urn: string;
+  projectId: string;
+  title: string;
+  status: string;
+  currentVersion: number;
+  revision: number;
+  content: string;
+  draft: string | null;
+  currentContentHash: string | null;
+  draftContentHash: string | null;
+  originatingRunId: string | null;
+  conversationId: string | null;
+  failure: { code: string; message: string; retryable?: boolean } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WritingDocumentVersion {
+  id: string;
+  documentId: string;
+  version: number;
+  contentHash: string;
+  artefactId: string;
+  title: string;
+  operation: string;
+  executionId: string | null;
+  createdAt: string;
+}
+
+export interface WritingProvenance {
+  artefactId: string;
+  projectId: string;
+  sourceInputs: string[];
+  provider: string;
+  model: string;
+  jobId: string | null;
+  timestamp: string;
+  capability?: string;
+}
+
+export async function listDungeons(): Promise<DungeonRegistration[]> {
+  return parseJson(await fetch('/api/dungeons', { credentials: 'include' }));
+}
+
+export async function listDocuments(projectId: string): Promise<WritingDocument[]> {
+  return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/documents`, { credentials: 'include' }));
+}
+
+export async function createDocument(projectId: string, input: { title?: string; instruction?: string }): Promise<WritingDocument> {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/documents`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function getDocument(id: string): Promise<WritingDocument> {
+  return parseJson(await fetch(`/api/documents/${encodeURIComponent(id)}`, { credentials: 'include' }));
+}
+
+export async function renameDocument(id: string, title: string, expectedRevision: number): Promise<WritingDocument> {
+  return parseJson(
+    await fetch(`/api/documents/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify({ title, expectedRevision }),
+    }),
+  );
+}
+
+export async function deleteDocument(id: string, expectedRevision?: number): Promise<WritingDocument> {
+  const suffix = expectedRevision != null ? `?expectedRevision=${expectedRevision}` : '';
+  return parseJson(
+    await fetch(`/api/documents/${encodeURIComponent(id)}${suffix}`, {
+      method: 'DELETE',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+    }),
+  );
+}
+
+export async function listDocumentVersions(id: string): Promise<WritingDocumentVersion[]> {
+  return parseJson(await fetch(`/api/documents/${encodeURIComponent(id)}/versions`, { credentials: 'include' }));
+}
+
+export async function restoreDocument(id: string, version: number, expectedRevision: number): Promise<WritingDocument> {
+  return parseJson(
+    await fetch(`/api/documents/${encodeURIComponent(id)}/restore`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify({ version, expectedRevision }),
+    }),
+  );
+}
+
+export async function getDocumentProvenance(id: string): Promise<WritingProvenance[]> {
+  return parseJson(await fetch(`/api/documents/${encodeURIComponent(id)}/provenance`, { credentials: 'include' }));
+}
+
+export async function* generateDocument(
+  id: string,
+  input: { operation: string; instruction: string; fileIds: string[]; expectedRevision: number },
+): AsyncGenerator<StreamEvent> {
+  const response = await fetch(`/api/documents/${encodeURIComponent(id)}/generate`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: mutatingHeaders(),
+    body: JSON.stringify(input),
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(await readError(response));
+  }
+  yield* parseSse(response.body);
 }
 
 async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<StreamEvent> {

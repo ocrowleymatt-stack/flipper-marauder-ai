@@ -346,6 +346,14 @@ export function createConversationRepos(tx: PgTx, actor: PersistenceActor, clock
       );
       return result.rows.map((row) => mapProvenance(sqlRow(row)));
     },
+    async forArtefact(artefactId) {
+      const owner = scoped();
+      const result = await tx.query(
+        'SELECT * FROM provenance WHERE artefact_id = $1 AND tenant_id = $2 ORDER BY timestamp ASC',
+        [artefactId, owner.tenantId],
+      );
+      return result.rows.map((row) => mapProvenance(sqlRow(row)));
+    },
   };
 
   return { conversations, messages, executions, provenance };

@@ -53,6 +53,7 @@ async function startWorkbench() {
     files: spine.files,
     context: spine.context,
     persistence: spine.persistence,
+    writing: spine.writing,
     tenantId: spine.tenantId,
     principalId: spine.principalId,
   });

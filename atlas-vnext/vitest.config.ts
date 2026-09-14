@@ -9,6 +9,7 @@ export default defineConfig({
     include: [
       'platform/**/*.test.ts',
       'apps/**/*.test.ts',
+      'dungeons/**/*.test.ts',
       'tests/**/*.test.ts',
     ],
     exclude: [
@@ -37,6 +38,7 @@ export default defineConfig({
       '@atlas-vnext/tools': resolve(root, 'platform/tools/src/index.ts'),
       '@atlas-vnext/plugins': resolve(root, 'platform/plugins/src/index.ts'),
       '@atlas-vnext/secrets': resolve(root, 'platform/secrets/src/index.ts'),
+      '@atlas-vnext/dungeon-writing': resolve(root, 'dungeons/writing/src/index.ts'),
     },
   },
 });

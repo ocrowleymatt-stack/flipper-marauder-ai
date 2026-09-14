@@ -10,6 +10,7 @@
     "@atlas-vnext/auth": "*",
     "@atlas-vnext/contracts": "*",
     "@atlas-vnext/conversation": "*",
+    "@atlas-vnext/dungeon-writing": "*",
     "@atlas-vnext/execution": "*",
     "@atlas-vnext/files": "*",
     "@atlas-vnext/context": "*",

@@ -120,6 +120,9 @@ export function memoryStores(ids?: IdFactory, now?: () => string): MemoryHandle 
     async forJob(jobId) {
       return provenance.filter((entry) => entry.jobId === jobId);
     },
+    async forArtefact(artefactId) {
+      return provenance.filter((entry) => entry.artefactId === artefactId);
+    },
   };
 
   return {

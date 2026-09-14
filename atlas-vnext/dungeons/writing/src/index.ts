@@ -1,9 +1,13 @@
-import type { DungeonId } from '@atlas-vnext/contracts';
-
-export const dungeonId: DungeonId = 'writing';
-
-export const writingDungeon = {
-  id: dungeonId,
-  title: 'Writing',
-  description: 'Manuscripts, claim ledgers, stylometry, and literary craft. Product code deferred.',
-} as const;
+export { dungeonId, writingDungeon } from './legacy.ts';
+export { CASPA_WRITING_DUNGEON } from './registration.ts';
+export { WritingService } from './service.ts';
+export type { WritingActor, WritingGenerateInput, WritingStreamEvent } from './service.ts';
+export { WritingError, GENERIC_DENY } from './errors.ts';
+export {
+  composeWritingPrompt,
+  writingRouteRequirements,
+  writingOperationInstruction,
+  WRITING_CAPABILITY_POLICY,
+  WRITING_RUNTIME_POLICY,
+  DUNGEON_WRITING_BEHAVIOUR,
+} from './behaviour.ts';

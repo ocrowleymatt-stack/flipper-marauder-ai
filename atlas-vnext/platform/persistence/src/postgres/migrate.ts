@@ -15,7 +15,7 @@ export interface MigrationFile {
   checksum: string;
 }
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 export function defaultMigrationsDir(): string {
   return fileURLToPath(new URL('../../migrations', import.meta.url));

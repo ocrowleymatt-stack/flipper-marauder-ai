@@ -26,6 +26,7 @@ import { createFileStores } from './files.ts';
 import { createAuthStores } from './auth.ts';
 import { createToolStores, recoverToolInvocations } from './tools.ts';
 import { createSiteStores } from './sites.ts';
+import { createDocumentStore } from './documents.ts';
 import { mapArtefact, mapExecution, mapLease, sqlRow, type ExecutionRow } from './mappers.ts';
 import { CURRENT_SCHEMA_VERSION, ensureSchema, loadMigrations, migrate } from './migrate.ts';
 import { PgTx, createPool } from './tx.ts';
@@ -89,6 +90,7 @@ export class PostgresPersistence implements PlatformPersistence {
       directory: authStores.directory,
       toolInvocations: toolStores.invocations,
       toolApprovals: toolStores.approvals,
+      documents: createDocumentStore(this.tx, this.clock),
     };
   }
 
@@ -149,6 +151,21 @@ export class PostgresPersistence implements PlatformPersistence {
     const jobs = await this.jobs.recoverExpiredLeases(this.clock());
     const runtimeLeases = await this.runtimeLeases.expire(this.clock());
     const tools = await this.tx.run(() => recoverToolInvocations(this.tx, this.clock()));
+    await this.tx.run(async () => {
+      const docs = createDocumentStore(this.tx, this.clock);
+      const now = this.clock();
+      for (const doc of await docs.listInFlight()) {
+        await docs.update(
+          { tenantId: doc.tenantId, principalId: doc.createdBy ?? 'system' },
+          doc.id,
+          {
+            status: 'failed',
+            failure: { code: 'interrupted', message: reason, retryable: true, at: now },
+            expectedRevision: doc.revision,
+          },
+        );
+      }
+    });
     return { executions, jobs, runtimeLeases, tools };
   }
 

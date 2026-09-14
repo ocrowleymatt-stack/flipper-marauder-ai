@@ -1,9 +1,9 @@
-# Writing dungeon
+# Writing dungeon (Caspa)
 
-Domain: manuscripts, claim ledgers, stylometry, craft rules.
+First real Atlas dungeon: a thin writing domain over platform primitives.
 
-**May:** call Nexus for routing, Execution broker for inference, and platform primitives (projects, jobs, storage, provenance, permissions).
+**May:** writing task semantics, document workflows, operations, document/version presentation, writing-specific context rules (selected files only), domain UX, domain metadata, Behaviour composition for writing.
 
-**Must not:** import other dungeons; import provider adapters or HTTP SDKs; store blobs in SQLite; run its own job runner.
+**Must not:** own Nexus, Execution, auth, tenancy, Authority, CAS, generic files/projects/retrieval/provenance/tools, RunPod, or provider SDKs.
 
-Product code is not in this PR. Behavioural references: Caspa craft rules, Shakespeare literary prompts; specified Atlas Mountain claim ledger / commission runner (TypeScript AM tree not re-opened this audit).
+See [docs/CASPA-WRITING.md](../../docs/CASPA-WRITING.md).

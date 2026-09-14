@@ -1,19 +1,14 @@
-export interface DomainEvent {
-  eventId: string;
-  channel: string;
-  type: string;
-  timestamp: string;
-  payload: unknown;
-}
+import { randomUUID } from 'node:crypto';
+import type { DomainEvent, EventBus } from './types.ts';
 
-export interface EventBus {
-  publish(event: Omit<DomainEvent, 'eventId' | 'timestamp'>): Promise<DomainEvent>;
-  subscribe(channel: string, listener: (event: DomainEvent) => void): () => void;
-}
+export type { DomainEvent, EventBus } from './types.ts';
+export { EventsNotImplementedError } from './types.ts';
+export { MemoryEventBus } from './memory.ts';
 
-export class EventsNotImplementedError extends Error {
-  constructor() {
-    super('platform/events is a design-gate shell; durable implementation is deferred.');
-    this.name = 'EventsNotImplementedError';
-  }
+export function createEvent(partial: Omit<DomainEvent, 'eventId' | 'timestamp'>, now = () => new Date().toISOString()): DomainEvent {
+  return {
+    eventId: `evt_${randomUUID()}`,
+    timestamp: now(),
+    ...partial,
+  };
 }

@@ -6,6 +6,8 @@ export type Layer =
   | 'contracts'
   | 'nexus'
   | 'execution'
+  | 'conversation'
+  | 'persistence'
   | 'projects'
   | 'jobs'
   | 'events'
@@ -47,6 +49,8 @@ const PACKAGE_LAYER: Record<string, Layer> = {
   '@atlas-vnext/contracts': 'contracts',
   '@atlas-vnext/nexus': 'nexus',
   '@atlas-vnext/execution': 'execution',
+  '@atlas-vnext/conversation': 'conversation',
+  '@atlas-vnext/persistence': 'persistence',
   '@atlas-vnext/projects': 'projects',
   '@atlas-vnext/jobs': 'jobs',
   '@atlas-vnext/events': 'events',
@@ -86,6 +90,18 @@ const TRANSPORT_MODULES = new Set([
   'node:undici',
 ]);
 
+const PROVIDER_CLIENT_MODULES = new Set([
+  'undici',
+  'axios',
+  'node-fetch',
+  'got',
+  'openai',
+  '@anthropic-ai/sdk',
+  '@google/genai',
+  '@google/generative-ai',
+  'node:undici',
+]);
+
 const STORAGE_MODULES = new Set([
   'better-sqlite3',
   'sqlite3',
@@ -109,6 +125,8 @@ const LEGACY_MODULES = [
 
 const NEXUS_FORBIDDEN_LAYERS = new Set<Layer>([
   'execution',
+  'conversation',
+  'persistence',
   'dungeon',
   'jobs',
   'storage',
@@ -131,6 +149,8 @@ const PLATFORM_LAYERS = new Set<Layer>([
   'flags',
   'nexus',
   'execution',
+  'conversation',
+  'persistence',
 ]);
 
 export function classifyPath(relPath: string): { layer: Layer; dungeon?: string } {
@@ -138,6 +158,8 @@ export function classifyPath(relPath: string): { layer: Layer; dungeon?: string 
   if (normalised.startsWith('packages/contracts/')) return { layer: 'contracts' };
   if (normalised.startsWith('platform/nexus/')) return { layer: 'nexus' };
   if (normalised.startsWith('platform/execution/')) return { layer: 'execution' };
+  if (normalised.startsWith('platform/conversation/')) return { layer: 'conversation' };
+  if (normalised.startsWith('platform/persistence/')) return { layer: 'persistence' };
   if (normalised.startsWith('platform/projects/')) return { layer: 'projects' };
   if (normalised.startsWith('platform/jobs/')) return { layer: 'jobs' };
   if (normalised.startsWith('platform/events/')) return { layer: 'events' };
@@ -163,7 +185,7 @@ export function walkSourceFiles(root: string): string[] {
       const stat = statSync(full);
       if (stat.isDirectory()) {
         visit(full);
-      } else if (entry.endsWith('.ts') && !entry.endsWith('.d.ts')) {
+      } else if ((entry.endsWith('.ts') && !entry.endsWith('.d.ts')) || entry.endsWith('.tsx')) {
         out.push(full);
       }
     }
@@ -179,7 +201,8 @@ function parseModule(
   filePath: string,
   sourceText: string,
 ): Pick<ModuleNode, 'specifiers' | 'fetchCalls' | 'definesCircuitBreaker' | 'definesExecutionBroker'> {
-  const source = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const kind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const source = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true, kind);
   const specifiers: string[] = [];
   let fetchCalls = false;
   let definesCircuitBreaker = false;
@@ -259,7 +282,7 @@ function isAdapterImport(specifier: string, fromFile: string, root: string): boo
     const rel = relative(root, resolved).split(sep).join('/');
     if (rel.includes('platform/execution/src/adapters')) return true;
   }
-  return TRANSPORT_MODULES.has(specifier);
+  return PROVIDER_CLIENT_MODULES.has(specifier);
 }
 
 export function analyzeGraph(
@@ -359,11 +382,28 @@ export function analyzeGraph(
             detail: `Dungeon ${mod.dungeon} imported dungeon ${target.dungeon} via ${specifier}.`,
           });
         }
-        if (isAdapterImport(specifier, resolve(root, mod.relPath), root)) {
+        if (isAdapterImport(specifier, resolve(root, mod.relPath), root) || TRANSPORT_MODULES.has(specifier)) {
           violations.push({
             rule: 'dungeon-no-adapters',
             file: mod.relPath,
             detail: `Dungeon ${mod.dungeon} imported provider adapter/transport ${specifier}.`,
+          });
+        }
+      }
+
+      if (mod.layer === 'conversation') {
+        if (target.layer === 'nexus' || target.layer === 'execution' || target.layer === 'dungeon') {
+          violations.push({
+            rule: 'conversation-ports-only',
+            file: mod.relPath,
+            detail: `Conversation domain imported ${specifier} (${target.layer}); inject router/executor at the host.`,
+          });
+        }
+        if (isAdapterImport(specifier, resolve(root, mod.relPath), root) || TRANSPORT_MODULES.has(specifier)) {
+          violations.push({
+            rule: 'conversation-no-adapters',
+            file: mod.relPath,
+            detail: `Conversation domain imported provider adapter/transport ${specifier}.`,
           });
         }
       }
@@ -386,11 +426,22 @@ export function analyzeGraph(
         });
       }
 
-      if (mod.layer === 'apps' && (isAdapterImport(specifier, resolve(root, mod.relPath), root) || TRANSPORT_MODULES.has(specifier))) {
+      if (mod.layer === 'apps' && (isAdapterImport(specifier, resolve(root, mod.relPath), root) || PROVIDER_CLIENT_MODULES.has(specifier))) {
         violations.push({
           rule: 'apps-no-provider-impl',
           file: mod.relPath,
           detail: `App imported provider implementation ${specifier}; depend on contracts/interfaces.`,
+        });
+      }
+      if (
+        mod.layer === 'apps' &&
+        mod.relPath.startsWith('apps/web/') &&
+        (target.layer === 'execution' || target.layer === 'nexus' || target.layer === 'persistence')
+      ) {
+        violations.push({
+          rule: 'apps-no-provider-impl',
+          file: mod.relPath,
+          detail: `Web UI imported ${specifier} (${target.layer}); it must consume the HTTP/SSE contract only.`,
         });
       }
     }
@@ -420,7 +471,11 @@ function analyzePackageJson(root: string, overlays: Record<string, string>): Vio
   const packages = [
     ['platform/nexus/package.json', 'nexus'],
     ['platform/execution/package.json', 'execution'],
+    ['platform/conversation/package.json', 'conversation'],
+    ['platform/persistence/package.json', 'platform'],
     ['platform/projects/package.json', 'platform'],
+    ['apps/web/package.json', 'apps-web'],
+    ['apps/host/package.json', 'apps-host'],
     ['platform/jobs/package.json', 'platform'],
     ['platform/events/package.json', 'platform'],
     ['platform/storage/package.json', 'platform'],
@@ -492,6 +547,35 @@ function analyzePackageJson(root: string, overlays: Record<string, string>): Vio
           file: rel,
           detail: `Platform package.json depends on product dungeon ${name}.`,
         });
+      }
+      if (kind === 'conversation') {
+        if (
+          name === '@atlas-vnext/nexus' ||
+          name === '@atlas-vnext/execution' ||
+          name.startsWith('@atlas-vnext/dungeon-') ||
+          STORAGE_MODULES.has(name) ||
+          TRANSPORT_MODULES.has(name)
+        ) {
+          violations.push({
+            rule: 'conversation-package-deps',
+            file: rel,
+            detail: `Conversation package.json depends on forbidden module ${name}.`,
+          });
+        }
+      }
+      if (kind === 'apps-web') {
+        if (
+          name === '@atlas-vnext/nexus' ||
+          name === '@atlas-vnext/execution' ||
+          TRANSPORT_MODULES.has(name) ||
+          name.includes('/adapters')
+        ) {
+          violations.push({
+            rule: 'apps-package-deps',
+            file: rel,
+            detail: `Web UI package.json depends on ${name}; consume the host HTTP contract instead.`,
+          });
+        }
       }
     }
   }

@@ -29,10 +29,10 @@ See also: [BORING-CORE.md](./docs/BORING-CORE.md), [CAPABILITY-CENSUS.md](./docs
 ## 2. Topology
 
 ```text
-apps (future)  →  dungeons  →  platform primitives
-                      │
-                      ├─ Nexus (WHERE: registry, aliases, policy, health snapshots)
-                      └─ Execution (HOW: transport, retry, circuit breaker, streaming)
+apps/{web,host}  →  conversation domain  →  platform primitives
+                         │
+                         ├─ Nexus (WHERE: registry, aliases, policy, health snapshots)
+                         └─ Execution (HOW: transport, retry, circuit breaker, streaming)
 ```
 
 Unidirectional rules:
@@ -62,8 +62,9 @@ flipper-marauder-ai/
 ├── README.md
 └── atlas-vnext/
     ├── packages/contracts
-    ├── platform/{nexus,execution,projects,jobs,events,storage,provenance,permissions,observability,flags}
+    ├── platform/{nexus,execution,conversation,persistence,projects,jobs,events,storage,provenance,permissions,observability,flags}
     ├── dungeons/{writing,investigation,research,website,osint,music}
+    ├── apps/{web,host}
     └── tests/architecture
 ```
 

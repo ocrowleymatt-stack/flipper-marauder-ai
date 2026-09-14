@@ -139,4 +139,27 @@ describe('Execution broker (transport, retry, streaming)', () => {
       { type: 'tool_call', call: { id: 'c1', toolId: 'search', arguments: { q: 'atlas' } } },
     ]);
   });
+
+  it('does not treat usage metadata as visible assistant output', async () => {
+    const broker = new ExecutionBroker(1);
+    broker.register({
+      providerId: 'openai',
+      async *stream() {
+        yield { type: 'usage', usage: { inputTokens: 1, outputTokens: 0, totalTokens: 1 } };
+        throw new Error('died before text');
+      },
+    });
+    broker.register({
+      providerId: 'ollama',
+      async *stream() {
+        yield { type: 'text', text: 'fallback' };
+        yield { type: 'usage', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+      },
+    });
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of broker.execute(decision(['openai/gpt-4o', 'ollama/llama3.2']), { prompt: 'hi' })) {
+      chunks.push(chunk);
+    }
+    expect(chunks.filter((chunk) => chunk.type === 'text')).toEqual([{ type: 'text', text: 'fallback' }]);
+  });
 });

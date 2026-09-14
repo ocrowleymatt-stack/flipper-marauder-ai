@@ -140,11 +140,13 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
     }
 
     const toolMatch = pathname.match(/^\/api\/tools\/([^/]+)$/);
-    if (req.method === 'GET' && toolMatch && options.tools && options.tenantId && options.principalId) {
-      const invocation = await options.tools.get(
-        { tenantId: options.tenantId, principalId: options.principalId },
-        decodeURIComponent(toolMatch[1]!),
-      );
+    if (req.method === 'GET' && toolMatch && options.tools) {
+      const actor = await resolveToolActor(req, options);
+      if (!actor) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      const invocation = await options.tools.get(actor, decodeURIComponent(toolMatch[1]!));
       if (!invocation) {
         json(res, 404, { error: 'Permission denied.' });
         return;
@@ -153,10 +155,15 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
       return;
     }
     const approveMatch = pathname.match(/^\/api\/tools\/([^/]+)\/(approve|deny)$/);
-    if (req.method === 'POST' && approveMatch && options.tools && options.tenantId && options.principalId) {
+    if (req.method === 'POST' && approveMatch && options.tools) {
+      const actor = await resolveToolActor(req, options);
+      if (!actor) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
       const body = await readJson(req, options.maxRequestBytes);
       const result = await options.tools.approve(
-        { tenantId: options.tenantId, principalId: options.principalId },
+        actor,
         decodeURIComponent(approveMatch[1]!),
         approveMatch[2] === 'approve' ? 'approved' : 'denied',
         typeof body.reason === 'string' ? body.reason : undefined,
@@ -196,6 +203,29 @@ function urlPath(req: IncomingMessage): string {
 
 function isMutating(method?: string): boolean {
   return method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+}
+
+async function resolveToolActor(
+  req: IncomingMessage,
+  options: HostOptions,
+): Promise<{ tenantId: string; principalId: string } | null> {
+  if (options.auth) {
+    const cookie = options.auth.parseCookie(header(req, 'cookie'));
+    if (cookie) {
+      const resolved = await options.auth.resolve({
+        sessionId: cookie,
+        csrfToken: header(req, options.auth.csrfHeader),
+        origin: header(req, 'origin'),
+        mutating: isMutating(req.method),
+      });
+      if (!resolved.actor.tenantId) return null;
+      return { tenantId: resolved.actor.tenantId, principalId: resolved.actor.principalId };
+    }
+  }
+  if (options.tenantId && options.principalId) {
+    return { tenantId: options.tenantId, principalId: options.principalId };
+  }
+  return null;
 }
 
 async function enforceCsrfIfNeeded(req: IncomingMessage, options: HostOptions): Promise<void> {

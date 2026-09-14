@@ -31,7 +31,7 @@ Progress uses the existing **jobs / events** stack. There is no second job frame
 Server-side only. Workbench will later render `awaiting_approval` and POST approve/deny.
 
 - Durable suspend; restart leaves the row in `awaiting_approval`.
-- Approve/deny is tenant-scoped and membership-checked. Guessing another tenant’s invocation id returns not found / generic deny.
+When a session cookie is present, tool GET/approve/deny use the **session principal and tenant**, not a caller-supplied id. CSRF is required for those mutating cookie requests. Guessing another tenant's invocation id returns a generic denial.
 - Binding nonce is stored on the approval row; expiry is enforced.
 - Audit: `decidedBy`, `decision`, `decidedAt`.
 

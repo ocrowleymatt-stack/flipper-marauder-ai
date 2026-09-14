@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ProviderHttpError, httpFailure } from '../errors.ts';
+import { ProviderHttpError, httpFailure, throwIfSecretLeaked } from '../errors.ts';
 import { readAllText, type HttpTransport } from '../transport.ts';
 import type { SecretStore } from '../secrets.ts';
 import { CREATE_POD_REFUSED_REASON, type RunPodClient, type RunPodPod } from './types.ts';
@@ -18,17 +18,13 @@ export class HttpRunPodClient implements RunPodClient {
   async getPod(id: string): Promise<RunPodPod | null> {
     const response = await this.request('GET', `/pods/${encodeURIComponent(id)}`);
     if (response.status === 404) return null;
-    if (response.status >= 400) {
-      throw new ProviderHttpError(httpFailure('runpod', response.status, response.body));
-    }
+    this.throwIfFailed(response);
     return parsePod(JSON.parse(response.body));
   }
 
   async listPods(): Promise<RunPodPod[]> {
     const response = await this.request('GET', '/pods');
-    if (response.status >= 400) {
-      throw new ProviderHttpError(httpFailure('runpod', response.status, response.body));
-    }
+    this.throwIfFailed(response);
     const parsed = JSON.parse(response.body) as { pods?: unknown[]; data?: unknown[] } | unknown[];
     const rows = Array.isArray(parsed) ? parsed : (parsed.pods ?? parsed.data ?? []);
     return rows.map((row) => parsePod(row));
@@ -36,18 +32,14 @@ export class HttpRunPodClient implements RunPodClient {
 
   async startPod(id: string): Promise<RunPodPod> {
     const response = await this.request('POST', `/pods/${encodeURIComponent(id)}/start`);
-    if (response.status >= 400) {
-      throw new ProviderHttpError(httpFailure('runpod', response.status, response.body));
-    }
+    this.throwIfFailed(response);
     if (!response.body.trim()) return { id, desiredStatus: 'RUNNING' };
     return parsePod(JSON.parse(response.body));
   }
 
   async stopPod(id: string): Promise<RunPodPod> {
     const response = await this.request('POST', `/pods/${encodeURIComponent(id)}/stop`);
-    if (response.status >= 400) {
-      throw new ProviderHttpError(httpFailure('runpod', response.status, response.body));
-    }
+    this.throwIfFailed(response);
     if (!response.body.trim()) return { id, desiredStatus: 'EXITED' };
     return parsePod(JSON.parse(response.body));
   }
@@ -56,7 +48,17 @@ export class HttpRunPodClient implements RunPodClient {
     throw new Error(CREATE_POD_REFUSED_REASON);
   }
 
-  private async request(method: 'GET' | 'POST', path: string): Promise<{ status: number; body: string }> {
+  private throwIfFailed(response: { status: number; body: string; apiKey: string }): void {
+    if (response.status < 400) return;
+    const failure = httpFailure('runpod', response.status, response.body, [response.apiKey]);
+    throwIfSecretLeaked(failure.message, response.apiKey);
+    throw new ProviderHttpError(failure);
+  }
+
+  private async request(
+    method: 'GET' | 'POST',
+    path: string,
+  ): Promise<{ status: number; body: string; apiKey: string }> {
     const apiKey = this.options.secrets.get(this.options.secretName ?? 'RUNPOD_API_KEY');
     if (!apiKey) throw new Error('runpod is unavailable: missing credentials.');
     const response = await this.options.transport.send({
@@ -68,7 +70,7 @@ export class HttpRunPodClient implements RunPodClient {
       },
       timeoutMs: this.options.timeoutMs,
     });
-    return { status: response.status, body: await readAllText(response.stream) };
+    return { status: response.status, body: await readAllText(response.stream), apiKey };
   }
 }
 

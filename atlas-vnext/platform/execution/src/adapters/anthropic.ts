@@ -1,5 +1,5 @@
 import type { StreamChunk, TokenUsage } from '@atlas-vnext/contracts';
-import { ProviderHttpError, httpFailure, usageFromCounts } from '../errors.ts';
+import { ProviderHttpError, httpFailure, throwIfSecretLeaked, usageFromCounts } from '../errors.ts';
 import { sanitizeText } from '../sanitize.ts';
 import type { SecretStore } from '../secrets.ts';
 import { parseSse } from '../stream-parse.ts';
@@ -55,12 +55,14 @@ export class AnthropicAdapter implements ProviderAdapter {
         timeoutMs: this.options.timeoutMs,
       });
     } catch (err) {
-      throw new Error(sanitizeText(err instanceof Error ? err.message : String(err)));
+      throw new Error(sanitizeText(err instanceof Error ? err.message : String(err), [apiKey]));
     }
 
     if (response.status >= 400) {
       const text = await readAllText(response.stream);
-      throw new ProviderHttpError(httpFailure(this.providerId, response.status, text));
+      const failure = httpFailure(this.providerId, response.status, text, [apiKey]);
+      throwIfSecretLeaked(failure.message, apiKey);
+      throw new ProviderHttpError(failure);
     }
 
     let inputTokens: number | undefined;
@@ -77,7 +79,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       }
       const type = parsed.type ?? frame.event;
       if (type === 'error' && parsed.error?.message) {
-        throw new ProviderHttpError(httpFailure(this.providerId, 400, parsed.error.message));
+        throw new ProviderHttpError(httpFailure(this.providerId, 400, parsed.error.message, [apiKey]));
       }
       if (type === 'content_block_start' && parsed.content_block) {
         tools.start(parsed.index ?? 0, parsed.content_block);

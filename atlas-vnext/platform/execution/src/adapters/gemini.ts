@@ -1,5 +1,5 @@
 import type { StreamChunk } from '@atlas-vnext/contracts';
-import { ProviderHttpError, httpFailure, usageFromCounts } from '../errors.ts';
+import { ProviderHttpError, httpFailure, throwIfSecretLeaked, usageFromCounts } from '../errors.ts';
 import { sanitizeText } from '../sanitize.ts';
 import { geminiApiKey, type SecretStore } from '../secrets.ts';
 import { parseSse } from '../stream-parse.ts';
@@ -57,12 +57,14 @@ export class GeminiAdapter implements ProviderAdapter {
         timeoutMs: this.options.timeoutMs,
       });
     } catch (err) {
-      throw new Error(sanitizeText(err instanceof Error ? err.message : String(err)));
+      throw new Error(sanitizeText(err instanceof Error ? err.message : String(err), [apiKey]));
     }
 
     if (response.status >= 400) {
       const text = await readAllText(response.stream);
-      throw new ProviderHttpError(httpFailure(this.providerId, response.status, text));
+      const failure = httpFailure(this.providerId, response.status, text, [apiKey]);
+      throwIfSecretLeaked(failure.message, apiKey);
+      throw new ProviderHttpError(failure);
     }
 
     const tools = new GeminiFunctionCallAssembler();
@@ -76,7 +78,7 @@ export class GeminiAdapter implements ProviderAdapter {
         continue;
       }
       if (parsed.error?.message) {
-        throw new ProviderHttpError(httpFailure(this.providerId, parsed.error.code ?? 400, parsed.error.message));
+        throw new ProviderHttpError(httpFailure(this.providerId, parsed.error.code ?? 400, parsed.error.message, [apiKey]));
       }
       const candidate = parsed.candidates?.[0];
       let partIndex = 0;

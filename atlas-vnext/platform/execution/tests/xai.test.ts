@@ -137,4 +137,20 @@ describe('xAI Grok adapter', () => {
     expect(plane.available).not.toContain('xai');
     expect(plane.health.xai).toBe('unavailable');
   });
+
+  it('redacts xAI secrets that do not match sk- or xai- prefixes', async () => {
+    const arbitrary = 'nona-prefixed-grok-token-value-xyz';
+    const adapter = createXaiAdapter({
+      secrets: new MapSecretStore({ GROK_API_KEY: arbitrary }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://api.x.ai/v1',
+      transport: transportFor(() => ({ status: 401, body: `invalid api key ${arbitrary}` })),
+    });
+    try {
+      await collect(adapter.stream('grok-4.6', { prompt: 'hi' }));
+      throw new Error('expected failure');
+    } catch (err) {
+      expect(err instanceof Error ? err.message : String(err)).not.toContain(arbitrary);
+    }
+  });
 });

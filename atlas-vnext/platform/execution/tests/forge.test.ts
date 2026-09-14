@@ -109,4 +109,18 @@ describe('Forge / Hetzner private inference', () => {
     expect(plane.available).toContain('forge');
     expect(plane.health.forge).toBe('configured');
   });
+
+  it('redacts Forge credentials that are not sk- prefixed', async () => {
+    const arbitrary = 'nona-prefixed-forge-token-value-xyz';
+    const probed = await probeForgeHealth({
+      transport: transportFor(() => ({ status: 401, body: `unauthorized ${arbitrary}` })),
+      timeoutMs: 5_000,
+      baseUrl: 'https://forge.example.internal',
+      healthPath: '/v1/models',
+      protocol: 'openai',
+      secrets: new MapSecretStore({ FORGE_API_KEY: arbitrary }),
+    });
+    expect(probed.health).toBe('authentication_failure');
+    expect(probed.detail).not.toContain(arbitrary);
+  });
 });

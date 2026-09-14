@@ -1,5 +1,5 @@
 import type { StreamChunk, TokenUsage } from '@atlas-vnext/contracts';
-import { ProviderHttpError, httpFailure } from '../errors.ts';
+import { ProviderHttpError, httpFailure, throwIfSecretLeaked } from '../errors.ts';
 import { sanitizeText } from '../sanitize.ts';
 import { parseSse } from '../stream-parse.ts';
 import { OpenAIToolCallAssembler } from '../tool-call-buffer.ts';
@@ -69,15 +69,13 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         timeoutMs: this.options.timeoutMs,
       });
     } catch (err) {
-      throw new Error(sanitizeText(err instanceof Error ? err.message : String(err)));
+      throw new Error(sanitizeText(err instanceof Error ? err.message : String(err), [apiKey]));
     }
 
     if (response.status >= 400) {
       const text = await readAllText(response.stream);
-      const failure = httpFailure(this.providerId, response.status, text);
-      if (apiKey) {
-        failure.message = failure.message.split(apiKey).join('[redacted]');
-      }
+      const failure = httpFailure(this.providerId, response.status, text, [apiKey]);
+      throwIfSecretLeaked(failure.message, apiKey);
       throw new ProviderHttpError(failure);
     }
 
@@ -96,7 +94,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         continue;
       }
       if (parsed.error?.message) {
-        throw new ProviderHttpError(httpFailure(this.providerId, 400, parsed.error.message));
+        throw new ProviderHttpError(httpFailure(this.providerId, 400, parsed.error.message, [apiKey]));
       }
       const choice = parsed.choices?.[0];
       const delta = choice?.delta;

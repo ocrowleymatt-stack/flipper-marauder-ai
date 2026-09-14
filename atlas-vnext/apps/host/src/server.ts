@@ -3,7 +3,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { ProviderHealth } from '@atlas-vnext/contracts';
-import type { RuntimeSnapshot } from '@atlas-vnext/execution';
+import { sanitizeText, type RuntimeSnapshot } from '@atlas-vnext/execution';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -104,7 +104,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
 
     json(res, 404, { error: 'Not found.' });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = sanitizeText(err instanceof Error ? err.message : String(err));
     if (!res.headersSent) {
       json(res, 500, { error: message });
       return;

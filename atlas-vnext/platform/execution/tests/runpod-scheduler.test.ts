@@ -18,6 +18,8 @@ import {
   readExecutionConfig,
   responseFromText,
   waitingCopy,
+  MAX_KEEP_WARM_SECONDS,
+  MAX_RUNTIME_EVENTS,
   type ProviderAdapter,
   type RuntimeClock,
 } from '@atlas-vnext/execution';
@@ -291,6 +293,18 @@ describe('RunPod shared runtime scheduler', () => {
     expect(client.stopCalls).toEqual(['pod-shared']);
   });
 
+  it('clamps keep-warm so it cannot silently become 24/7', async () => {
+    const { client, clock, scheduler } = harness({ idleShutdownSeconds: 5 });
+    const lease = await scheduler.acquire({ id: 'job-1', profile: 'llm' });
+    await scheduler.release(lease.id);
+    await scheduler.requestKeepWarm(86_400);
+    const until = Date.parse(scheduler.snapshot().keepWarmUntil ?? '');
+    expect(until - clock.now()).toBeLessThanOrEqual(MAX_KEEP_WARM_SECONDS * 1000);
+    clock.advance(MAX_KEEP_WARM_SECONDS * 1000 + 10_000);
+    await scheduler.tick();
+    expect(client.stopCalls).toEqual(['pod-shared']);
+  });
+
   it('enforces max active pods = 1 and never creates a second pod', async () => {
     const client = new MemoryRunPodClient();
     client.seed({ id: 'pod-shared', desiredStatus: 'RUNNING' });
@@ -527,5 +541,115 @@ describe('RunPod failover and unrelated providers', () => {
     expect(chunks.some((chunk) => chunk.type === 'text' && chunk.text === 'from-gpu')).toBe(true);
     expect(client.startCalls).toEqual(['pod-shared']);
     expect(scheduler.snapshot().runtime.lease).toBeNull();
+  });
+
+  it('startup failure is structured, finite, and does not create a second pod', async () => {
+    class BoomStart extends MemoryRunPodClient {
+      async startPod(id: string) {
+        this.startCalls.push(id);
+        throw new Error('start refused');
+      }
+    }
+    const client = new BoomStart();
+    client.seed({ id: 'pod-shared', desiredStatus: 'EXITED' });
+    const { scheduler } = harness({ client });
+    await expect(scheduler.acquire({ id: 'job-1', profile: 'llm' })).rejects.toThrow(/start refused/);
+    expect(client.startCalls).toEqual(['pod-shared']);
+    expect(client.createCalls).toBe(0);
+    expect(scheduler.snapshot().runtime.state).toBe('failed');
+    expect(scheduler.snapshot().runtime.startupFailure).toMatch(/start refused/);
+  });
+
+  it('keeps Atlas alive when the RunPod API is unavailable', async () => {
+    class DownApi extends MemoryRunPodClient {
+      async listPods() {
+        throw new Error('RunPod API unavailable');
+      }
+    }
+    const client = new DownApi();
+    client.seed({ id: 'pod-shared', desiredStatus: 'EXITED' });
+    const plane = createExecutionPlane({
+      mode: 'live',
+      env: { OPENAI_API_KEY: 'sk-test', RUNPOD_API_KEY: 'rp-test', RUNPOD_POD_ID: 'pod-shared' },
+      secrets: new MapSecretStore({ OPENAI_API_KEY: 'sk-test', RUNPOD_API_KEY: 'rp-test' }),
+      runpodClient: client,
+      transport: {
+        async send() {
+          return responseFromText(
+            200,
+            'data: {"choices":[{"delta":{"content":"cloud"}}]}\n\ndata: [DONE]\n\n',
+            { 'content-type': 'text/event-stream' },
+          );
+        },
+      },
+    });
+    const recovered = await plane.scheduler?.reconcile();
+    expect(recovered?.healthFailure).toMatch(/RunPod API unavailable/);
+    expect(client.startCalls).toEqual([]);
+    expect(client.createCalls).toBe(0);
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of plane.broker.execute(route(['openai/gpt-4o']), { prompt: 'hi' })) {
+      chunks.push(chunk);
+    }
+    expect(chunks.some((chunk) => chunk.type === 'text' && chunk.text === 'cloud')).toBe(true);
+  });
+
+  it('waiting/idle loops do not allocate unbounded events or state writes', async () => {
+    class CountingStore extends MemoryRuntimeStateStore {
+      saves = 0;
+      async save(runtime: Parameters<MemoryRuntimeStateStore['save']>[0]): Promise<void> {
+        this.saves += 1;
+        await super.save(runtime);
+      }
+    }
+    const client = new MemoryRunPodClient();
+    client.promoteOnStart = false;
+    client.seed({ id: 'pod-shared', desiredStatus: 'EXITED' });
+    const store = new CountingStore();
+    const { scheduler, observer } = harness({ client, store });
+    const firstPromise = scheduler.acquire({ id: 'job-1', profile: 'llm' });
+    await waitUntil(() => {
+      const state = scheduler.snapshot().runtime.state;
+      return state === 'starting' || state === 'warming';
+    });
+    const secondPromise = scheduler.acquire({ id: 'job-2', profile: 'llm' });
+    await waitUntil(() => scheduler.snapshot().runtime.queue.some((job) => job.id === 'job-2'));
+    const savesAfterQueue = store.saves;
+    const eventsAfterQueue = observer.list().length;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(store.saves - savesAfterQueue).toBeLessThan(3);
+    expect(observer.list().length - eventsAfterQueue).toBeLessThan(3);
+    expect(observer.list().length).toBeLessThan(MAX_RUNTIME_EVENTS);
+    client.promote('pod-shared');
+    const first = await firstPromise;
+    await scheduler.release(first.id);
+    const second = await secondPromise;
+    await scheduler.release(second.id);
+  });
+
+  it('compacts duplicate observer events and caps the log', () => {
+    const observer = new RuntimeObserver();
+    for (let i = 0; i < 40; i += 1) {
+      observer.record({
+        at: `t${i}`,
+        type: 'warming',
+        podId: 'pod-shared',
+        state: 'warming',
+        profile: 'llm',
+        jobId: 'job-2',
+        detail: 'Waiting for RunPod to become ready.',
+      });
+    }
+    expect(observer.list()).toHaveLength(1);
+    for (let i = 0; i < MAX_RUNTIME_EVENTS + 25; i += 1) {
+      observer.record({
+        at: `u${i}`,
+        type: `unique-${i}`,
+        podId: 'pod-shared',
+        state: 'idle',
+        profile: null,
+      });
+    }
+    expect(observer.list()).toHaveLength(MAX_RUNTIME_EVENTS);
   });
 });

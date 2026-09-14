@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { sanitizeText } from '../sanitize.ts';
 import { RuntimeObserver } from './observer.ts';
 import {
   CREATE_POD_REFUSED_REASON,
@@ -47,6 +48,9 @@ export interface RuntimeJobRequest {
   traceId?: string;
   signal?: AbortSignal;
 }
+
+/** Keep-warm is explicit and time-bounded; cannot silently become 24/7. */
+export const MAX_KEEP_WARM_SECONDS = 3_600;
 
 type AcquireOutcome =
   | { lease: RunPodLease; waitForWarm?: false }
@@ -124,7 +128,8 @@ export class RuntimeScheduler {
         this.runtime.keepWarmUntil = null;
         this.event('keep_warm_cleared', 'Keep-warm override cleared.');
       } else {
-        this.runtime.keepWarmUntil = this.clock.iso(this.clock.now() + seconds * 1000);
+        const bounded = Math.min(Math.floor(seconds), MAX_KEEP_WARM_SECONDS);
+        this.runtime.keepWarmUntil = this.clock.iso(this.clock.now() + bounded * 1000);
         this.event('keep_warm', `Time-bounded keep-warm until ${this.runtime.keepWarmUntil}.`);
       }
       await this.persist('keep_warm');
@@ -192,7 +197,7 @@ export class RuntimeScheduler {
       try {
         pods = await this.options.client.listPods();
       } catch (err) {
-        this.runtime.lastError = err instanceof Error ? err.message : String(err);
+        this.runtime.lastError = sanitizeText(err instanceof Error ? err.message : String(err));
         this.runtime.healthFailure = this.runtime.lastError;
         await this.persist('reconcile_probe_failed');
         this.event('health_failed', this.runtime.healthFailure);
@@ -325,22 +330,27 @@ export class RuntimeScheduler {
       return { lease: this.runtime.lease };
     }
     if (this.runtime.state === 'stopping') {
-      this.setWaitingReason(job.id, 'pod_starting');
-      await this.persist('waiting_stop');
-      this.notify();
+      await this.noteWaiting(job.id, 'pod_starting', 'waiting_stop', queued);
       return { lease: null };
     }
     if (this.runtime.state === 'starting' || this.runtime.state === 'warming') {
-      this.setWaitingReason(job.id, this.runtime.state === 'starting' ? 'pod_starting' : 'pod_warming');
-      await this.persist('waiting_warm');
-      this.notify();
+      await this.noteWaiting(
+        job.id,
+        this.runtime.state === 'starting' ? 'pod_starting' : 'pod_warming',
+        'waiting_warm',
+        queued,
+      );
       return { lease: null };
     }
 
     const next = this.nextRunnableJob();
     if (next && next.id !== job.id) {
-      this.setWaitingReason(job.id, profilesCompatible(this.runtime.profile, job.profile) ? 'pod_busy' : 'profile_change');
-      await this.persist('waiting_turn');
+      await this.noteWaiting(
+        job.id,
+        profilesCompatible(this.runtime.profile, job.profile) ? 'pod_busy' : 'profile_change',
+        'waiting_turn',
+        queued,
+      );
       return { lease: null };
     }
 
@@ -444,7 +454,7 @@ export class RuntimeScheduler {
       await this.options.client.startPod(this.runtime.podId);
     } catch (err) {
       this.runtime.state = 'failed';
-      this.runtime.startupFailure = err instanceof Error ? err.message : String(err);
+      this.runtime.startupFailure = sanitizeText(err instanceof Error ? err.message : String(err));
       this.runtime.lastError = this.runtime.startupFailure;
       await this.persist('startup_failed');
       this.event('startup_failed', this.runtime.startupFailure);
@@ -536,8 +546,30 @@ export class RuntimeScheduler {
     return true;
   }
 
-  private setWaitingReason(jobId: string, reason: WaitingReason): void {
-    this.runtime.queue = this.runtime.queue.map((item) => (item.id === jobId ? { ...item, waitingReason: reason } : item));
+  private setWaitingReason(jobId: string, reason: WaitingReason): boolean {
+    let changed = false;
+    this.runtime.queue = this.runtime.queue.map((item) => {
+      if (item.id !== jobId || item.waitingReason === reason) return item;
+      changed = true;
+      return { ...item, waitingReason: reason };
+    });
+    return changed;
+  }
+
+  /**
+   * Persist waiting-runtime only when the queue membership or reason actually
+   * changes. Repeating the same wait must not write a tight disk/event loop.
+   */
+  private async noteWaiting(
+    jobId: string,
+    reason: WaitingReason,
+    persistReason: string,
+    firstEnqueue: boolean,
+  ): Promise<void> {
+    const changed = this.setWaitingReason(jobId, reason);
+    if (!firstEnqueue && !changed) return;
+    await this.persist(persistReason);
+    this.notify();
   }
 
   private orderQueue(queue: QueuedRuntimeJob[]): QueuedRuntimeJob[] {
@@ -635,7 +667,7 @@ export class RuntimeScheduler {
     try {
       await this.options.client.stopPod(this.runtime.podId);
     } catch (err) {
-      this.runtime.lastError = err instanceof Error ? err.message : String(err);
+      this.runtime.lastError = sanitizeText(err instanceof Error ? err.message : String(err));
     }
     this.runtime.state = 'stopped';
     this.runtime.stoppedAt = this.clock.iso();
@@ -658,7 +690,7 @@ export class RuntimeScheduler {
       try {
         await this.options.client.stopPod(pod.id);
       } catch (err) {
-        this.runtime.lastError = err instanceof Error ? err.message : String(err);
+        this.runtime.lastError = sanitizeText(err instanceof Error ? err.message : String(err));
       }
     }
   }

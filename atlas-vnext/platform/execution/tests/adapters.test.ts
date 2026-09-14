@@ -364,6 +364,42 @@ describe('placeholder providers', () => {
   });
 });
 
+describe('secret sanitisation for arbitrary credential formats', () => {
+  const ARBITRARY = 'nona-prefixed-secret-token-value-xyz';
+
+  it('redacts Anthropic keys that do not begin with sk-', async () => {
+    const adapter = new AnthropicAdapter({
+      secrets: new MapSecretStore({ ANTHROPIC_API_KEY: ARBITRARY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://api.anthropic.com',
+      transport: transportFor(() => ({ status: 401, body: `invalid x-api-key ${ARBITRARY}` })),
+    });
+    try {
+      await collect(adapter.stream('claude-sonnet', { prompt: 'hi' }));
+      throw new Error('expected failure');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      expect(message).not.toContain(ARBITRARY);
+      expect(message).toMatch(/authentication_failure|HTTP 401/);
+    }
+  });
+
+  it('redacts Gemini keys that are not AIza-prefixed', async () => {
+    const adapter = new GeminiAdapter({
+      secrets: new MapSecretStore({ GEMINI_API_KEY: ARBITRARY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      transport: transportFor(() => ({ status: 403, body: `API_KEY_INVALID ${ARBITRARY}` })),
+    });
+    try {
+      await collect(adapter.stream('flash', { prompt: 'hi' }));
+      throw new Error('expected failure');
+    } catch (err) {
+      expect(err instanceof Error ? err.message : String(err)).not.toContain(ARBITRARY);
+    }
+  });
+});
+
 describe('execution plane availability', () => {
   it('starts with a subset of providers when credentials are missing', async () => {
     const plane = createExecutionPlane({

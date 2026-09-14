@@ -70,7 +70,7 @@ export async function probeForgeHealth(
     });
     const text = await readAllText(response.stream);
     if (response.status >= 400) {
-      const failure = httpFailure('forge', response.status, text);
+      const failure = httpFailure('forge', response.status, text, [key]);
       return {
         health: failure.code === 'authentication_failure' ? 'authentication_failure' : 'unhealthy',
         models: [],
@@ -79,7 +79,7 @@ export async function probeForgeHealth(
     }
     return { health: 'healthy', models: parseModelNames(text) };
   } catch (err) {
-    const failure = connectionFailure('forge', err instanceof Error ? err.message : String(err));
+    const failure = connectionFailure('forge', err instanceof Error ? err.message : String(err), [key]);
     return { health: 'unhealthy', models: [], detail: failure.message };
   }
 }

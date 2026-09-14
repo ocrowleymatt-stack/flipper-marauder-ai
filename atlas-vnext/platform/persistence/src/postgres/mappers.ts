@@ -43,6 +43,7 @@ export function mapConversation(row: ConversationRow): Conversation {
     id: row.id,
     urn: row.urn,
     title: row.title,
+    // Alias until first-class Project objects exist. Workspaces are the durable container.
     projectId: row.workspace_id,
     tenantId: row.tenant_id,
     workspaceId: row.workspace_id,

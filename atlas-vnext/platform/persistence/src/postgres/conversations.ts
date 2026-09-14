@@ -34,6 +34,7 @@ export function createConversationRepos(tx: PgTx, actor: PersistenceActor, clock
         );
         if (existing.rows[0]) return mapConversation(existing.rows[0]);
       }
+      // projectId is a workspace-id alias until first-class Project objects exist.
       const workspaceId = input.projectId ?? owner.workspaceId ?? null;
       if (workspaceId) {
         const workspace = await tx.query('SELECT id FROM workspaces WHERE id = $1 AND tenant_id = $2', [

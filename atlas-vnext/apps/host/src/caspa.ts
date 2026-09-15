@@ -45,10 +45,10 @@ export async function handleCaspa(
     json(res, 401, { error: 'Authentication required.' });
     return true;
   }
-  const writing = requireWriting(options);
   const writingActor: WritingActor = { tenantId: actor.tenantId, principalId: actor.principalId };
 
   try {
+    const writing = requireWriting(options);
     if (req.method === 'GET' && projectDocs) {
       json(res, 200, await writing.list(writingActor, decodeURIComponent(projectDocs[1]!)));
       return true;

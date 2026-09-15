@@ -478,6 +478,8 @@ describe('Caspa writing dungeon host', () => {
       body: JSON.stringify({ title: 'Nope' }),
     });
     expect(docs.status).toBe(503);
+    const unavailable = (await docs.json()) as { code?: string };
+    expect(unavailable.code).toBe('writing_unavailable');
     const listed = await fetch(`${bound.url}/api/conversations`, { headers: { cookie: session.cookie } });
     expect(listed.status).toBe(200);
     const created = await fetch(`${bound.url}/api/conversations`, {

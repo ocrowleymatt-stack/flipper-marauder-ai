@@ -116,6 +116,10 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   for (const model of MODEL_CATALOGUE) {
     registry.register(model);
   }
+  registry.setDisabledProviders(killSwitches.disabledProviders);
+  for (const provider of killSwitches.disabledProviders) {
+    logPlatform('flags.provider_killed', { provider }, 'warn');
+  }
 
   const secrets = options.secrets ?? new EnvSecretStore(env);
   const plane = createExecutionPlane({
@@ -130,6 +134,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       options.runtimeStatePath ?? (mode === 'live' ? join(dirname(options.dataPath), 'runtime.json') : null),
     health: {
       onProviderHealth(provider, health) {
+        // Observe probe results; Nexus `isRoutable` still honours the kill list.
         registry.setHealth(provider, health);
       },
     },
@@ -137,10 +142,6 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
 
   for (const [provider, health] of Object.entries(plane.health)) {
     registry.setHealth(provider, health);
-  }
-  for (const provider of killSwitches.disabledProviders) {
-    registry.setHealth(provider, 'unavailable');
-    logPlatform('flags.provider_killed', { provider }, 'warn');
   }
 
   if (mode === 'live') {

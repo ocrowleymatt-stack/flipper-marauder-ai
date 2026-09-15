@@ -17,6 +17,8 @@ function modelKey(provider: string, model: string): string {
  */
 export class NexusRegistry {
   private readonly models = new Map<string, RegisteredModel>();
+  /** Operator kill list. Observed health may still be recorded; these stay non-routable. */
+  private readonly disabledProviders = new Set<string>();
 
   register(model: RegisteredModel | unknown): RegisteredModel {
     const parsed = registeredModelSchema.parse(model);
@@ -26,6 +28,22 @@ export class NexusRegistry {
 
   unregister(provider: string, model: string): void {
     this.models.delete(modelKey(provider, model));
+  }
+
+  /**
+   * Replace the administrative disable list. Health probes may still call
+   * `setHealth`; `isRoutable` stays false until this list is changed.
+   */
+  setDisabledProviders(providers: readonly string[]): void {
+    this.disabledProviders.clear();
+    for (const provider of providers) {
+      const id = provider.trim().toLowerCase();
+      if (id) this.disabledProviders.add(id);
+    }
+  }
+
+  isDisabled(provider: string): boolean {
+    return this.disabledProviders.has(provider.trim().toLowerCase());
   }
 
   setHealth(provider: string, health: ProviderHealth): void {
@@ -45,6 +63,7 @@ export class NexusRegistry {
   }
 
   isRoutable(model: RegisteredModel): boolean {
+    if (this.isDisabled(model.provider)) return false;
     return model.health === 'healthy' || model.health === 'configured';
   }
 }

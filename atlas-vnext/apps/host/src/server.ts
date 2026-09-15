@@ -78,7 +78,7 @@ export interface HostOptions {
 }
 
 export function createHost(options: HostOptions): Server {
-  return createServer((req, res) => {
+  const server = createServer((req, res) => {
     const started = Date.now();
     const requestId = createRequestId(header(req, 'x-request-id'));
     const pathname = urlPath(req);
@@ -100,6 +100,39 @@ export function createHost(options: HostOptions): Server {
         });
       }
     });
+  });
+  applyInboundHttpTimeouts(server, options.timeouts?.httpMs);
+  return server;
+}
+
+/**
+ * Bound slow/stalled inbound request receipt (headers + body).
+ *
+ * `requestTimeout` and `headersTimeout` are set on the Node server. Socket
+ * inactivity (`server.timeout`) is what actually closes a stalled inbound
+ * connection in current Node; that timer is cleared once the request body has
+ * been received so legitimate SSE responses are governed by
+ * `ATLAS_STREAM_IDLE_TIMEOUT_MS` rather than this inbound bound.
+ */
+export function applyInboundHttpTimeouts(server: Server, httpMs?: number): void {
+  if (!httpMs || httpMs <= 0) return;
+  server.requestTimeout = httpMs;
+  if (server.headersTimeout === 0 || server.headersTimeout > httpMs) {
+    server.headersTimeout = httpMs;
+  }
+  server.timeout = httpMs;
+  server.on('request', (req, res) => {
+    const socket = req.socket;
+    if (!socket) return;
+    const clearInbound = (): void => {
+      if (!socket.destroyed) socket.setTimeout(0);
+    };
+    const rearmInbound = (): void => {
+      if (!socket.destroyed) socket.setTimeout(httpMs);
+    };
+    if (req.readableEnded) clearInbound();
+    else req.once('end', clearInbound);
+    res.once('close', rearmInbound);
   });
 }
 
@@ -260,18 +293,26 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
       const content = typeof body.content === 'string' ? body.content : '';
       const capability = typeof body.capability === 'string' ? body.capability : 'nexus/fast';
       const origin = matchingOrigin(req, options.allowedOrigins);
-      const release = options.resources?.beginStream(conversationActor?.tenantId ?? options.tenantId ?? 'local');
-      const runRelease = options.resources?.beginRun(conversationActor?.tenantId ?? options.tenantId ?? 'local');
+      const tenantKey = conversationActor?.tenantId ?? options.tenantId ?? 'local';
+      const conversationId = decodeURIComponent(messageMatch[1]!);
+      const releaseAdmission = acquireRunAndStreamPermits(options.resources, tenantKey);
       sseHeaders(res, origin);
       try {
         await pipeSse(
           res,
-          options.runtime.sendMessage(decodeURIComponent(messageMatch[1]!), { content, capability }),
+          options.runtime.sendMessage(conversationId, { content, capability }),
           options.timeouts?.streamIdleMs ?? 120_000,
+          async (executionId) => {
+            if (!executionId) return;
+            try {
+              await options.runtime.cancel(executionId);
+            } catch {
+              // Cancel is best-effort and idempotent; admission still releases below.
+            }
+          },
         );
       } finally {
-        release?.();
-        runRelease?.();
+        releaseAdmission();
       }
       return;
     }
@@ -484,30 +525,120 @@ async function pipeSse(
   res: ServerResponse,
   events: AsyncIterable<{ type: string }>,
   idleMs: number,
+  onCancel?: (executionId: string | undefined, reason: 'idle_timeout' | 'disconnect') => Promise<void> | void,
 ): Promise<void> {
+  const iterator = events[Symbol.asyncIterator]();
   let idle: ReturnType<typeof setTimeout> | undefined;
-  const bump = (): void => {
+  let executionId: string | undefined;
+  let terminal: Promise<void> | undefined;
+  let finished = false;
+
+  const disarmIdle = (): void => {
     if (idle) clearTimeout(idle);
-    idle = setTimeout(() => {
-      if (!res.writableEnded) {
-        writeSse(res, 'error', {
-          type: 'error',
-          failure: { code: 'timeout', message: 'Stream idle timeout.', retryable: true, at: new Date().toISOString() },
-        });
-        res.end();
-      }
-    }, idleMs);
+    idle = undefined;
   };
-  bump();
+
+  const terminate = (reason: 'idle_timeout' | 'disconnect'): Promise<void> => {
+    if (!terminal) {
+      terminal = (async () => {
+        disarmIdle();
+        try {
+          await onCancel?.(executionId, reason);
+        } catch {
+          // Runtime cancellation is idempotent; never fail the HTTP teardown.
+        }
+        if (reason === 'idle_timeout' && !res.writableEnded && !res.destroyed) {
+          writeSse(res, 'error', {
+            type: 'error',
+            failure: { code: 'timeout', message: 'Stream idle timeout.', retryable: true, at: new Date().toISOString() },
+          });
+        }
+        if (!res.writableEnded) res.end();
+      })();
+    }
+    return terminal;
+  };
+
+  const disconnected = new Promise<'disconnect'>((resolve) => {
+    const onClose = (): void => resolve('disconnect');
+    res.once('close', onClose);
+  });
+
   try {
-    for await (const event of events) {
+    while (!terminal && !res.destroyed && !res.writableEnded) {
+      const next = iterator.next().then(
+        (result) => ({ kind: 'next' as const, result }),
+        (error: unknown) => ({ kind: 'error' as const, error }),
+      );
+      const idleWait = new Promise<{ kind: 'idle' }>((resolve) => {
+        idle = setTimeout(() => resolve({ kind: 'idle' }), idleMs);
+      });
+      const winner = await Promise.race([next, idleWait, disconnected.then(() => ({ kind: 'disconnect' as const }))]);
+      disarmIdle();
+      if (winner.kind === 'idle') {
+        await terminate('idle_timeout');
+        return;
+      }
+      if (winner.kind === 'disconnect') {
+        await terminate('disconnect');
+        return;
+      }
+      if (winner.kind === 'error') {
+        throw winner.error;
+      }
+      if (winner.result.done) {
+        finished = true;
+        break;
+      }
+      const event = winner.result.value;
+      const seen = executionIdFromEvent(event);
+      if (seen) executionId = seen;
+      if (terminal || res.destroyed || res.writableEnded) break;
       writeSse(res, event.type, event);
-      bump();
-      if (res.destroyed || res.writableEnded) break;
     }
   } finally {
-    if (idle) clearTimeout(idle);
-    if (!res.writableEnded) res.end();
+    disarmIdle();
+    if (!finished && !terminal) {
+      await terminate('disconnect');
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  }
+}
+
+function executionIdFromEvent(event: { type: string }): string | undefined {
+  const record = event as { execution?: { id?: unknown }; executionId?: unknown };
+  if (record.execution && typeof record.execution.id === 'string' && record.execution.id) {
+    return record.execution.id;
+  }
+  if (typeof record.executionId === 'string' && record.executionId) {
+    return record.executionId;
+  }
+  return undefined;
+}
+
+/**
+ * Acquire stream then run permits. If a later stage fails, every permit already
+ * taken for this request is released exactly once.
+ */
+function acquireRunAndStreamPermits(resources: ResourceGuard | undefined, tenantId: string): () => void {
+  const acquired: Array<() => void> = [];
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    while (acquired.length) {
+      acquired.pop()?.();
+    }
+  };
+  if (!resources) return release;
+  try {
+    acquired.push(resources.beginStream(tenantId));
+    acquired.push(resources.beginRun(tenantId));
+    return release;
+  } catch (err) {
+    release();
+    throw err;
   }
 }
 

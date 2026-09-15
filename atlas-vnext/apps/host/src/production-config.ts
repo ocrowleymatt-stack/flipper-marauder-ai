@@ -164,8 +164,9 @@ export function readTimeoutContract(env: Record<string, string | undefined> = pr
 
 export function readProductionHostConfig(
   env: Record<string, string | undefined> = process.env,
+  options?: { forceProduction?: boolean },
 ): ProductionHostConfig {
-  const production = isProductionEnv(env);
+  const production = options?.forceProduction === true || isProductionEnv(env);
   const mockProviders = env.ATLAS_USE_MOCK_PROVIDERS === '1';
   const persistenceRaw = (env.ATLAS_PERSISTENCE ?? '').trim().toLowerCase();
   const persistenceMode: ProductionHostConfig['persistenceMode'] =

@@ -86,6 +86,11 @@ export class ResourceGuard {
     return this.track(this.runs, tenantId, this.limits.maxConcurrentRuns, 'Concurrent run limit reached.');
   }
 
+  occupancy(tenantId: string): { streams: number; runs: number } {
+    const key = tenantId.trim() || 'unknown';
+    return { streams: this.streams.get(key) ?? 0, runs: this.runs.get(key) ?? 0 };
+  }
+
   assertBodySize(bytes: number, kind: 'request' | 'upload' | 'generated' | 'tool_args'): void {
     const max =
       kind === 'upload'
@@ -114,7 +119,10 @@ export class ResourceGuard {
       throw new PlatformHttpError('rate_limit', message, 429, true);
     }
     map.set(key, next);
+    let released = false;
     return () => {
+      if (released) return;
+      released = true;
       const current = map.get(key) ?? 1;
       if (current <= 1) map.delete(key);
       else map.set(key, current - 1);

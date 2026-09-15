@@ -14,5 +14,5 @@ export type {
   UnitOfWork,
 } from './ports.ts';
 export { memoryStores } from './memory.ts';
-export { ConversationRuntime, conversationChannel, estimateTokens } from './runtime.ts';
+export { ConversationRuntime, conversationChannel, estimateTokens, GeneratedOutputLimitError } from './runtime.ts';
 export type { ConversationRuntimeDeps } from './runtime.ts';

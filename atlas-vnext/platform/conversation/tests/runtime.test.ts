@@ -334,6 +334,144 @@ describe('streaming and failure behaviour', () => {
   });
 });
 
+describe('generated output byte ceiling', () => {
+  function limitedHarness(limit: number, stream: () => AsyncGenerator<StreamChunk>) {
+    const stores = memoryStores();
+    const events = new MemoryEventBus();
+    const runtime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events,
+      maxGeneratedBytes: limit,
+      router: fakeRouter((target) => decision(target, ['openai/gpt-4o'])),
+      executor: fakeExecutor(stream),
+    });
+    return { runtime, stores };
+  }
+
+  it('accepts output below the configured UTF-8 byte limit', async () => {
+    const { runtime, stores } = limitedHarness(16, async function* () {
+      yield { type: 'text', text: 'hello' };
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'hi');
+    expect(stream.some((event) => event.type === 'done')).toBe(true);
+    expect(stream.some((event) => event.type === 'error')).toBe(false);
+    expect(Buffer.byteLength('hello', 'utf8')).toBeLessThan(16);
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe('hello');
+  });
+
+  it('accepts output that lands exactly on the UTF-8 byte limit', async () => {
+    const { runtime, stores } = limitedHarness(5, async function* () {
+      yield { type: 'text', text: 'hello' };
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'hi');
+    expect(stream.some((event) => event.type === 'error')).toBe(false);
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe('hello');
+  });
+
+  it('rejects the chunk that would exceed the limit by one byte and does not persist it', async () => {
+    const { runtime, stores } = limitedHarness(5, async function* () {
+      yield { type: 'text', text: 'hello!' };
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'hi');
+    const error = stream.find((event) => event.type === 'error');
+    expect(error).toMatchObject({ type: 'error', failure: { code: 'payload_too_large', retryable: false } });
+    expect(stream.some((event) => event.type === 'done')).toBe(true);
+    const messages = await stores.messages.list(conversation.id);
+    expect(messages.map((message) => message.role)).toEqual(['user']);
+    const snapshot = await runtime.getSnapshot(conversation.id);
+    expect(snapshot?.executions[0]?.failureReason?.code).toBe('payload_too_large');
+    expect(snapshot?.executions[0]?.status).toBe('failed');
+  });
+
+  it('enforces the ceiling across many small chunks', async () => {
+    const { runtime, stores } = limitedHarness(4, async function* () {
+      yield { type: 'text', text: 'ab' };
+      yield { type: 'text', text: 'cd' };
+      yield { type: 'text', text: 'e' };
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'hi');
+    expect(stream.some((event) => event.type === 'error')).toBe(true);
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe('abcd');
+  });
+
+  it('counts multibyte UTF-8 rather than JavaScript string length', async () => {
+    const euro = '€';
+    expect(euro.length).toBe(1);
+    expect(Buffer.byteLength(euro, 'utf8')).toBe(3);
+    const { runtime, stores } = limitedHarness(2, async function* () {
+      yield { type: 'text', text: euro };
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'hi');
+    expect(stream.find((event) => event.type === 'error')).toMatchObject({
+      failure: { code: 'payload_too_large' },
+    });
+    expect((await stores.messages.list(conversation.id)).map((message) => message.role)).toEqual(['user']);
+  });
+
+  it('does not switch providers after visible output hits the generated-byte ceiling', async () => {
+    const providers: string[] = [];
+    const stores = memoryStores();
+    const runtime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events: new MemoryEventBus(),
+      maxGeneratedBytes: 4,
+      router: fakeRouter(() => decision('nexus/fast', ['openai/gpt-4o', 'ollama/llama3.2'])),
+      executor: {
+        async *execute(routed, _ctx, observer) {
+          observer?.onAttempt({
+            index: 1,
+            provider: 'openai',
+            model: 'gpt-4o',
+            outcome: 'started',
+            error: null,
+            emittedVisibleOutput: false,
+          });
+          providers.push(routed.provider);
+          yield { type: 'text', text: 'abcd' };
+          yield { type: 'text', text: 'e' };
+          observer?.onAttempt({
+            index: 1,
+            provider: 'openai',
+            model: 'gpt-4o',
+            outcome: 'failed',
+            error: { code: 'provider_error', message: 'should not failover', retryable: true, at: '2026-09-14T00:00:00.000Z' },
+            emittedVisibleOutput: true,
+          });
+          observer?.onAttempt({
+            index: 2,
+            provider: 'ollama',
+            model: 'llama3.2',
+            outcome: 'started',
+            error: null,
+            emittedVisibleOutput: false,
+          });
+          providers.push('ollama');
+          yield { type: 'text', text: 'switched' };
+        },
+      },
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'hi');
+    expect(providers).toEqual(['openai']);
+    expect(stream.find((event) => event.type === 'error')).toMatchObject({
+      failure: { code: 'payload_too_large' },
+    });
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe('abcd');
+    expect((await runtime.getSnapshot(conversation.id))?.executions[0]?.failureReason?.code).toBe('payload_too_large');
+  });
+});
+
 async function collectEvents(runtime: ConversationRuntime, conversationId: string) {
   const events = [];
   for await (const event of runtime.sendMessage(conversationId, {

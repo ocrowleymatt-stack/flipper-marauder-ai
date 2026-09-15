@@ -1,16 +1,17 @@
-import type {
-  Conversation,
-  ConversationSnapshot,
-  ConversationStreamEvent,
-  ExecutionAttempt,
-  ExecutionRecord,
-  ExecutionStatus,
-  Message,
-  ProvenanceRecord,
-  RouteDecision,
-  StructuredFailure,
-  TokenUsage,
-  ToolCallRequest,
+import {
+  DEFAULT_OPERATIONAL_LIMITS,
+  type Conversation,
+  type ConversationSnapshot,
+  type ConversationStreamEvent,
+  type ExecutionAttempt,
+  type ExecutionRecord,
+  type ExecutionStatus,
+  type Message,
+  type ProvenanceRecord,
+  type RouteDecision,
+  type StructuredFailure,
+  type TokenUsage,
+  type ToolCallRequest,
 } from '@atlas-vnext/contracts';
 import type { EventBus } from '@atlas-vnext/events';
 import type { IdFactory } from './ids.ts';
@@ -49,6 +50,20 @@ export interface ConversationRuntimeDeps {
   toolOrchestrator?: ToolOrchestrator;
   principalId?: string;
   maxConcurrentExecutions?: number;
+  /** UTF-8 byte ceiling for provider-generated user-visible output. */
+  maxGeneratedBytes?: number;
+}
+
+export class GeneratedOutputLimitError extends Error {
+  readonly code = 'payload_too_large';
+
+  constructor(
+    readonly acceptedBytes: number,
+    readonly limitBytes: number,
+  ) {
+    super('generated exceeds the configured limit.');
+    this.name = 'GeneratedOutputLimitError';
+  }
 }
 
 export class ConversationRuntime {
@@ -59,6 +74,10 @@ export class ConversationRuntime {
   constructor(private readonly deps: ConversationRuntimeDeps) {
     this.ids = deps.ids ?? new UuidIdFactory();
     this.clock = deps.clock ?? { now: () => new Date().toISOString() };
+  }
+
+  private generatedByteLimit(): number {
+    return this.deps.maxGeneratedBytes ?? DEFAULT_OPERATIONAL_LIMITS.maxGeneratedBytes;
   }
 
   async createConversation(input: { title?: string; projectId?: string | null } = {}): Promise<Conversation> {
@@ -260,7 +279,17 @@ export class ConversationRuntime {
 
       let assistant: Message | null = null;
       let assembled = '';
+      let generatedBytes = 0;
       let usage: TokenUsage | null = null;
+
+      const acceptGenerated = (text: string): void => {
+        const extra = utf8ByteLength(text);
+        const limit = this.generatedByteLimit();
+        if (generatedBytes + extra > limit) {
+          throw new GeneratedOutputLimitError(generatedBytes, limit);
+        }
+        generatedBytes += extra;
+      };
       const attempts: ExecutionAttempt[] = [];
       const startedMs = Date.now();
       const pending: ConversationStreamEvent[] = [];
@@ -355,6 +384,7 @@ export class ConversationRuntime {
             continue;
           }
           if (chunk.type === 'reasoning') {
+            acceptGenerated(chunk.text);
             yield { type: 'reasoning.delta', executionId, text: chunk.text };
             continue;
           }
@@ -403,6 +433,7 @@ export class ConversationRuntime {
           if (chunk.type !== 'text' || chunk.text.length === 0) {
             continue;
           }
+          acceptGenerated(chunk.text);
           assembled += chunk.text;
           if (!assistant) {
             const first = await this.transact(async () => {
@@ -469,6 +500,7 @@ export class ConversationRuntime {
               continue;
             }
             if (chunk.type === 'text' && chunk.text.length > 0) {
+              acceptGenerated(chunk.text);
               assembled += chunk.text;
               if (!assistant) {
                 assistant = await this.deps.messages.append({
@@ -523,12 +555,22 @@ export class ConversationRuntime {
         yield { type: 'done' };
       } catch (err) {
         for (const event of pending.splice(0)) yield event;
-        const aborted = controller.signal.aborted;
+        const limited = err instanceof GeneratedOutputLimitError;
+        if (limited && !controller.signal.aborted) {
+          controller.abort();
+        }
+        const aborted = controller.signal.aborted && !limited;
         const message = err instanceof Error ? err.message : String(err);
         const visible = attempts.some((attempt) => attempt.emittedVisibleOutput) || assembled.length > 0;
         const status: ExecutionStatus = aborted ? 'cancelled' : 'failed';
-        const code = aborted ? 'cancelled' : visible ? 'partial_stream_failure' : 'provider_error';
-        const structured = failure(code, message, !visible && !aborted);
+        const code = aborted
+          ? 'cancelled'
+          : limited
+            ? 'payload_too_large'
+            : visible
+              ? 'partial_stream_failure'
+              : 'provider_error';
+        const structured = failure(code, message, !limited && !visible && !aborted);
         execution = await this.transition(
           { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
           status,
@@ -666,6 +708,10 @@ export function conversationChannel(conversationId: string): string {
 export function estimateTokens(text: string): number {
   if (!text) return 0;
   return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function utf8ByteLength(text: string): number {
+  return Buffer.byteLength(text, 'utf8');
 }
 
 function titleFromPrompt(text: string): string {

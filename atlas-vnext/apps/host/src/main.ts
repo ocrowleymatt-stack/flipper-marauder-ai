@@ -1,10 +1,9 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { composeSpine } from './compose.ts';
 import { createHost, listen } from './server.ts';
 import { readPersistenceConfig } from '@atlas-vnext/persistence';
 import { logPlatform } from '@atlas-vnext/observability';
-import { readiness } from './ops.ts';
+import { bootSpine } from './startup.ts';
 import { readProductionHostConfig, publicConfigView } from './production-config.ts';
 
 const root = fileURLToPath(new URL('../../..', import.meta.url));
@@ -16,22 +15,15 @@ const persistence = readPersistenceConfig(process.env);
 
 logPlatform('host.starting', publicConfigView(hostConfig));
 
-const spine = await composeSpine({
+const spine = await bootSpine({
   dataPath,
   mode,
   env: process.env,
   persistence,
   casRoot: hostConfig.casRoot ?? undefined,
   streamDelayMs: Number(process.env.ATLAS_VNEXT_STREAM_DELAY_MS ?? 18),
+  production: hostConfig.production,
 });
-
-if (hostConfig.production) {
-  const ready = await readiness(spine.healthProbe, true);
-  if (!ready.ready) {
-    await spine.close();
-    throw new Error(`Host refused to listen: dependencies not ready (${JSON.stringify(ready.dependencies)}).`);
-  }
-}
 
 const server = createHost({
   runtime: spine.runtime,

@@ -1,5 +1,6 @@
 export { composeSpine, grantSideEffects } from './compose.ts';
 export type { ComposeOptions, Spine } from './compose.ts';
+export { bootSpine, withStartupDeadline, StartupTimeoutError } from './startup.ts';
 export { createHost, listen, applyInboundHttpTimeouts } from './server.ts';
 export type { HostOptions } from './server.ts';
 export { resolveActor } from './workbench.ts';

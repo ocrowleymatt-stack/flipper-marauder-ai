@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { ConversationRuntime } from '@atlas-vnext/conversation';
+import { GeneratedOutputLimitError, type ConversationRuntime } from '@atlas-vnext/conversation';
 import type { ProviderHealth } from '@atlas-vnext/contracts';
 import { sanitizeText, type RuntimeSnapshot } from '@atlas-vnext/execution';
 import type { AuthService } from '@atlas-vnext/auth';
@@ -8,7 +8,14 @@ import type { ContextService } from '@atlas-vnext/context';
 import type { FilesService } from '@atlas-vnext/files';
 import { CasMissingError } from '@atlas-vnext/files';
 import type { PlatformPersistence } from '@atlas-vnext/persistence';
-import { ConflictError, OwnershipError, PersistenceClosedError, PersistenceUnavailableError, isPersistenceConnectionLoss } from '@atlas-vnext/persistence';
+import {
+  ConflictError,
+  OwnershipError,
+  PersistenceClosedError,
+  PersistenceUnavailableError,
+  PersistenceUncertainError,
+  isPersistenceConnectionLoss,
+} from '@atlas-vnext/persistence';
 import type { ProjectService } from '@atlas-vnext/projects';
 import type { ToolEngine } from '@atlas-vnext/tools';
 import { ToolError } from '@atlas-vnext/tools';
@@ -310,6 +317,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
               // Cancel is best-effort and idempotent; admission still releases below.
             }
           },
+          options.resources?.generatedByteLimit() ?? DEFAULT_OPERATIONAL_LIMITS.maxGeneratedBytes,
         );
       } finally {
         releaseAdmission();
@@ -493,8 +501,14 @@ function classifyError(err: unknown): { status: number; code: PlatformErrorCode;
   if (err instanceof PersistenceUnavailableError) {
     return { status: 503, code: 'persistence_unavailable', message: 'Persistence unavailable.' };
   }
+  if (err instanceof PersistenceUncertainError) {
+    return { status: 500, code: 'persistence_uncertain', message: 'Persistence outcome is uncertain.' };
+  }
   if (err instanceof PersistenceClosedError) {
     return { status: 503, code: 'shutting_down', message: 'Persistence is shut down.' };
+  }
+  if (err instanceof GeneratedOutputLimitError) {
+    return { status: 413, code: 'payload_too_large', message: err.message };
   }
   if (isPersistenceConnectionLoss(err)) {
     return { status: 503, code: 'persistence_unavailable', message: 'Persistence unavailable.' };
@@ -529,20 +543,23 @@ async function pipeSse(
   res: ServerResponse,
   events: AsyncIterable<{ type: string }>,
   idleMs: number,
-  onCancel?: (executionId: string | undefined, reason: 'idle_timeout' | 'disconnect') => Promise<void> | void,
+  onCancel?: (executionId: string | undefined, reason: 'idle_timeout' | 'disconnect' | 'output_limit') => Promise<void> | void,
+  maxGeneratedBytes = DEFAULT_OPERATIONAL_LIMITS.maxGeneratedBytes,
 ): Promise<void> {
   const iterator = events[Symbol.asyncIterator]();
   let idle: ReturnType<typeof setTimeout> | undefined;
   let executionId: string | undefined;
   let terminal: Promise<void> | undefined;
   let finished = false;
+  let assistantBytes = 0;
+  let reasoningBytes = 0;
 
   const disarmIdle = (): void => {
     if (idle) clearTimeout(idle);
     idle = undefined;
   };
 
-  const terminate = (reason: 'idle_timeout' | 'disconnect'): Promise<void> => {
+  const terminate = (reason: 'idle_timeout' | 'disconnect' | 'output_limit'): Promise<void> => {
     if (!terminal) {
       terminal = (async () => {
         disarmIdle();
@@ -555,6 +572,17 @@ async function pipeSse(
           writeSse(res, 'error', {
             type: 'error',
             failure: { code: 'timeout', message: 'Stream idle timeout.', retryable: true, at: new Date().toISOString() },
+          });
+        }
+        if (reason === 'output_limit' && !res.writableEnded && !res.destroyed) {
+          writeSse(res, 'error', {
+            type: 'error',
+            failure: {
+              code: 'payload_too_large',
+              message: 'generated exceeds the configured limit.',
+              retryable: false,
+              at: new Date().toISOString(),
+            },
           });
         }
         if (!res.writableEnded) res.end();
@@ -601,6 +629,15 @@ async function pipeSse(
       const seen = executionIdFromEvent(event);
       if (seen) executionId = seen;
       if (terminal || res.destroyed || res.writableEnded) break;
+      const projected = projectGeneratedBytes(event, assistantBytes, reasoningBytes);
+      if (projected && projected.total > maxGeneratedBytes) {
+        await terminate('output_limit');
+        return;
+      }
+      if (projected) {
+        assistantBytes = projected.assistantBytes;
+        reasoningBytes = projected.reasoningBytes;
+      }
       writeSse(res, event.type, event);
     }
   } finally {
@@ -611,6 +648,28 @@ async function pipeSse(
       res.end();
     }
   }
+}
+
+function projectGeneratedBytes(
+  event: { type: string },
+  assistantBytes: number,
+  reasoningBytes: number,
+): { assistantBytes: number; reasoningBytes: number; total: number } | null {
+  const record = event as { type: string; text?: unknown; content?: unknown };
+  if (record.type === 'assistant.delta' || record.type === 'assistant.completed') {
+    const bytes = typeof record.text === 'string' ? Buffer.byteLength(record.text, 'utf8') : 0;
+    return { assistantBytes: bytes, reasoningBytes, total: bytes + reasoningBytes };
+  }
+  if (record.type === 'message.delta') {
+    const bytes = typeof record.content === 'string' ? Buffer.byteLength(record.content, 'utf8') : 0;
+    return { assistantBytes: bytes, reasoningBytes, total: bytes + reasoningBytes };
+  }
+  if (record.type === 'reasoning.delta') {
+    const extra = typeof record.text === 'string' ? Buffer.byteLength(record.text, 'utf8') : 0;
+    const nextReasoning = reasoningBytes + extra;
+    return { assistantBytes, reasoningBytes: nextReasoning, total: assistantBytes + nextReasoning };
+  }
+  return null;
 }
 
 function executionIdFromEvent(event: { type: string }): string | undefined {

@@ -17,6 +17,26 @@ export interface RateLimitConfig {
   limits: Record<RateClass, number>;
 }
 
+export interface RateLimiterBounds {
+  /** Hard cap on live bucket entries for this process. */
+  maxBuckets?: number;
+  /** Max entries inspected per opportunistic sweep. */
+  sweepBatch?: number;
+  /** Minimum time between opportunistic expired-bucket sweeps. */
+  sweepIntervalMs?: number;
+}
+
+export const DEFAULT_RATE_LIMIT_MAX_BUCKETS = 4_096;
+export const DEFAULT_RATE_LIMIT_SWEEP_BATCH = 64;
+export const DEFAULT_RATE_LIMIT_SWEEP_INTERVAL_MS = 250;
+
+interface RateBucket {
+  count: number;
+  resetAt: number;
+  touchedAt: number;
+  tenantId: string;
+}
+
 export const DEFAULT_RATE_LIMITS: RateLimitConfig = {
   windowMs: 60_000,
   limits: {
@@ -98,14 +118,28 @@ export function resolveRateLimitIdentity(input: {
  * anonymous tenant plus the observed socket address. Per-process:
  * multi-instance deployments get N× the configured ceiling unless a shared
  * limiter is added later.
+ *
+ * Bucket cardinality is bounded. Expired entries are reclaimed without the
+ * original key being reused, and opportunistic cleanup inspects a fixed batch
+ * so rotating anonymous identities cannot amplify CPU.
  */
 export class PlatformRateLimiter {
-  private readonly buckets = new Map<string, { count: number; resetAt: number }>();
+  private readonly buckets = new Map<string, RateBucket>();
+  private readonly maxBuckets: number;
+  private readonly sweepBatch: number;
+  private readonly sweepIntervalMs: number;
+  private lastSweepAt = 0;
+  private sweepCursor: string | undefined;
 
   constructor(
     private readonly config: RateLimitConfig = DEFAULT_RATE_LIMITS,
     private readonly now: () => number = Date.now,
-  ) {}
+    bounds: RateLimiterBounds = {},
+  ) {
+    this.maxBuckets = Math.max(1, Math.floor(bounds.maxBuckets ?? DEFAULT_RATE_LIMIT_MAX_BUCKETS));
+    this.sweepBatch = Math.max(1, Math.floor(bounds.sweepBatch ?? DEFAULT_RATE_LIMIT_SWEEP_BATCH));
+    this.sweepIntervalMs = Math.max(0, Math.floor(bounds.sweepIntervalMs ?? DEFAULT_RATE_LIMIT_SWEEP_INTERVAL_MS));
+  }
 
   hit(rateClass: RateClass, tenantId: string, actorId: string): void {
     const tenant = tenantId.trim();
@@ -116,17 +150,86 @@ export class PlatformRateLimiter {
     const limit = this.config.limits[rateClass];
     const key = `${rateClass}:${tenant}:${actor}`;
     const now = this.now();
+    this.sweepExpired(now, false);
     let row = this.buckets.get(key);
     if (!row || row.resetAt <= now) {
-      row = { count: 0, resetAt: now + this.config.windowMs };
+      if (row) this.buckets.delete(key);
+      this.ensureCapacity(now, tenant, key);
+      row = { count: 0, resetAt: now + this.config.windowMs, touchedAt: now, tenantId: tenant };
       this.buckets.set(key, row);
     }
     row.count += 1;
+    row.touchedAt = now;
     if (row.count > limit) {
       platformMetrics.inc('atlas_rate_limited_total', { route_class: rateClass, outcome: 'rejected' });
       logPlatform('rate.limited', { routeClass: rateClass, tenantId: tenant, actorId: actor }, 'warn');
       throw new PlatformHttpError('rate_limit', 'Rate limit exceeded.', 429, true);
     }
+  }
+
+  size(): number {
+    return this.buckets.size;
+  }
+
+  private sweepExpired(now: number, force: boolean): void {
+    if (this.buckets.size === 0) return;
+    if (!force && now - this.lastSweepAt < this.sweepIntervalMs) return;
+    const elapsed = now - this.lastSweepAt;
+    this.lastSweepAt = now;
+    const budget =
+      force || elapsed >= this.config.windowMs
+        ? Math.min(this.buckets.size, this.maxBuckets)
+        : Math.min(this.sweepBatch, this.buckets.size);
+    const keys = [...this.buckets.keys()];
+    if (keys.length === 0) return;
+    let start = 0;
+    if (this.sweepCursor) {
+      const idx = keys.indexOf(this.sweepCursor);
+      start = idx >= 0 ? idx : 0;
+    }
+    let scanned = 0;
+    let index = start;
+    while (scanned < budget && scanned < keys.length) {
+      const key = keys[index]!;
+      const row = this.buckets.get(key);
+      if (row && row.resetAt <= now) this.buckets.delete(key);
+      scanned += 1;
+      index = (index + 1) % keys.length;
+      if (index === start) break;
+    }
+    this.sweepCursor = keys[index] ?? keys[0];
+  }
+
+  private ensureCapacity(now: number, tenantId: string, incomingKey: string): void {
+    if (this.buckets.size < this.maxBuckets) return;
+    this.sweepExpired(now, true);
+    if (this.buckets.size < this.maxBuckets) return;
+    const evicted = this.evictBounded(now, tenantId, incomingKey);
+    if (evicted) return;
+    throw new PlatformHttpError('rate_limit', 'Rate limit exceeded.', 429, true);
+  }
+
+  private evictBounded(now: number, tenantId: string, incomingKey: string): boolean {
+    const anonymousIncoming = tenantId === ANONYMOUS_RATE_TENANT;
+    let victim: { key: string; touchedAt: number } | undefined;
+    let scanned = 0;
+    for (const [key, row] of this.buckets) {
+      if (scanned >= this.maxBuckets) break;
+      scanned += 1;
+      if (key === incomingKey) continue;
+      if (row.resetAt <= now) {
+        this.buckets.delete(key);
+        return true;
+      }
+      const anonymousRow = row.tenantId === ANONYMOUS_RATE_TENANT;
+      if (anonymousIncoming && !anonymousRow) continue;
+      if (!victim || row.touchedAt < victim.touchedAt) {
+        victim = { key, touchedAt: row.touchedAt };
+      }
+    }
+    if (!victim) return false;
+    this.buckets.delete(victim.key);
+    return true;
   }
 }
 
@@ -152,6 +255,14 @@ export class ResourceGuard {
   occupancy(tenantId: string): { streams: number; runs: number } {
     const key = tenantId.trim() || 'unknown';
     return { streams: this.streams.get(key) ?? 0, runs: this.runs.get(key) ?? 0 };
+  }
+
+  generatedByteLimit(): number {
+    return this.limits.maxGeneratedBytes;
+  }
+
+  assertGeneratedOutput(bytes: number): void {
+    this.assertBodySize(bytes, 'generated');
   }
 
   assertBodySize(bytes: number, kind: 'request' | 'upload' | 'generated' | 'tool_args'): void {

@@ -243,3 +243,101 @@ describe('unauthenticated rate-limit buckets cannot contaminate authenticated qu
     expect(authed.status).toBe(200);
   });
 });
+
+describe('rate-limit bucket cardinality is bounded', () => {
+  function clockedLimiter(maxBuckets: number) {
+    let now = 1_000;
+    const limiter = new PlatformRateLimiter(
+      {
+        windowMs: 60_000,
+        limits: {
+          auth: 30,
+          runs: 8,
+          generation: 8,
+          upload: 8,
+          retrieval: 8,
+          tools: 8,
+          approvals: 8,
+          documents: 8,
+        },
+      },
+      () => now,
+      { maxBuckets, sweepBatch: 16, sweepIntervalMs: 0 },
+    );
+    return {
+      limiter,
+      advance(ms: number) {
+        now += ms;
+      },
+    };
+  }
+
+  it('does not retain unbounded state for thousands of rotating anonymous identities', () => {
+    const { limiter } = clockedLimiter(64);
+    for (let i = 0; i < 4_000; i += 1) {
+      limiter.hit('runs', ANONYMOUS_RATE_TENANT, `anon:ip:203.0.113.${i}`);
+    }
+    expect(limiter.size()).toBeLessThanOrEqual(64);
+  });
+
+  it('reclaims expired buckets without requiring the original key to be reused', () => {
+    const { limiter, advance } = clockedLimiter(1_000);
+    for (let i = 0; i < 40; i += 1) {
+      limiter.hit('runs', ANONYMOUS_RATE_TENANT, `anon:ip:198.51.100.${i}`);
+    }
+    expect(limiter.size()).toBe(40);
+    advance(70_000);
+    limiter.hit('runs', ANONYMOUS_RATE_TENANT, 'anon:ip:198.51.100.99');
+    expect(limiter.size()).toBe(1);
+  });
+
+  it('enforces a hard cardinality ceiling', () => {
+    const { limiter } = clockedLimiter(8);
+    for (let i = 0; i < 50; i += 1) {
+      limiter.hit('auth', ANONYMOUS_RATE_TENANT, `bootstrap:ip:192.0.2.${i}`);
+    }
+    expect(limiter.size()).toBeLessThanOrEqual(8);
+  });
+
+  it('keeps authenticated quota isolated from anonymous churn', () => {
+    const { limiter } = clockedLimiter(16);
+    limiter.hit('runs', 'tenant_a', 'principal_a');
+    limiter.hit('runs', 'tenant_a', 'principal_a');
+    for (let i = 0; i < 200; i += 1) {
+      limiter.hit('runs', ANONYMOUS_RATE_TENANT, `anon:ip:203.0.113.${i}`);
+    }
+    for (let i = 0; i < 6; i += 1) {
+      expect(() => limiter.hit('runs', 'tenant_a', 'principal_a')).not.toThrow();
+    }
+    expect(() => limiter.hit('runs', 'tenant_a', 'principal_a')).toThrow(PlatformHttpError);
+  });
+
+  it('still rate-limits repeated requests from one anonymous identity', () => {
+    const { limiter } = clockedLimiter(32);
+    const actor = 'anon:ip:192.0.2.10';
+    for (let i = 0; i < 8; i += 1) {
+      limiter.hit('runs', ANONYMOUS_RATE_TENANT, actor);
+    }
+    expect(() => limiter.hit('runs', ANONYMOUS_RATE_TENANT, actor)).toThrow(PlatformHttpError);
+  });
+
+  it('does not let spoofed client identity poison another principal quota', async () => {
+    const limiter = tightLimiter(3, 8);
+    const started = await startProductionHost({ rateLimiter: limiter });
+    servers.push(started.server);
+    spines.push(started.spine);
+    const session = await bootstrap(started.url);
+    for (let i = 0; i < 20; i += 1) {
+      const response = await fetch(`${started.url}/api/conversations`, {
+        headers: {
+          ...poisonHeaders,
+          'x-forwarded-for': `198.51.100.${i}`,
+        },
+      });
+      expect([401, 429]).toContain(response.status);
+      await response.text();
+    }
+    const allowed = await fetch(`${started.url}/api/conversations`, { headers: authHeaders(session) });
+    expect(allowed.status).toBe(200);
+  });
+});

@@ -19,6 +19,20 @@ export class PersistenceClosedError extends Error {
   }
 }
 
+/**
+ * A mutating statement or COMMIT was dispatched, then the client lost the
+ * result. The change may already have been applied. Callers must not replay.
+ */
+export class PersistenceUncertainError extends Error {
+  constructor(
+    message = 'Persistence operation completed with uncertain commit state.',
+    readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = 'PersistenceUncertainError';
+  }
+}
+
 export class OwnershipError extends Error {
   constructor(message: string) {
     super(message);

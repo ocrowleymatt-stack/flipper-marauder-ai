@@ -12,6 +12,7 @@ export type PlatformErrorCode =
   | 'tool_denied'
   | 'tool_uncertain'
   | 'persistence_unavailable'
+  | 'persistence_uncertain'
   | 'cas_unavailable'
   | 'shutting_down'
   | 'timeout'
@@ -61,6 +62,7 @@ export function httpStatusFor(code: PlatformErrorCode): number {
     case 'fail_before_visible':
     case 'fail_after_visible':
     case 'tool_uncertain':
+    case 'persistence_uncertain':
     case 'internal':
     default:
       return 500;

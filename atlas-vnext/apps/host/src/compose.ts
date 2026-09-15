@@ -48,6 +48,7 @@ import { MODEL_CATALOGUE } from './catalogue.ts';
 import { ShutdownController, readOperationalLimits, type HealthProbe } from './ops.ts';
 import { PlatformRateLimiter, ResourceGuard } from './limits.ts';
 import { readTimeoutContract, type TimeoutContract } from './production-config.ts';
+import { raceStartup, throwIfStartupAborted } from './startup-deadline.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
@@ -93,6 +94,7 @@ export interface ComposeOptions {
   runpodClient?: RunPodClient;
   persistence?: PersistenceConfig;
   casRoot?: string;
+  signal?: AbortSignal;
 }
 
 /**
@@ -111,7 +113,16 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   const rateLimiter = new PlatformRateLimiter();
   const resources = new ResourceGuard(limits);
   const timeouts = readTimeoutContract(env);
+  const signal = options.signal;
+  const budgetMs = timeouts.startupMs;
+  const closers: Array<() => Promise<void> | void> = [];
+  const remember = (close: () => Promise<void> | void): void => {
+    closers.push(close);
+  };
 
+  throwIfStartupAborted(signal, budgetMs);
+
+  try {
   const registry = new NexusRegistry();
   for (const model of MODEL_CATALOGUE) {
     registry.register(model);
@@ -145,10 +156,12 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   }
 
   if (mode === 'live') {
-    await plane.refreshOllamaHealth();
-    await plane.refreshForgeHealth();
+    throwIfStartupAborted(signal, budgetMs);
+    await raceStartup(signal, plane.refreshOllamaHealth(), budgetMs);
+    await raceStartup(signal, plane.refreshForgeHealth(), budgetMs);
     if (plane.scheduler) {
-      await plane.scheduler.reconcile();
+      remember(() => plane.scheduler?.stopIdleWatch());
+      await raceStartup(signal, plane.scheduler.reconcile(), budgetMs);
     }
   }
 
@@ -243,7 +256,9 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   });
 
   if (persistenceConfig.mode === 'postgres' || persistenceConfig.mode === 'memory') {
-    persistence = await openPlatformPersistence(persistenceConfig);
+    throwIfStartupAborted(signal, budgetMs);
+    persistence = await raceStartup(signal, openPlatformPersistence(persistenceConfig), budgetMs);
+    remember(() => persistence?.close());
     if (!persistenceConfig.defaultTenantId) {
       await persistence.close();
       throw new PersistenceConfigError('PostgreSQL/memory host mode requires ATLAS_TENANT_ID.');
@@ -288,11 +303,17 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       toolOrchestrator: killSwitches.tools ? makeOrchestrator(tools) : undefined,
       principalId,
       maxConcurrentExecutions: limits.maxConcurrentRuns,
+      maxGeneratedBytes: limits.maxGeneratedBytes,
     });
-    await persistence.recoverOnStart();
-    await tools.reconcile();
-    cas = await openFilesystemCas(
-      options.casRoot ?? env.ATLAS_CAS_ROOT?.trim() ?? join(dirname(options.dataPath), 'cas'),
+    await raceStartup(signal, persistence.recoverOnStart(), budgetMs);
+    await raceStartup(signal, tools.reconcile(), budgetMs);
+    throwIfStartupAborted(signal, budgetMs);
+    cas = await raceStartup(
+      signal,
+      openFilesystemCas(
+        options.casRoot ?? env.ATLAS_CAS_ROOT?.trim() ?? join(dirname(options.dataPath), 'cas'),
+      ),
+      budgetMs,
     );
     files = new FilesService(persistence, cas);
     projects = new ProjectService(persistence);
@@ -322,9 +343,10 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       toolOrchestrator: killSwitches.tools ? makeOrchestrator(tools) : undefined,
       principalId,
       maxConcurrentExecutions: limits.maxConcurrentRuns,
+      maxGeneratedBytes: limits.maxGeneratedBytes,
     });
-    await runtime.recoverInFlight();
-    await tools.reconcile();
+    await raceStartup(signal, runtime.recoverInFlight(), budgetMs);
+    await raceStartup(signal, tools.reconcile(), budgetMs);
   }
 
   const healthProbe: HealthProbe = {
@@ -395,6 +417,12 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       await persistence?.close();
     },
   };
+  } catch (err) {
+    for (const close of closers.reverse()) {
+      await Promise.resolve(close()).catch(() => undefined);
+    }
+    throw err;
+  }
 }
 
 export function grantSideEffects(authority: AuthorityEngine, principalId: string, tenantId: string): void {

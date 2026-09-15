@@ -46,6 +46,8 @@ jobs:
         run: npm run test:persistence
       - name: Files / projects / CAS / context
         run: npm run test:files
+      - name: Tools / auth / Authority
+        run: npm run test:tools
       - name: Architecture boundary tests
         run: npm run test:boundaries
       - name: Provider / runtime tests

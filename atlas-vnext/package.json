@@ -23,6 +23,7 @@
     "test:runtime": "vitest run platform/execution/tests/runpod-scheduler.test.ts platform/execution/tests/forge.test.ts platform/execution/tests/xai.test.ts",
     "test:persistence": "vitest run platform/persistence/tests platform/jobs/tests/engine.test.ts",
     "test:files": "vitest run platform/storage/tests platform/files/tests platform/context/tests platform/projects/tests",
+    "test:tools": "vitest run platform/tools/tests platform/auth/tests platform/permissions/tests platform/plugins/tests platform/secrets/tests",
     "test:compat": "vitest run tests/compat",
     "test:live": "vitest run tests/live",
     "smoke:live": "tsx scripts/live-smoke.ts",

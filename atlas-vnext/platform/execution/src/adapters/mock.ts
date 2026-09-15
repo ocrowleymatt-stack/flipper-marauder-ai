@@ -12,7 +12,7 @@ export class MockAdapter implements ProviderAdapter {
   ) {}
 
   async *stream(model: string, context: ExecutionContext): AsyncGenerator<StreamChunk> {
-    const reply = composeReply(this.providerId, model, context.prompt);
+    const reply = composeReply(this.providerId, model, context.prompt, context.priorToolResults);
     const pieces = splitForStream(reply);
     for (const text of pieces) {
       if (this.options.delayMs) {
@@ -38,9 +38,17 @@ export function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
-function composeReply(provider: string, model: string, prompt: string): string {
+function composeReply(
+  provider: string,
+  model: string,
+  prompt: string,
+  priorToolResults?: ExecutionContext['priorToolResults'],
+): string {
   const trimmed = prompt.trim() || '(empty prompt)';
-  return `${provider}/${model} received your message.\n\n${trimmed}`;
+  const tools = priorToolResults?.length
+    ? `\n\nTool results: ${priorToolResults.map((row) => `${row.toolId}:${row.status}`).join(', ')}.`
+    : '';
+  return `${provider}/${model} received your message.\n\n${trimmed}${tools}`;
 }
 
 function splitForStream(text: string): string[] {

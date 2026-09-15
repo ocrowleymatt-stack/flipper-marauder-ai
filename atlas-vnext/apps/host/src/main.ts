@@ -22,6 +22,12 @@ const server = createHost({
   runtime: spine.runtime,
   staticDir,
   health: { mode: spine.mode, providers: spine.health, runtime: () => spine.runtimeSnapshot() },
+  probe: spine.healthProbe,
+  shutdown: spine.shutdown,
+  auth: spine.auth,
+  tools: spine.tools,
+  tenantId: spine.tenantId,
+  principalId: spine.principalId,
 });
 const bound = await listen(server, port, '127.0.0.1');
 spine.scheduler?.startIdleWatch();

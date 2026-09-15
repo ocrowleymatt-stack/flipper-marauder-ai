@@ -10,6 +10,7 @@ export type {
   MessageRepository,
   ModelExecutor,
   ProvenanceWriter,
+  ToolOrchestrator,
   UnitOfWork,
 } from './ports.ts';
 export { memoryStores } from './memory.ts';

@@ -4,6 +4,11 @@ import { extname, join, normalize, resolve } from 'node:path';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { ProviderHealth } from '@atlas-vnext/contracts';
 import { sanitizeText, type RuntimeSnapshot } from '@atlas-vnext/execution';
+import type { AuthService } from '@atlas-vnext/auth';
+import type { ToolEngine } from '@atlas-vnext/tools';
+import { CsrfError, OriginError, AuthenticationError } from '@atlas-vnext/auth';
+import { DEFAULT_OPERATIONAL_LIMITS } from '@atlas-vnext/contracts';
+import { readiness, SECURITY_HEADERS, type HealthProbe, type ShutdownController } from './ops.ts';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -23,6 +28,14 @@ export interface HostOptions {
     providers: Record<string, ProviderHealth>;
     runtime?: RuntimeSnapshot | null | (() => RuntimeSnapshot | null);
   };
+  probe?: HealthProbe;
+  shutdown?: ShutdownController;
+  auth?: AuthService;
+  tools?: ToolEngine;
+  tenantId?: string;
+  principalId?: string;
+  maxRequestBytes?: number;
+  allowedOrigins?: string[];
 }
 
 export function createHost(options: HostOptions): Server {
@@ -32,8 +45,8 @@ export function createHost(options: HostOptions): Server {
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse, options: HostOptions): Promise<void> {
-  const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-  cors(res);
+  applySecurityHeaders(res);
+  cors(res, req, options.allowedOrigins);
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
@@ -41,31 +54,59 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
   }
 
   try {
-    if (req.method === 'GET' && url.pathname === '/api/health') {
+    if (options.shutdown && !options.shutdown.accepting && isMutating(req.method)) {
+      json(res, 503, { error: 'shutting_down' });
+      return;
+    }
+
+    if (req.method === 'GET' && urlPath(req) === '/api/health/live') {
+      json(res, 200, { live: true, ok: true });
+      return;
+    }
+    if (req.method === 'GET' && urlPath(req) === '/api/health/ready') {
+      if (!options.probe) {
+        json(res, 200, { ready: true, live: true, dependencies: {} });
+        return;
+      }
+      const result = await readiness(options.probe);
+      const accepting = options.shutdown?.accepting ?? true;
+      const ready = result.ready && accepting;
+      json(res, ready ? 200 : 503, { ...result, ready, accepting });
+      return;
+    }
+    if (req.method === 'GET' && urlPath(req) === '/api/health') {
       const runtime =
         typeof options.health?.runtime === 'function' ? options.health.runtime() : (options.health?.runtime ?? null);
+      const probed = options.probe ? await readiness(options.probe) : null;
       json(res, 200, {
         ok: true,
         service: 'atlas-vnext-host',
         mode: options.health?.mode ?? 'unknown',
         providers: options.health?.providers ?? {},
         runtime,
+        live: probed?.live ?? true,
+        ready: probed ? probed.ready && (options.shutdown?.accepting ?? true) : true,
+        dependencies: probed?.dependencies ?? null,
       });
       return;
     }
-    if (req.method === 'POST' && url.pathname === '/api/conversations') {
-      const body = await readJson(req);
+
+    await enforceCsrfIfNeeded(req, options);
+
+    if (req.method === 'POST' && urlPath(req) === '/api/conversations') {
+      const body = await readJson(req, options.maxRequestBytes);
       const conversation = await options.runtime.createConversation({
         title: typeof body.title === 'string' ? body.title : undefined,
       });
       json(res, 201, conversation);
       return;
     }
-    if (req.method === 'GET' && url.pathname === '/api/conversations') {
+    if (req.method === 'GET' && urlPath(req) === '/api/conversations') {
       json(res, 200, await options.runtime.listConversations());
       return;
     }
-    const conversationMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)$/);
+    const pathname = urlPath(req);
+    const conversationMatch = pathname.match(/^\/api\/conversations\/([^/]+)$/);
     if (req.method === 'GET' && conversationMatch) {
       const snapshot = await options.runtime.getSnapshot(decodeURIComponent(conversationMatch[1]!));
       if (!snapshot) {
@@ -75,54 +116,161 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
       json(res, 200, snapshot);
       return;
     }
-    const messageMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)\/messages$/);
+    const messageMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/messages$/);
     if (req.method === 'POST' && messageMatch) {
-      const body = await readJson(req);
+      const body = await readJson(req, options.maxRequestBytes);
       const content = typeof body.content === 'string' ? body.content : '';
       const capability = typeof body.capability === 'string' ? body.capability : 'nexus/fast';
       sseHeaders(res);
-          for await (const event of options.runtime.sendMessage(decodeURIComponent(messageMatch[1]!), {
-            content,
-            capability,
-          })) {
-            writeSse(res, event.type, event);
-            if (res.destroyed) break;
-          }
+      for await (const event of options.runtime.sendMessage(decodeURIComponent(messageMatch[1]!), {
+        content,
+        capability,
+      })) {
+        writeSse(res, event.type, event);
+        if (res.destroyed) break;
+      }
       res.end();
       return;
     }
-    const cancelMatch = url.pathname.match(/^\/api\/executions\/([^/]+)\/cancel$/);
+    const cancelMatch = pathname.match(/^\/api\/executions\/([^/]+)\/cancel$/);
     if (req.method === 'POST' && cancelMatch) {
       const execution = await options.runtime.cancel(decodeURIComponent(cancelMatch[1]!));
       json(res, 200, execution);
       return;
     }
 
+    const toolMatch = pathname.match(/^\/api\/tools\/([^/]+)$/);
+    if (req.method === 'GET' && toolMatch && options.tools) {
+      const actor = await resolveToolActor(req, options);
+      if (!actor) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      const invocation = await options.tools.get(actor, decodeURIComponent(toolMatch[1]!));
+      if (!invocation) {
+        json(res, 404, { error: 'Permission denied.' });
+        return;
+      }
+      json(res, 200, invocation);
+      return;
+    }
+    const approveMatch = pathname.match(/^\/api\/tools\/([^/]+)\/(approve|deny)$/);
+    if (req.method === 'POST' && approveMatch && options.tools) {
+      const actor = await resolveToolActor(req, options);
+      if (!actor) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      const body = await readJson(req, options.maxRequestBytes);
+      const result = await options.tools.approve(
+        actor,
+        decodeURIComponent(approveMatch[1]!),
+        approveMatch[2] === 'approve' ? 'approved' : 'denied',
+        typeof body.reason === 'string' ? body.reason : undefined,
+      );
+      json(res, 200, { invocation: result.invocation, output: result.output ?? null });
+      return;
+    }
+
     if (req.method === 'GET' && options.staticDir) {
-      if (serveStatic(res, options.staticDir, url.pathname)) return;
+      if (serveStatic(res, options.staticDir, pathname)) return;
     }
 
     json(res, 404, { error: 'Not found.' });
   } catch (err) {
+    if (err instanceof CsrfError || err instanceof OriginError || err instanceof AuthenticationError) {
+      json(res, err instanceof AuthenticationError && err.code === 'unauthenticated' ? 401 : 403, {
+        error: err.message,
+      });
+      return;
+    }
     const message = sanitizeText(err instanceof Error ? err.message : String(err));
     if (!res.headersSent) {
       json(res, 500, { error: message });
       return;
     }
-    writeSse(res, 'error', { type: 'error', failure: { code: 'host_error', message, retryable: false, at: new Date().toISOString() } });
+    writeSse(res, 'error', {
+      type: 'error',
+      failure: { code: 'host_error', message, retryable: false, at: new Date().toISOString() },
+    });
     res.end();
   }
 }
 
-function cors(res: ServerResponse): void {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'content-type');
+function urlPath(req: IncomingMessage): string {
+  return new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
+}
+
+function isMutating(method?: string): boolean {
+  return method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+}
+
+async function resolveToolActor(
+  req: IncomingMessage,
+  options: HostOptions,
+): Promise<{ tenantId: string; principalId: string } | null> {
+  if (options.auth) {
+    const cookie = options.auth.parseCookie(header(req, 'cookie'));
+    if (cookie) {
+      const resolved = await options.auth.resolve({
+        sessionId: cookie,
+        csrfToken: header(req, options.auth.csrfHeader),
+        origin: header(req, 'origin'),
+        mutating: isMutating(req.method),
+      });
+      if (!resolved.actor.tenantId) return null;
+      return { tenantId: resolved.actor.tenantId, principalId: resolved.actor.principalId };
+    }
+  }
+  if (options.tenantId && options.principalId) {
+    return { tenantId: options.tenantId, principalId: options.principalId };
+  }
+  return null;
+}
+
+async function enforceCsrfIfNeeded(req: IncomingMessage, options: HostOptions): Promise<void> {
+  if (!options.auth || !isMutating(req.method)) return;
+  const cookie = options.auth.parseCookie(header(req, 'cookie'));
+  if (!cookie) return;
+  await options.auth.resolve({
+    sessionId: cookie,
+    csrfToken: header(req, options.auth.csrfHeader),
+    origin: header(req, 'origin'),
+    mutating: true,
+  });
+}
+
+function header(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function applySecurityHeaders(res: ServerResponse): void {
+  for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
+    res.setHeader(key, value);
+  }
+}
+
+function cors(res: ServerResponse, req: IncomingMessage, allowedOrigins?: string[]): void {
+  const origin = header(req, 'origin');
+  if (allowedOrigins?.length) {
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  res.setHeader('Access-Control-Allow-Headers', 'content-type, x-atlas-csrf');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   const payload = `${JSON.stringify(body)}\n`;
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(payload) });
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(payload),
+  });
   res.end(payload);
 }
 
@@ -140,10 +288,14 @@ function writeSse(res: ServerResponse, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(req: IncomingMessage, maxBytes = DEFAULT_OPERATIONAL_LIMITS.maxRequestBytes): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buf.length;
+    if (size > maxBytes) throw new Error('Request body too large.');
+    chunks.push(buf);
   }
   if (chunks.length === 0) return {};
   const raw = Buffer.concat(chunks).toString('utf8').trim();

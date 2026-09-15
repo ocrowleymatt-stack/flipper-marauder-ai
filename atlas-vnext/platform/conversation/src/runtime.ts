@@ -10,6 +10,7 @@ import type {
   RouteDecision,
   StructuredFailure,
   TokenUsage,
+  ToolCallRequest,
 } from '@atlas-vnext/contracts';
 import type { EventBus } from '@atlas-vnext/events';
 import type { IdFactory } from './ids.ts';
@@ -22,6 +23,7 @@ import type {
   MessageRepository,
   ModelExecutor,
   ProvenanceWriter,
+  ToolOrchestrator,
   UnitOfWork,
 } from './ports.ts';
 import { assertExecutionTransition } from './transitions.ts';
@@ -44,6 +46,8 @@ export interface ConversationRuntimeDeps {
   privacy?: 'any' | 'local_only';
   /** Optional transactional boundary for conversation/message/execution writes. */
   unitOfWork?: UnitOfWork;
+  toolOrchestrator?: ToolOrchestrator;
+  principalId?: string;
 }
 
 export class ConversationRuntime {
@@ -230,6 +234,14 @@ export class ConversationRuntime {
       const attempts: ExecutionAttempt[] = [];
       const startedMs = Date.now();
       const pending: ConversationStreamEvent[] = [];
+      const toolResults: Array<{
+        callId: string;
+        toolId: string;
+        status: string;
+        resultRef?: string | null;
+        output?: unknown;
+      }> = [];
+      const collectedToolCalls: ToolCallRequest[] = [];
 
       const observer = {
         onAttempt: (
@@ -318,6 +330,44 @@ export class ConversationRuntime {
           }
           if (chunk.type === 'tool_call') {
             yield { type: 'tool.requested', executionId, call: chunk.call };
+            if (this.deps.toolOrchestrator && conversation.tenantId) {
+              const handled = await this.deps.toolOrchestrator.handleCall({
+                tenantId: conversation.tenantId,
+                principalId: this.deps.principalId ?? conversation.tenantId,
+                workspaceId: conversation.workspaceId ?? conversation.projectId ?? null,
+                conversationId,
+                executionId,
+                provider: execution.selectedProvider,
+                model: execution.selectedModel,
+                call: chunk.call,
+              });
+              yield {
+                type: 'tool.lifecycle',
+                executionId,
+                invocationId: handled.invocationId,
+                toolId: handled.toolId,
+                status: handled.status,
+                reason: handled.reason,
+              };
+              if (handled.output !== undefined || handled.resultRef) {
+                yield {
+                  type: 'tool.result',
+                  executionId,
+                  invocationId: handled.invocationId,
+                  toolId: handled.toolId,
+                  resultRef: handled.resultRef ?? null,
+                  output: handled.output,
+                };
+              }
+              toolResults.push({
+                callId: chunk.call.id,
+                toolId: handled.toolId,
+                status: handled.status,
+                resultRef: handled.resultRef ?? null,
+                output: handled.output,
+              });
+              collectedToolCalls.push(chunk.call);
+            }
             continue;
           }
           if (chunk.type !== 'text' || chunk.text.length === 0) {
@@ -368,6 +418,55 @@ export class ConversationRuntime {
           return;
         }
 
+        const canContinue =
+          toolResults.length > 0 && toolResults.every((row) => row.status === 'succeeded');
+        if (canContinue && !controller.signal.aborted) {
+          for await (const chunk of this.deps.executor.execute(
+            decision,
+            {
+              prompt: content,
+              signal: controller.signal,
+              traceId: decision.traceId,
+              priorToolResults: toolResults,
+            },
+            observer,
+          )) {
+            for (const event of pending.splice(0)) yield event;
+            if (chunk.type === 'usage') {
+              usage = chunk.usage;
+              yield { type: 'usage', executionId, usage: chunk.usage };
+              continue;
+            }
+            if (chunk.type === 'text' && chunk.text.length > 0) {
+              assembled += chunk.text;
+              if (!assistant) {
+                assistant = await this.deps.messages.append({
+                  conversationId,
+                  role: 'assistant',
+                  content: assembled,
+                  executionId,
+                });
+                execution = await this.saveExecution({
+                  ...execution,
+                  assistantMessageId: assistant.id,
+                  attempts: [...attempts],
+                });
+                yield { type: 'message', message: assistant };
+                yield { type: 'execution', execution };
+              } else {
+                assistant = await this.deps.messages.save({
+                  ...assistant,
+                  content: assembled,
+                  updatedAt: this.clock.now(),
+                });
+              }
+              yield { type: 'assistant.delta', executionId, text: assembled };
+              yield { type: 'message.delta', messageId: assistant.id, content: assembled };
+            }
+          }
+          for (const event of pending.splice(0)) yield event;
+        }
+
         execution = await this.transition(
           { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
           'completed',
@@ -376,7 +475,7 @@ export class ConversationRuntime {
           yield { type: 'assistant.completed', executionId, text: assembled };
         }
         if (assistant && execution.selectedProvider && execution.selectedModel) {
-          await this.recordProvenance(conversation, userMessage, assistant, execution, decision);
+          await this.recordProvenance(conversation, userMessage, assistant, execution, decision, collectedToolCalls);
         }
         await this.publish(conversationId, 'execution.completed', {
           executionId,
@@ -440,6 +539,7 @@ export class ConversationRuntime {
     assistant: Message,
     execution: ExecutionRecord,
     decision: RouteDecision,
+    toolCalls: ToolCallRequest[] = [],
   ): Promise<void> {
     // Chat-turn provenance stub only. First-class artefacts live in artefact_metadata
     // and are not required to be messages. Using the assistant message id as artefactId
@@ -451,7 +551,7 @@ export class ConversationRuntime {
       inputManifestHash: null,
       provider: execution.selectedProvider ?? decision.provider,
       model: execution.selectedModel ?? decision.model,
-      toolCalls: [],
+      toolCalls,
       jobId: execution.id,
       timestamp: this.clock.now(),
       traceId: decision.traceId,

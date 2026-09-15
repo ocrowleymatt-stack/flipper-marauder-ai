@@ -1,10 +1,6 @@
 import type { CapabilityScope, PermissionDecision } from '@atlas-vnext/contracts';
 import { DANGEROUS_CAPABILITY_SCOPES } from '@atlas-vnext/contracts';
-
-export interface PermissionGate {
-  evaluate(scope: CapabilityScope, projectId?: string): PermissionDecision;
-  assertAllowed(scope: CapabilityScope, projectId?: string): void;
-}
+import type { PermissionGate } from './gate-types.ts';
 
 export class PermissionsNotImplementedError extends Error {
   constructor() {
@@ -59,3 +55,6 @@ export {
   composeBehaviourPrompt,
 } from './behaviour.ts';
 export type { AuthorityGate } from './behaviour.ts';
+export type { PermissionGate } from './gate-types.ts';
+export { AuthorityDeniedError, AuthorityEngine } from './authority.ts';
+export type { AuthorityGrant, AuthorityPrincipal, AuthorityRequest } from './authority.ts';

@@ -23,6 +23,8 @@ import { createConversationRepos } from './conversations.ts';
 import { applyEventRetention, createEventBus } from './events.ts';
 import { PostgresJobStore } from './jobs.ts';
 import { createFileStores } from './files.ts';
+import { createAuthStores } from './auth.ts';
+import { createToolStores, recoverToolInvocations } from './tools.ts';
 import { createSiteStores } from './sites.ts';
 import { mapArtefact, mapExecution, mapLease, sqlRow, type ExecutionRow } from './mappers.ts';
 import { CURRENT_SCHEMA_VERSION, ensureSchema, loadMigrations, migrate } from './migrate.ts';
@@ -64,6 +66,8 @@ export class PostgresPersistence implements PlatformPersistence {
     const events = createEventBus(this.tx, scoped, this.clock);
     const fileStores = createFileStores(this.tx, this.clock);
     const siteStores = createSiteStores(this.tx, this.clock);
+    const authStores = createAuthStores(this.tx);
+    const toolStores = createToolStores(this.tx);
     return {
       actor: scoped,
       conversations: repos.conversations,
@@ -81,6 +85,10 @@ export class PostgresPersistence implements PlatformPersistence {
       attachments: fileStores.attachments,
       casRefs: fileStores.casRefs,
       sites: siteStores.sites,
+      sessions: authStores.sessions,
+      directory: authStores.directory,
+      toolInvocations: toolStores.invocations,
+      toolApprovals: toolStores.approvals,
     };
   }
 
@@ -140,7 +148,8 @@ export class PostgresPersistence implements PlatformPersistence {
     });
     const jobs = await this.jobs.recoverExpiredLeases(this.clock());
     const runtimeLeases = await this.runtimeLeases.expire(this.clock());
-    return { executions, jobs, runtimeLeases };
+    const tools = await this.tx.run(() => recoverToolInvocations(this.tx, this.clock()));
+    return { executions, jobs, runtimeLeases, tools };
   }
 
   async applyEventRetention(maxEntries?: number): Promise<number> {

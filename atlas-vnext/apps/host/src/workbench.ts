@@ -113,6 +113,7 @@ export async function handleWorkbench(
   }
 
   if (pathname === '/api/projects' || pathname.startsWith('/api/projects/') || pathname.startsWith('/api/files/') || pathname.startsWith('/api/context/') || pathname === '/api/approvals') {
+    if (/\/documents(?:\/|$)/.test(pathname)) return false;
     const actor = await resolveActor(req, options);
     if (!actor) {
       json(res, 401, { error: 'Authentication required.' });
@@ -130,9 +131,11 @@ export async function handleWorkbench(
           json(res, 400, { error: 'Project name is required.' });
           return true;
         }
+        const dungeon = typeof body.dungeon === 'string' ? body.dungeon.trim() : undefined;
         const project = await requireProjects(options).create(actor, {
           name,
           description: typeof body.description === 'string' ? body.description : undefined,
+          dungeon,
         });
         json(res, 201, project);
         return true;

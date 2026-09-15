@@ -38,6 +38,8 @@ export interface AssembleRequest {
   tokenBudget: number;
   conversationId?: string;
   attachmentFileIds?: string[];
+  /** When set (including empty), only these files are assembled. No dump-all. */
+  restrictFileIds?: string[];
   maxSlices?: number;
 }
 
@@ -73,15 +75,22 @@ export class ContextService {
     }
 
     const attachmentIds = new Set(request.attachmentFileIds ?? []);
-    if (request.conversationId) {
+    if (request.conversationId && request.restrictFileIds === undefined) {
       const attachments = await bound.attachments.listByConversation(scoped, request.conversationId);
       for (const attachment of attachments) attachmentIds.add(attachment.fileId);
     }
+    if (request.restrictFileIds) {
+      for (const id of request.restrictFileIds) attachmentIds.add(id);
+    }
 
     const ranked = await this.search(scoped, request.projectId, request.query, 50);
+    const scopedHits =
+      request.restrictFileIds !== undefined
+        ? ranked.filter((hit) => request.restrictFileIds!.includes(hit.fileId))
+        : ranked;
     const attachmentFirst = [
-      ...ranked.filter((hit) => attachmentIds.has(hit.fileId)),
-      ...ranked.filter((hit) => !attachmentIds.has(hit.fileId)),
+      ...scopedHits.filter((hit) => attachmentIds.has(hit.fileId)),
+      ...scopedHits.filter((hit) => !attachmentIds.has(hit.fileId)),
     ];
 
     const slices: ContextSlice[] = [];

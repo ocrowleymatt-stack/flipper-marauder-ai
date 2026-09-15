@@ -30,6 +30,7 @@ const server = createHost({
   files: spine.files,
   context: spine.context,
   persistence: spine.persistence,
+  writing: spine.writing,
   tenantId: spine.tenantId,
   principalId: spine.principalId,
   production: persistence.production,

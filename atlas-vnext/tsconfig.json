@@ -33,7 +33,8 @@
       "@atlas-vnext/auth": ["./platform/auth/src/index.ts"],
       "@atlas-vnext/tools": ["./platform/tools/src/index.ts"],
       "@atlas-vnext/plugins": ["./platform/plugins/src/index.ts"],
-      "@atlas-vnext/secrets": ["./platform/secrets/src/index.ts"]
+      "@atlas-vnext/secrets": ["./platform/secrets/src/index.ts"],
+      "@atlas-vnext/dungeon-writing": ["./dungeons/writing/src/index.ts"]
     }
   },
   "include": [

@@ -31,11 +31,12 @@ Default runtime is **live** adapters. Missing keys mark that provider unavailabl
 - Tool platform, plugins, Authority, authentication, secrets, health/recovery (`docs/TOOLS-AUTH-AUTHORITY.md`)
 - Projects/files/CAS/context foundation (`docs/FILES-AND-CONTEXT.md`)
 - Workbench UI (`apps/web`) over host HTTP/SSE (`apps/host`) — session, projects, runs, files, tools, Authority approval (`docs/WORKBENCH.md`)
+- Caspa Writing dungeon (`dungeons/writing`) — durable documents, versions, selected-file context (`docs/CASPA-WRITING.md`)
 - Import-graph architecture tests
 
 ## What this does not ship
 
-See [docs/WHAT-WE-DELIBERATELY-DID-NOT-PORT.md](docs/WHAT-WE-DELIBERATELY-DID-NOT-PORT.md). No Caspa, Mnemosyne, Website Studio, Music, OSINT, or autonomous research migration.
+See [docs/WHAT-WE-DELIBERATELY-DID-NOT-PORT.md](docs/WHAT-WE-DELIBERATELY-DID-NOT-PORT.md). No Mnemosyne, Website Studio, Music, OSINT, or autonomous research migration. Caspa historical product UI/routers are not ported; the Writing dungeon is platform-native.
 
 ## Test / CI
 
@@ -50,6 +51,7 @@ npm run test:providers
 npm run test:persistence
 npm run test:files
 npm run test:tools
+npm run test:caspa
 npm run test:runtime
 npm run test:compat
 npm run build

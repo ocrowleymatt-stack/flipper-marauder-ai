@@ -1,19 +1,17 @@
 # Writing model
 
-Product implementation is deferred. Caspa remains a behavioural reference, not a tree to copy.
+Caspa is the first real Atlas dungeon: a thin writing domain over platform projects, CAS, context, Nexus, Execution, Authority, and Workbench. Historical Caspa/Shakespeare product trees remain behavioural references, not templates.
 
-## One durable Book Project
+## One project, many documents
 
-A writing work is **one** `platform/projects` record (dungeon `writing`) whose manifest covers:
-
-manuscript · chapters · structure · characters · research notes · continuity · voice/style · editorial · publishing
-
-Conversation is ephemeral. The Book Project is authoritative.
+A writing work lives in **one** `platform/projects` record. Documents are project children (tenant + project). Conversation is a run spine. The document + versions are authoritative.
 
 ## Rules
 
-1. **No multiple parallel writing databases.** Caspa PostgreSQL revisions, Shakespeare local state, commons literary stores, and specified AM writing folders collapse into `platform/projects` + CAS + one jobs engine.
-2. Do not port Caspa product UI, GoldPipeline, or Caspa routers in this gate.
-3. Keep later, via contracts: claim ledger, stylometry, craft rules, immutable version conflict (`VERSION_CONFLICT` in Caspa `hybridCoreRepository`).
-4. Long-running commissions are `platform/jobs`, not dungeon `setInterval` runners.
-5. Writing must not import OSINT or investigation dungeons; shared retrieval goes through research/OSINT **contracts**.
+1. **No parallel writing databases.** Caspa PostgreSQL revisions, Shakespeare local state, commons literary stores, and AM writing folders collapse into `platform/projects` + CAS + `documents` / `document_versions`.
+2. Do not port Caspa product UI, GoldPipeline, or Caspa routers.
+3. Kept via contracts/behaviour: immutable version conflict (`stale_revision` / `VERSION_CONFLICT`), craft rules as composed Behaviour, selected-file grounding.
+4. Long-running commissions remain `platform/jobs` (deferred). This slice uses the conversation/execution spine for a writing run.
+5. Writing must not import OSINT or investigation dungeons; retrieval goes through `platform/context`.
+
+See [CASPA-WRITING.md](./CASPA-WRITING.md).

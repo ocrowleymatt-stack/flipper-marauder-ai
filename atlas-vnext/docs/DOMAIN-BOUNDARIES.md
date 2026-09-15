@@ -43,7 +43,7 @@ None of these are dungeon modules. None may import dungeons.
 
 | Dungeon | Owns | Must not |
 |---|---|---|
-| writing | one Book Project (manuscript, claims, stylometry) | import OSINT/investigation; own a job runner or writing DB |
+| writing | documents, versions, writing operations, Caspa domain UX | import OSINT/investigation; own a job runner, writing DB, Nexus, Execution, CAS, auth, or RunPod |
 | investigation | caseboard, evidential agents | import writing; talk to OpenAI SDK; embed OSINT adapters |
 | research | federated search, synthesis | poll in-process; embed SpiderFoot in Nexus; duplicate retrieval |
 | website | site gen, audits, preview vs production | mount preview servers on Nexus; copy trees per revision |

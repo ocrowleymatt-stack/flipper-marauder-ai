@@ -420,9 +420,39 @@ select,
   outline-offset: 2px;
 }
 
+.caspa-layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr) 240px;
+}
+
+.caspa-list,
+.caspa-editor,
+.caspa-meta {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px;
+}
+
+.caspa-editor {
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+
+.file-check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--text);
+}
+
 @media (max-width: 1100px) {
   .layout {
     grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .caspa-layout {
+    grid-template-columns: 1fr;
   }
   .inspector {
     display: none;

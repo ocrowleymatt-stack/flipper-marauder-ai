@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import pg from 'pg';
 import { openPostgresPersistence } from '../../src/postgres/kernel.ts';
-import { assertIdent } from '../../src/postgres/tx.ts';
-import { openPairedKernels, openTestKernel, persistenceConfig, postgresUrl, tenantA, tenantB } from './harness.ts';
+import { dropTestSchema, openPairedKernels, openTestKernel, persistenceConfig, tenantA, tenantB } from './harness.ts';
 
-const { Pool } = pg;
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   while (cleanups.length) await cleanups.pop()?.();
@@ -24,12 +21,7 @@ describe('durable jobs', () => {
     const reopened = await openPostgresPersistence(persistenceConfig(schema));
     cleanups.push(async () => {
       await reopened.close();
-      const cleanup = new Pool({ connectionString: postgresUrl() });
-      try {
-        await cleanup.query(`DROP SCHEMA IF EXISTS ${assertIdent(schema)} CASCADE`);
-      } finally {
-        await cleanup.end();
-      }
+      await dropTestSchema(schema);
     });
     const loaded = await reopened.forActor(tenantA).jobs.get(tenantA, job.id);
     expect(loaded?.checkpoint).toEqual({ page: 2 });
@@ -70,12 +62,7 @@ describe('durable jobs', () => {
     const reopened = await openPostgresPersistence(persistenceConfig(schema));
     cleanups.push(async () => {
       await reopened.close();
-      const cleanup = new Pool({ connectionString: postgresUrl() });
-      try {
-        await cleanup.query(`DROP SCHEMA IF EXISTS ${assertIdent(schema)} CASCADE`);
-      } finally {
-        await cleanup.end();
-      }
+      await dropTestSchema(schema);
     });
     const recovered = await reopened.recoverOnStart();
     expect(recovered.jobs.some((item) => item.id === job.id)).toBe(false);

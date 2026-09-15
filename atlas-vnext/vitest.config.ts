@@ -6,9 +6,14 @@ const root = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   test: {
+    // Kernel bootstrap now applies seven migrations. Parallel workers queue on
+    // the Postgres DDL advisory lock, so the default 5s cap is too tight in CI.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
     include: [
       'platform/**/*.test.ts',
       'apps/**/*.test.ts',
+      'dungeons/**/*.test.ts',
       'tests/**/*.test.ts',
     ],
     exclude: [
@@ -37,6 +42,7 @@ export default defineConfig({
       '@atlas-vnext/tools': resolve(root, 'platform/tools/src/index.ts'),
       '@atlas-vnext/plugins': resolve(root, 'platform/plugins/src/index.ts'),
       '@atlas-vnext/secrets': resolve(root, 'platform/secrets/src/index.ts'),
+      '@atlas-vnext/dungeon-writing': resolve(root, 'dungeons/writing/src/index.ts'),
     },
   },
 });

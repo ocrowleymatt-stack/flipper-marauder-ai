@@ -29,6 +29,8 @@ import {
   isForeignHostSession,
   resolveActor,
 } from './workbench.ts';
+import { handleCaspa } from './caspa.ts';
+import type { WritingService } from '@atlas-vnext/dungeon-writing';
 
 export interface HostOptions {
   runtime: ConversationRuntime;
@@ -46,6 +48,7 @@ export interface HostOptions {
   files?: FilesService | null;
   context?: ContextService | null;
   persistence?: PlatformPersistence | null;
+  writing?: WritingService | null;
   tenantId?: string;
   principalId?: string;
   production?: boolean;
@@ -110,6 +113,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
     await enforceCsrfIfNeeded(req, options);
 
     if (await handleWorkbench(req, res, options)) return;
+    if (await handleCaspa(req, res, options)) return;
 
     const conversationActor = await resolveActor(req, options);
 
@@ -327,7 +331,7 @@ function cors(res: ServerResponse, req: IncomingMessage, options: HostOptions): 
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Headers', 'content-type, x-atlas-csrf');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
 }
 
 export async function listen(server: Server, port = 0, host = '127.0.0.1'): Promise<{ port: number; url: string }> {

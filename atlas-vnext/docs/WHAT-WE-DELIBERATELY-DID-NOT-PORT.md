@@ -14,9 +14,9 @@ First-principles rebuild. Behaviour may be reimplemented later; these implementa
 - Duplicate Atlas vNext branches (`99e9`, `057e`, `6252`, `694c`, `e2ed`, `66f8`, `8647`, …) as source of truth
 - The Java/Spring Boot/MySQL `lystrosaurus/atlas-mountain` stub and any census derived from it
 
-## Product dungeons (deferred)
+## Product dungeons (deferred / not copied)
 
-- Caspa `src/services` (GoldPipeline, StoryBible, PlotArchitect, jobQueue, routers)
+- Caspa `src/services` GoldPipeline, StoryBible, PlotArchitect, jobQueue, routers (behavioural lessons only; Writing dungeon is platform-native)
 - Shakespeare- Gemini studio app
 - Investigation orchestration and caseboard product code
 - Website Studio product + Nexus-mounted preview servers

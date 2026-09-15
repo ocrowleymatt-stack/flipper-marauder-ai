@@ -48,6 +48,8 @@ jobs:
         run: npm run test:files
       - name: Tools / auth / Authority
         run: npm run test:tools
+      - name: Caspa writing dungeon
+        run: npm run test:caspa
       - name: Architecture boundary tests
         run: npm run test:boundaries
       - name: Provider / runtime tests

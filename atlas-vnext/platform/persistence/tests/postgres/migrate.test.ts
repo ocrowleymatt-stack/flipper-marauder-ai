@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import pg from 'pg';
-import { CURRENT_SCHEMA_VERSION, checksumSql, defaultMigrationsDir, loadMigrations, migrate } from '../../src/postgres/migrate.ts';
+import { CURRENT_SCHEMA_VERSION, checksumSql, defaultMigrationsDir, loadMigrations, migrate, withPostgresDdlLock } from '../../src/postgres/migrate.ts';
 import { assertIdent } from '../../src/postgres/tx.ts';
-import { openTestKernel, postgresUrl } from './harness.ts';
+import { dropTestSchema, openTestKernel, postgresUrl } from './harness.ts';
 
 const { Pool } = pg;
 const cleanups: Array<() => Promise<void>> = [];
@@ -26,8 +26,8 @@ describe('schema bootstrap and migrations', () => {
     const versions = await second.kernel.tx.query<{ version: number }>(
       'SELECT version FROM schema_migrations ORDER BY version',
     );
-    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6]);
-    expect(CURRENT_SCHEMA_VERSION).toBe(6);
+    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(CURRENT_SCHEMA_VERSION).toBe(7);
     const tenant = await second.kernel.tx.query('SELECT id FROM tenants WHERE id = $1', ['tenant_a']);
     expect(tenant.rows).toHaveLength(1);
     const artefact = await second.kernel.tx.query('SELECT COUNT(*)::int AS n FROM artefact_metadata');
@@ -38,27 +38,34 @@ describe('schema bootstrap and migrations', () => {
     const schema = `t_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
     const pool = new Pool({ connectionString: postgresUrl(), connectionTimeoutMillis: 5_000 });
     cleanups.push(async () => {
-      await pool.query(`DROP SCHEMA IF EXISTS ${assertIdent(schema)} CASCADE`);
+      await dropTestSchema(schema);
       await pool.end();
     });
-    await pool.query(`CREATE SCHEMA ${assertIdent(schema)}`);
+    const admin = await pool.connect();
+    try {
+      await withPostgresDdlLock(admin, () => admin.query(`CREATE SCHEMA ${assertIdent(schema)}`));
+    } finally {
+      admin.release();
+    }
     const client = await pool.connect();
     try {
       await client.query(`SET search_path TO ${assertIdent(schema)}`);
       const v1 = loadMigrations().find((item) => item.version === 1);
       expect(v1).toBeTruthy();
-      await client.query(v1!.sql);
-      await client.query('INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, $2, $3)', [
-        1,
-        v1!.name,
-        v1!.checksum,
-      ]);
+      await withPostgresDdlLock(client, async () => {
+        await client.query(v1!.sql);
+        await client.query('INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, $2, $3)', [
+          1,
+          v1!.name,
+          v1!.checksum,
+        ]);
+      });
       await client.query(
         `INSERT INTO tenants (id, urn, name, created_at, updated_at)
          VALUES ('tenant_keep', 'urn:atlas:tenant:keep', 'Keep', now(), now())`,
       );
       const result = await migrate(client, loadMigrations());
-      expect(result.applied).toEqual([2, 3, 4, 5, 6]);
+      expect(result.applied).toEqual([2, 3, 4, 5, 6, 7]);
       expect(result.skipped).toEqual([1]);
       const tenants = await client.query('SELECT id FROM tenants');
       expect(tenants.rows.map((row) => row.id)).toContain('tenant_keep');
@@ -106,7 +113,7 @@ describe('schema bootstrap and migrations', () => {
       await client.query(`SET search_path TO ${assertIdent(handle.schema)}`);
       const again = await migrate(client, loadMigrations());
       expect(again.applied).toEqual([]);
-      expect(again.skipped).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(again.skipped).toEqual([1, 2, 3, 4, 5, 6, 7]);
     } finally {
       client.release();
     }
@@ -120,18 +127,29 @@ describe('schema bootstrap and migrations', () => {
     for (const migration of loadMigrations(defaultMigrationsDir())) {
       writeFileSync(join(dir, migration.filename), readFileSync(join(defaultMigrationsDir(), migration.filename)));
     }
-    writeFileSync(join(dir, '007_bad.sql'), 'THIS IS NOT SQL;');
+    writeFileSync(join(dir, '008_bad.sql'), 'THIS IS NOT SQL;');
     const client = await handle.kernel.tx.pool.connect();
     try {
       await client.query(`SET search_path TO ${assertIdent(handle.schema)}`);
-      await expect(migrate(client, loadMigrations(dir))).rejects.toThrow(/Migration 7/);
+      await expect(migrate(client, loadMigrations(dir))).rejects.toThrow(/Migration 8/);
       const versions = await client.query('SELECT version FROM schema_migrations ORDER BY version');
-      expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
       const tenant = await client.query('SELECT id FROM tenants WHERE id = $1', ['tenant_a']);
       expect(tenant.rows).toHaveLength(1);
     } finally {
       client.release();
     }
     expect(checksumSql('abc')).toHaveLength(64);
+  });
+
+  it('bootstraps several schemas in parallel without stalling on catalog DDL', async () => {
+    const handles = await Promise.all(Array.from({ length: 4 }, () => openTestKernel()));
+    cleanups.push(...handles.map((handle) => handle.close));
+    for (const handle of handles) {
+      const versions = await handle.kernel.tx.query<{ n: number }>(
+        'SELECT COUNT(*)::int AS n FROM schema_migrations',
+      );
+      expect(versions.rows[0]?.n).toBe(CURRENT_SCHEMA_VERSION);
+    }
   });
 });

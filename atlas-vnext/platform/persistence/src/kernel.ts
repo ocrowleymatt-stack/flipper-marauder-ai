@@ -25,6 +25,7 @@ import type {
   FileStore,
   FileVersionStore,
 } from './file-types.ts';
+import type { DocumentStore } from './document-types.ts';
 import type { SiteStore } from './site-types.ts';
 import type { DirectoryStore, SessionStore } from '@atlas-vnext/auth';
 import type { ToolApprovalStore, ToolInvocationStore } from '@atlas-vnext/tools';
@@ -216,6 +217,7 @@ export interface ActorBoundPersistence {
   directory: DirectoryStore;
   toolInvocations: ToolInvocationStore;
   toolApprovals: ToolApprovalStore;
+  documents: DocumentStore;
 }
 
 export interface RestartRecoveryResult {

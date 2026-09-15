@@ -276,6 +276,8 @@ export class DurableConversationStore {
         });
       },
       forJob: async (jobId) => document.getDocument().provenance.filter((entry) => entry.jobId === jobId),
+      forArtefact: async (artefactId) =>
+        document.getDocument().provenance.filter((entry) => entry.artefactId === artefactId),
     };
   }
 

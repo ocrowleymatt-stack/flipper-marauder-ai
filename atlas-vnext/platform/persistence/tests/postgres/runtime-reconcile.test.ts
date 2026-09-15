@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import pg from 'pg';
 import { openPostgresPersistence } from '../../src/postgres/kernel.ts';
-import { assertIdent } from '../../src/postgres/tx.ts';
-import { openTestKernel, persistenceConfig, postgresUrl, tenantA } from './harness.ts';
+import { dropTestSchema, openTestKernel, persistenceConfig, tenantA } from './harness.ts';
 
-const { Pool } = pg;
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   while (cleanups.length) await cleanups.pop()?.();
@@ -31,12 +28,7 @@ describe('runtime reconciliation persistence', () => {
     const reopened = await openPostgresPersistence(persistenceConfig(schema));
     cleanups.push(async () => {
       await reopened.close();
-      const cleanup = new Pool({ connectionString: postgresUrl() });
-      try {
-        await cleanup.query(`DROP SCHEMA IF EXISTS ${assertIdent(schema)} CASCADE`);
-      } finally {
-        await cleanup.end();
-      }
+      await dropTestSchema(schema);
     });
     const recovery = await reopened.recoverOnStart();
     expect(recovery.runtimeLeases).toEqual([]);

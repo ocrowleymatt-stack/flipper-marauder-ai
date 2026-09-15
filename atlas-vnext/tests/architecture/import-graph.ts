@@ -467,6 +467,18 @@ export function analyzeGraph(
             detail: `Dungeon ${mod.dungeon} imported provider adapter/transport ${specifier}.`,
           });
         }
+        if (
+          target.layer === 'nexus' ||
+          target.layer === 'execution' ||
+          target.layer === 'auth' ||
+          target.layer === 'secrets'
+        ) {
+          violations.push({
+            rule: 'dungeon-consume-platform',
+            file: mod.relPath,
+            detail: `Dungeon ${mod.dungeon} imported ${specifier} (${target.layer}); consume injected ports instead.`,
+          });
+        }
       }
 
       if (mod.layer === 'conversation') {
@@ -617,6 +629,18 @@ function analyzePackageJson(root: string, overlays: Record<string, string>): Vio
             rule: 'dungeon-package-deps',
             file: rel,
             detail: `Dungeon package.json depends on provider transport ${name}.`,
+          });
+        }
+        if (
+          name === '@atlas-vnext/nexus' ||
+          name === '@atlas-vnext/execution' ||
+          name === '@atlas-vnext/auth' ||
+          name === '@atlas-vnext/secrets'
+        ) {
+          violations.push({
+            rule: 'dungeon-package-deps',
+            file: rel,
+            detail: `Dungeon package.json depends on platform control-plane ${name}.`,
           });
         }
       }

@@ -2,11 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { RouteDecision, StreamChunk } from '@atlas-vnext/contracts';
 import { ConversationRuntime, type ModelExecutor } from '@atlas-vnext/conversation';
 import { openPostgresPersistence, type PostgresPersistence } from '../../src/postgres/kernel.ts';
-import { openTestKernel, persistenceConfig, postgresUrl, tenantA } from './harness.ts';
-import { assertIdent } from '../../src/postgres/tx.ts';
-import pg from 'pg';
+import { dropTestSchema, openTestKernel, persistenceConfig, tenantA } from './harness.ts';
 
-const { Pool } = pg;
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   while (cleanups.length) await cleanups.pop()?.();
@@ -84,12 +81,7 @@ describe('conversation persistence across restart', () => {
     const reopened = await openPostgresPersistence(persistenceConfig(schema));
     cleanups.push(async () => {
       await reopened.close();
-      const cleanup = new Pool({ connectionString: postgresUrl() });
-      try {
-        await cleanup.query(`DROP SCHEMA IF EXISTS ${assertIdent(schema)} CASCADE`);
-      } finally {
-        await cleanup.end();
-      }
+      await dropTestSchema(schema);
     });
     const recoveredRuntime = runtimeFor(reopened);
     const recovered = await recoveredRuntime.recoverInFlight();
@@ -156,12 +148,7 @@ describe('conversation persistence across restart', () => {
     const reopened = await openPostgresPersistence(persistenceConfig(schema));
     cleanups.push(async () => {
       await reopened.close();
-      const cleanup = new Pool({ connectionString: postgresUrl() });
-      try {
-        await cleanup.query(`DROP SCHEMA IF EXISTS ${assertIdent(schema)} CASCADE`);
-      } finally {
-        await cleanup.end();
-      }
+      await dropTestSchema(schema);
     });
     const recovery = await reopened.recoverOnStart();
     expect(recovery.executions).toHaveLength(1);

@@ -13,6 +13,7 @@ import {
   listApprovals,
   listConversationTools,
   listConversations,
+  listDungeons,
   listFiles,
   listProjectConversations,
   listProjects,
@@ -23,15 +24,18 @@ import {
   type AssembledContext,
   type Capability,
   type Conversation,
+  type DungeonRegistration,
   type ExecutionRecord,
   type Project,
   type ProjectFile,
   type SessionState,
   type ToolPresentation,
 } from './api';
+import { CaspaPanel } from './caspa';
 import { applyStream, emptyView, runStatusLabel, viewFromSnapshot, type StreamView } from './stream';
 
 type InspectorTab = 'run' | 'files' | 'context' | 'tools';
+type Surface = 'conversation' | 'caspa';
 
 export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
@@ -56,6 +60,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState('Loading Workbench.');
   const [tab, setTab] = useState<InspectorTab>('run');
+  const [surface, setSurface] = useState<Surface>('conversation');
+  const [dungeons, setDungeons] = useState<DungeonRegistration[]>([]);
   const [navOpen, setNavOpen] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
   const composerId = useId();
@@ -129,6 +135,8 @@ export function App() {
         } catch (err) {
           if (!isProjectsUnavailable(err)) throw err;
         }
+        const registered = await listDungeons().catch(() => []);
+        setDungeons(registered);
         if (projectItems) {
           setProjectsAvailable(true);
           const first = projectItems[0]?.id ?? null;
@@ -137,6 +145,7 @@ export function App() {
           setStatus(first ? 'Workbench ready.' : 'Create a project to begin.');
         } else {
           setProjectsAvailable(false);
+          setSurface('conversation');
           const convos = await listConversations();
           setConversations(convos);
           const nextId = convos[0]?.id ?? null;
@@ -393,6 +402,23 @@ export function App() {
             </ul>
           )}
           <div className="row">
+            <h2>Surface</h2>
+          </div>
+          <ul className="plain">
+            <li>
+              <button type="button" className={surface === 'conversation' ? 'active' : ''} onClick={() => setSurface('conversation')} disabled={projectsAvailable && !projectId}>
+                Conversation
+              </button>
+            </li>
+            {dungeons.some((item) => item.id === 'writing' && item.featureAvailable) ? (
+              <li>
+                <button type="button" className={surface === 'caspa' ? 'active' : ''} onClick={() => setSurface('caspa')} disabled={!projectId}>
+                  Writing
+                </button>
+              </li>
+            ) : null}
+          </ul>
+          <div className="row">
             <h2>Conversations</h2>
             <button type="button" className="ghost compact" onClick={() => void onCreateConversation()} disabled={projectsAvailable && !projectId}>
               New
@@ -418,6 +444,16 @@ export function App() {
             </ul>
           )}
         </nav>
+        {surface === 'caspa' && projectId ? (
+          <CaspaPanel
+            projectId={projectId}
+            files={files}
+            busy={busy}
+            setBusy={setBusy}
+            onStatus={setStatus}
+            onError={setError}
+          />
+        ) : (
         <main className="workspace" aria-label="Conversation">
           <header className="thread-header">
             <div>
@@ -502,6 +538,7 @@ export function App() {
             </div>
           </form>
         </main>
+        )}
         <aside className="inspector" aria-label="Run, files, context and tools">
           <div className="tabs" role="tablist" aria-label="Inspector">
             {(['run', 'files', 'context', 'tools'] as const).map((item) => (

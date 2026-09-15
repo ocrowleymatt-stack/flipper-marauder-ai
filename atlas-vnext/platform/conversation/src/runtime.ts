@@ -127,7 +127,17 @@ export class ConversationRuntime {
 
   async *sendMessage(
     conversationId: string,
-    input: { content: string; capability?: string; privacy?: 'any' | 'local_only' },
+    input: {
+      content: string;
+      capability?: string;
+      privacy?: 'any' | 'local_only';
+      systemPrompt?: string;
+      contextTokens?: number;
+      requireTools?: boolean;
+      requireReasoning?: boolean;
+      requireVision?: boolean;
+      requireCode?: boolean;
+    },
   ): AsyncGenerator<ConversationStreamEvent> {
     const content = input.content.trim();
     if (!content) {
@@ -201,10 +211,14 @@ export class ConversationRuntime {
       let decision: RouteDecision;
       try {
         decision = this.deps.router.resolve(capability, {
-          contextTokens: estimateTokens(content),
+          contextTokens: input.contextTokens ?? estimateTokens([input.systemPrompt, content].filter(Boolean).join('\n')),
           traceId: execution.id,
           availableRuntimes: this.deps.availableRuntimes,
           privacy: input.privacy ?? this.deps.privacy ?? 'any',
+          requireTools: input.requireTools,
+          requireReasoning: input.requireReasoning,
+          requireVision: input.requireVision,
+          requireCode: input.requireCode,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -310,7 +324,7 @@ export class ConversationRuntime {
       try {
         for await (const chunk of this.deps.executor.execute(
           decision,
-          { prompt: content, signal: controller.signal, traceId: decision.traceId },
+          { prompt: content, systemPrompt: input.systemPrompt, signal: controller.signal, traceId: decision.traceId },
           observer,
         )) {
           for (const event of pending.splice(0)) yield event;
@@ -429,6 +443,7 @@ export class ConversationRuntime {
             decision,
             {
               prompt: content,
+              systemPrompt: input.systemPrompt,
               signal: controller.signal,
               traceId: decision.traceId,
               priorToolResults: toolResults,

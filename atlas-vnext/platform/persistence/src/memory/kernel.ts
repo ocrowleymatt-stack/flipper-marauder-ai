@@ -20,6 +20,7 @@ import { logPlatform } from '@atlas-vnext/observability';
 import { assertActor, sameWorkspace, type PersistenceActor } from '../actor.ts';
 import { createMemoryFileStores } from './files.ts';
 import { createMemorySiteStores } from './sites.ts';
+import { createMemoryDocumentStore } from './documents.ts';
 import { OwnershipError, PersistenceClosedError, ConflictError } from '../errors.ts';
 import type {
   ActorBoundPersistence,
@@ -79,6 +80,7 @@ export class MemoryPersistence implements PlatformPersistence {
   private readonly directory = new MemoryDirectoryStore();
   private readonly toolInvocations = new MemoryToolInvocationStore();
   private readonly toolApprovals = new MemoryToolApprovalStore();
+  private readonly documentStore = createMemoryDocumentStore(() => this.clock());
 
   constructor(private readonly clock: () => string = () => new Date().toISOString()) {
     this.jobs = createJobEngine({
@@ -98,7 +100,17 @@ export class MemoryPersistence implements PlatformPersistence {
 
   async run<T>(fn: () => Promise<T>): Promise<T> {
     this.assertOpen();
-    return this.mutex.run(fn);
+    return this.mutex.run(async () => {
+      const documents = this.documentStore.snapshot();
+      const provenance = this.provenance.map((item) => ({ tenantId: item.tenantId, entry: { ...item.entry } }));
+      try {
+        return await fn();
+      } catch (err) {
+        this.documentStore.restore(documents);
+        this.provenance.splice(0, this.provenance.length, ...provenance);
+        throw err;
+      }
+    });
   }
 
   forActor(actor: PersistenceActor): ActorBoundPersistence {
@@ -125,6 +137,7 @@ export class MemoryPersistence implements PlatformPersistence {
       directory: this.directory,
       toolInvocations: this.toolInvocations,
       toolApprovals: this.toolApprovals,
+      documents: this.documentStore,
     };
   }
 
@@ -227,6 +240,18 @@ export class MemoryPersistence implements PlatformPersistence {
         );
         tools.failed += 1;
       }
+    }
+    const interruptedDocs = await this.documentStore.listInFlight();
+    for (const doc of interruptedDocs) {
+      await this.documentStore.update(
+        { tenantId: doc.tenantId, principalId: doc.createdBy ?? 'system' },
+        doc.id,
+        {
+          status: 'failed',
+          failure: { code: 'interrupted', message: reason, retryable: true, at: now },
+          expectedRevision: doc.revision,
+        },
+      );
     }
     return { executions, jobs, runtimeLeases, tools };
   }
@@ -410,13 +435,14 @@ export class MemoryPersistence implements PlatformPersistence {
   private provenanceWriter(actor: PersistenceActor): ProvenanceWriter {
     return {
       record: async (entry) => {
-        if (this.provenance.some((item) => item.tenantId === actor.tenantId && item.entry.artefactId === entry.artefactId)) {
-          return;
-        }
         this.provenance.push({ tenantId: actor.tenantId, entry: { ...entry } });
       },
       forJob: async (jobId) =>
         this.provenance.filter((item) => item.tenantId === actor.tenantId && item.entry.jobId === jobId).map((item) => item.entry),
+      forArtefact: async (artefactId) =>
+        this.provenance
+          .filter((item) => item.tenantId === actor.tenantId && item.entry.artefactId === artefactId)
+          .map((item) => item.entry),
     };
   }
 

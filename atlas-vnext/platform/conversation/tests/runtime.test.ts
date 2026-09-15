@@ -308,4 +308,42 @@ describe('streaming and failure behaviour', () => {
     expect(types).toContain('execution.completed');
     expect(types.at(-1)).toBe('done');
   });
+
+  it('forwards systemPrompt and routing requirements to the executor', async () => {
+    let seenSystem = '';
+    let seenPrompt = '';
+    let routedTarget = '';
+    const { runtime } = harness({
+      router: fakeRouter((target) => {
+        routedTarget = target;
+        return decision(target, ['mock/mock-fast']);
+      }),
+      executor: {
+        async *execute(_decision, context) {
+          seenSystem = context.systemPrompt ?? '';
+          seenPrompt = context.prompt;
+          yield { type: 'text', text: 'ok' };
+        },
+      },
+    });
+    const conversation = await runtime.createConversation();
+    await collectEvents(runtime, conversation.id);
+    expect(routedTarget).toBe('nexus/reason');
+    expect(seenSystem).toContain('capability policy');
+    expect(seenPrompt).toContain('user instruction');
+  });
 });
+
+async function collectEvents(runtime: ConversationRuntime, conversationId: string) {
+  const events = [];
+  for await (const event of runtime.sendMessage(conversationId, {
+    content: 'user instruction',
+    systemPrompt: 'capability policy',
+    capability: 'nexus/reason',
+    requireReasoning: true,
+    contextTokens: 4096,
+  })) {
+    events.push(event);
+  }
+  return events;
+}

@@ -45,6 +45,7 @@ export interface ExecutionRepository {
 export interface ProvenanceWriter {
   record(entry: ProvenanceRecord): Promise<void>;
   forJob(jobId: string): Promise<ProvenanceRecord[]>;
+  forArtefact(artefactId: string): Promise<ProvenanceRecord[]>;
 }
 
 export interface CapabilityRouter {

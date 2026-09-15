@@ -176,9 +176,162 @@ describe('P1: SSE idle timeout cancels stalled execution and restores permits', 
     expect(frames.some((frame) => frame.event === 'error')).toBe(true);
     const error = frames.find((frame) => frame.event === 'error')?.data as { failure?: { code?: string } };
     expect(error.failure?.code).toBe('timeout');
-    expect(cancelled).toContain('ex_stall');
+    expect(cancelled).toEqual(['ex_stall']);
     expect(frames.some((frame) => frame.event === 'done')).toBe(false);
     expect(started.spine.resources.occupancy(tenantId)).toEqual({ streams: 0, runs: 0 });
+  });
+});
+
+describe('P1: SSE timeout/cancellation races release admission exactly once', () => {
+  async function waitForOccupancy(
+    occupancy: () => { streams: number; runs: number },
+    expected: { streams: number; runs: number },
+    timeoutMs = 4_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (JSON.stringify(occupancy()) === JSON.stringify(expected)) return;
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    }
+    expect(occupancy()).toEqual(expected);
+  }
+
+  it('releases permits once on normal completion without cancelling', async () => {
+    const started = await startProductionHost({ streamDelayMs: 5 });
+    servers.push(started.server);
+    spines.push(started.spine);
+    const cancelled: string[] = [];
+    const originalCancel = started.spine.runtime.cancel.bind(started.spine.runtime);
+    started.spine.runtime.cancel = (async (executionId: string) => {
+      cancelled.push(executionId);
+      return originalCancel(executionId);
+    }) as ConversationRuntime['cancel'];
+
+    const session = await bootstrap(started.url);
+    const created = await fetch(`${started.url}/api/conversations`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({}),
+    });
+    const conversation = (await created.json()) as { id: string };
+    const tenantId = started.spine.tenantId;
+    const stream = await fetch(`${started.url}/api/conversations/${conversation.id}/messages`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({ content: 'complete normally', capability: 'nexus/fast' }),
+    });
+    const frames = await readSse(stream);
+    expect(frames.some((frame) => frame.event === 'done')).toBe(true);
+    expect(frames.some((frame) => frame.event === 'error')).toBe(false);
+    expect(cancelled).toEqual([]);
+    expect(started.spine.resources.occupancy(tenantId)).toEqual({ streams: 0, runs: 0 });
+  });
+
+  it('cancels once and restores occupancy when the client disconnects', async () => {
+    const started = await startProductionHost();
+    servers.push(started.server);
+    spines.push(started.spine);
+    const cancelled: string[] = [];
+    const originalCancel = started.spine.runtime.cancel.bind(started.spine.runtime);
+    started.spine.runtime.cancel = (async (executionId: string) => {
+      cancelled.push(executionId);
+      try {
+        return await originalCancel(executionId);
+      } catch {
+        return { id: executionId, status: 'cancelled' } as Awaited<ReturnType<ConversationRuntime['cancel']>>;
+      }
+    }) as ConversationRuntime['cancel'];
+    started.spine.runtime.sendMessage = ((...args: Parameters<ConversationRuntime['sendMessage']>) => {
+      void args;
+      return (async function* () {
+        yield { type: 'execution', execution: { id: 'ex_disconnect', status: 'running' } } as never;
+        await new Promise<void>((resolve) => hangReleases.push(resolve));
+      })();
+    }) as ConversationRuntime['sendMessage'];
+
+    const session = await bootstrap(started.url);
+    const created = await fetch(`${started.url}/api/conversations`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({}),
+    });
+    const conversation = (await created.json()) as { id: string };
+    const tenantId = started.spine.tenantId;
+    const abort = new AbortController();
+    const stream = await fetch(`${started.url}/api/conversations/${conversation.id}/messages`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({ content: 'hold until disconnect', capability: 'nexus/fast' }),
+      signal: abort.signal,
+    });
+    expect(stream.status).toBe(200);
+    const reader = stream.body!.getReader();
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    await waitForOccupancy(() => started.spine.resources.occupancy(tenantId), { streams: 1, runs: 1 });
+    abort.abort();
+    await reader.cancel().catch(() => undefined);
+    await waitForOccupancy(() => started.spine.resources.occupancy(tenantId), { streams: 0, runs: 0 });
+    hangReleases.pop()?.();
+    expect(cancelled).toEqual(['ex_disconnect']);
+  });
+
+  it('treats explicit cancel as a single runtime cancel and restores occupancy', async () => {
+    const started = await startProductionHost({ streamDelayMs: 80 });
+    servers.push(started.server);
+    spines.push(started.spine);
+    const cancelled: string[] = [];
+    const originalCancel = started.spine.runtime.cancel.bind(started.spine.runtime);
+    started.spine.runtime.cancel = (async (executionId: string) => {
+      cancelled.push(executionId);
+      return originalCancel(executionId);
+    }) as ConversationRuntime['cancel'];
+
+    const session = await bootstrap(started.url);
+    const created = await fetch(`${started.url}/api/conversations`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({}),
+    });
+    const conversation = (await created.json()) as { id: string };
+    const tenantId = started.spine.tenantId;
+    const stream = await fetch(`${started.url}/api/conversations/${conversation.id}/messages`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({ content: 'cancel from another request please', capability: 'nexus/fast' }),
+    });
+    const reader = stream.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let executionId: string | null = null;
+    const deadline = Date.now() + 8_000;
+    while (Date.now() < deadline && !executionId) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop() ?? '';
+      for (const block of parts) {
+        for (const line of block.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const data = JSON.parse(line.slice(6)) as { execution?: { id?: string }; executionId?: string };
+          executionId = data.execution?.id ?? data.executionId ?? executionId;
+        }
+      }
+    }
+    expect(executionId).toBeTruthy();
+    const cancel = await fetch(`${started.url}/api/executions/${executionId}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: '{}',
+    });
+    expect(cancel.status).toBe(200);
+    while (true) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+    await waitForOccupancy(() => started.spine.resources.occupancy(tenantId), { streams: 0, runs: 0 });
+    expect(cancelled).toEqual([executionId]);
   });
 });
 

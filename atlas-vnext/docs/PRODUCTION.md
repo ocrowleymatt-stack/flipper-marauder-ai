@@ -92,7 +92,7 @@ Host maps: unauthenticated, unauthorised, not_found, conflict, validation, rate_
 
 ## 17–19. Rate limits, resource limits, timeouts
 
-Platform `PlatformRateLimiter` (tenant+actor from the session, never a client tenant header; not in Dungeons). Resource guard: streams, runs, bodies, context files, generated/tool-arg bytes. Tool engine: concurrency, pending approvals, per-tenant quota, argument size. Timeouts: HTTP/provider/RunPod/DB/CAS/tools/stream idle/startup/shutdown in `readTimeoutContract`. Consistent with failover (provider timeout before tokens is retryable) and uncertain tools (no replay).
+Platform `PlatformRateLimiter` (authenticated: session tenant+principal; unauthenticated/bootstrap: reserved anonymous tenant + observed socket address; never a client tenant header or forwarding header; not in Dungeons). Resource guard: streams, runs, bodies, context files, generated/tool-arg bytes. Tool engine: concurrency, pending approvals, per-tenant quota, argument size. Timeouts: HTTP/provider/RunPod/DB/CAS/tools/stream idle/startup/shutdown in `readTimeoutContract`. Consistent with failover (provider timeout before tokens is retryable) and uncertain tools (no replay).
 
 **CONDITIONAL:** rate limiter, tool quota, stream/run guards, and SSE subscribers are **per process**. Multi-instance deployments multiply those ceilings unless a shared limiter is added later.
 

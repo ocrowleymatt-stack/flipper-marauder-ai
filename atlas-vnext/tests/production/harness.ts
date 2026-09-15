@@ -3,7 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
 import type { PersistenceConfig } from '@atlas-vnext/persistence';
-import { composeSpine, createHost, grantSideEffects, listen, type Spine } from '../../apps/host/src/index.ts';
+import {
+  composeSpine,
+  createHost,
+  grantSideEffects,
+  listen,
+  type PlatformRateLimiter,
+  type Spine,
+} from '../../apps/host/src/index.ts';
 
 export function memoryConfig(tenantId: string): PersistenceConfig {
   return {
@@ -26,6 +33,7 @@ export async function startProductionHost(input: {
   allowedOrigins?: string[];
   grant?: boolean;
   streamDelayMs?: number;
+  rateLimiter?: PlatformRateLimiter;
 } = {}): Promise<{ url: string; port: number; spine: Spine; server: Server; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), 'atlas-prod-'));
   const tenantId = input.tenantId ?? 'tenant_a';
@@ -57,7 +65,7 @@ export async function startProductionHost(input: {
     allowedOrigins: input.allowedOrigins,
     flags: spine.flags,
     killSwitches: spine.killSwitches,
-    rateLimiter: spine.rateLimiter,
+    rateLimiter: input.rateLimiter ?? spine.rateLimiter,
     resources: spine.resources,
     timeouts: spine.timeouts,
     probe: spine.healthProbe,

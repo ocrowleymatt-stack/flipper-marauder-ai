@@ -32,9 +32,72 @@ export const DEFAULT_RATE_LIMITS: RateLimitConfig = {
 };
 
 /**
+ * Reserved tenant slot for unauthenticated rate-limit accounting.
+ * Never a real host tenant: anonymous traffic must not share authenticated
+ * tenant/principal buckets.
+ */
+export const ANONYMOUS_RATE_TENANT = '__atlas_anonymous__';
+
+export type RateLimitIdentityKind = 'authenticated' | 'anonymous' | 'bootstrap' | 'local';
+
+export interface RateLimitIdentity {
+  kind: RateLimitIdentityKind;
+  tenantId: string;
+  actorId: string;
+}
+
+/**
+ * Normalize a Node-observed socket address. IPv4-mapped IPv6 is collapsed so
+ * the same loopback client is not split across `::ffff:127.0.0.1` and
+ * `127.0.0.1`. Forwarding headers are intentionally not consulted here.
+ */
+export function normalizeObservedAddress(remoteAddress: string | undefined): string | null {
+  const raw = remoteAddress?.trim();
+  if (!raw) return null;
+  if (raw.toLowerCase().startsWith('::ffff:')) return raw.slice('::ffff:'.length);
+  return raw;
+}
+
+/**
+ * Server-derived rate-limit identity.
+ *
+ * Authenticated: validated session tenant + principal only.
+ * Local (auth not wired): the host bootstrap identity is the only identity.
+ * Unauthenticated: anonymous or pre-auth bootstrap, keyed by the observed
+ * socket address — never `options.tenantId` / `options.principalId`, never a
+ * client-supplied tenant/principal, never a spoofable forwarding header.
+ */
+export function resolveRateLimitIdentity(input: {
+  actor: { tenantId: string; principalId: string; sessionId: string | null } | null;
+  authWired: boolean;
+  pathname: string;
+  remoteAddress?: string;
+}): RateLimitIdentity {
+  const tenant = input.actor?.tenantId?.trim() ?? '';
+  const principal = input.actor?.principalId?.trim() ?? '';
+  const sessionId = input.actor?.sessionId?.trim() ?? '';
+  if (input.authWired && sessionId && tenant && principal) {
+    return { kind: 'authenticated', tenantId: tenant, actorId: principal };
+  }
+  if (!input.authWired && tenant && principal) {
+    return { kind: 'local', tenantId: tenant, actorId: principal };
+  }
+  const ip = normalizeObservedAddress(input.remoteAddress);
+  const host = ip ? `ip:${ip}` : 'unknown';
+  const bootstrap = input.pathname === '/api/session' || input.pathname.startsWith('/api/session/');
+  return {
+    kind: bootstrap ? 'bootstrap' : 'anonymous',
+    tenantId: ANONYMOUS_RATE_TENANT,
+    actorId: `${bootstrap ? 'bootstrap' : 'anon'}:${host}`,
+  };
+}
+
+/**
  * Platform-owned limiter. Keys are server-derived tenant + actor ids, never a
- * client-supplied tenant header. Per-process: multi-instance deployments get
- * N× the configured ceiling unless a shared limiter is added later.
+ * client-supplied tenant header. Unauthenticated callers use a reserved
+ * anonymous tenant plus the observed socket address. Per-process:
+ * multi-instance deployments get N× the configured ceiling unless a shared
+ * limiter is added later.
  */
 export class PlatformRateLimiter {
   private readonly buckets = new Map<string, { count: number; resetAt: number }>();

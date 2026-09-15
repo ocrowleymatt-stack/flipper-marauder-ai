@@ -43,7 +43,7 @@ import {
 import { handleCaspa } from './caspa.ts';
 import type { WritingService } from '@atlas-vnext/dungeon-writing';
 import { PlatformHttpError, GENERIC_DENIED, httpStatusFor, type PlatformErrorCode } from './errors.ts';
-import { PlatformRateLimiter, ResourceGuard, rateClassForPath } from './limits.ts';
+import { PlatformRateLimiter, ResourceGuard, rateClassForPath, resolveRateLimitIdentity } from './limits.ts';
 import { SINGLE_INSTANCE_TOPOLOGY, type TimeoutContract } from './production-config.ts';
 
 export interface HostOptions {
@@ -397,13 +397,17 @@ async function enforceCsrfIfNeeded(req: IncomingMessage, options: HostOptions): 
 
 async function enforceRateLimit(req: IncomingMessage, options: HostOptions): Promise<void> {
   if (!options.rateLimiter) return;
-  const rateClass = rateClassForPath(urlPath(req), req.method ?? 'GET');
+  const pathname = urlPath(req);
+  const rateClass = rateClassForPath(pathname, req.method ?? 'GET');
   if (!rateClass) return;
   const actor = await resolveActor(req, options).catch(() => null);
-  const tenantId = actor?.tenantId ?? options.tenantId;
-  const actorId = actor?.principalId ?? options.principalId ?? actor?.sessionId;
-  if (!tenantId || !actorId) return;
-  options.rateLimiter.hit(rateClass, tenantId, actorId);
+  const identity = resolveRateLimitIdentity({
+    actor,
+    authWired: Boolean(options.auth),
+    pathname,
+    remoteAddress: req.socket?.remoteAddress,
+  });
+  options.rateLimiter.hit(rateClass, identity.tenantId, identity.actorId);
 }
 
 function enforceKillSwitch(req: IncomingMessage, options: HostOptions): void {
@@ -559,9 +563,12 @@ async function pipeSse(
     return terminal;
   };
 
+  const request = res.req;
   const disconnected = new Promise<'disconnect'>((resolve) => {
     const onClose = (): void => resolve('disconnect');
     res.once('close', onClose);
+    request?.once('close', onClose);
+    request?.once('aborted', onClose);
   });
 
   try {

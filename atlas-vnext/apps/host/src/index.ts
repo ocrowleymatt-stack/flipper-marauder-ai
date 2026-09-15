@@ -13,4 +13,11 @@ export {
   assertSingleInstanceTopology,
 } from './production-config.ts';
 export { PlatformHttpError } from './errors.ts';
-export { PlatformRateLimiter, ResourceGuard } from './limits.ts';
+export {
+  ANONYMOUS_RATE_TENANT,
+  PlatformRateLimiter,
+  ResourceGuard,
+  normalizeObservedAddress,
+  resolveRateLimitIdentity,
+} from './limits.ts';
+export type { RateLimitIdentity, RateLimitIdentityKind } from './limits.ts';

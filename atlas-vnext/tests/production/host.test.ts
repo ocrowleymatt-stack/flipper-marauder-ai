@@ -41,6 +41,16 @@ describe('production host security, health, and limits', () => {
     expect(metrics.status).toBe(200);
     const snapshot = (await metrics.json()) as { counters: Record<string, number> };
     expect(JSON.stringify(snapshot)).not.toMatch(/tenant_a|ses_/);
+    const health = (await (await fetch(`${started.url}/api/health`)).json()) as {
+      ha: boolean;
+      topology: string;
+      rateLimiterScope: string;
+      tracingExporter: string;
+    };
+    expect(health.ha).toBe(false);
+    expect(health.topology).toBe('single-instance');
+    expect(health.rateLimiterScope).toBe('in-process');
+    expect(health.tracingExporter).toBe('none');
   });
 
   it('treats a dead database as not ready', async () => {

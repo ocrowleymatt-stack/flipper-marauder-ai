@@ -8,7 +8,7 @@ import type { ContextService } from '@atlas-vnext/context';
 import type { FilesService } from '@atlas-vnext/files';
 import { CasMissingError } from '@atlas-vnext/files';
 import type { PlatformPersistence } from '@atlas-vnext/persistence';
-import { ConflictError, OwnershipError, PersistenceClosedError, PersistenceUnavailableError } from '@atlas-vnext/persistence';
+import { ConflictError, OwnershipError, PersistenceClosedError, PersistenceUnavailableError, isPersistenceConnectionLoss } from '@atlas-vnext/persistence';
 import type { ProjectService } from '@atlas-vnext/projects';
 import type { ToolEngine } from '@atlas-vnext/tools';
 import { ToolError } from '@atlas-vnext/tools';
@@ -44,7 +44,7 @@ import { handleCaspa } from './caspa.ts';
 import type { WritingService } from '@atlas-vnext/dungeon-writing';
 import { PlatformHttpError, GENERIC_DENIED, httpStatusFor, type PlatformErrorCode } from './errors.ts';
 import { PlatformRateLimiter, ResourceGuard, rateClassForPath } from './limits.ts';
-import type { TimeoutContract } from './production-config.ts';
+import { SINGLE_INSTANCE_TOPOLOGY, type TimeoutContract } from './production-config.ts';
 
 export interface HostOptions {
   runtime: ConversationRuntime;
@@ -130,7 +130,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
       const result = await readiness(options.probe, options.production === true);
       const accepting = options.shutdown?.accepting ?? true;
       const ready = result.ready && accepting;
-      json(res, ready ? 200 : 503, { ...result, ready, accepting });
+      json(res, ready ? 200 : 503, { ...result, ready, accepting, ...SINGLE_INSTANCE_TOPOLOGY });
       return;
     }
     if (req.method === 'GET' && urlPath(req) === '/api/health') {
@@ -148,6 +148,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
         live: probed?.live ?? true,
         ready,
         dependencies: probed?.dependencies ?? null,
+        ...SINGLE_INSTANCE_TOPOLOGY,
       });
       return;
     }
@@ -449,6 +450,9 @@ function classifyError(err: unknown): { status: number; code: PlatformErrorCode;
   }
   if (err instanceof PersistenceClosedError) {
     return { status: 503, code: 'shutting_down', message: 'Persistence is shut down.' };
+  }
+  if (isPersistenceConnectionLoss(err)) {
+    return { status: 503, code: 'persistence_unavailable', message: 'Persistence unavailable.' };
   }
   if (err instanceof ConflictError) {
     return { status: 409, code: 'conflict', message: 'Conflict.' };

@@ -25,6 +25,7 @@ export async function startProductionHost(input: {
   production?: boolean;
   allowedOrigins?: string[];
   grant?: boolean;
+  streamDelayMs?: number;
 } = {}): Promise<{ url: string; port: number; spine: Spine; server: Server; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), 'atlas-prod-'));
   const tenantId = input.tenantId ?? 'tenant_a';
@@ -33,6 +34,7 @@ export async function startProductionHost(input: {
     mode: 'mock',
     persistence: memoryConfig(tenantId),
     casRoot: join(dir, 'cas'),
+    streamDelayMs: input.streamDelayMs,
     env: {
       ATLAS_TENANT_ID: tenantId,
       ATLAS_SESSION_SECRET: 'test-session-secret-not-for-production-use',

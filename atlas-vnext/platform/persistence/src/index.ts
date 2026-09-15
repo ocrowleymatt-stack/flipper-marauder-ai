@@ -59,3 +59,4 @@ export { openPlatformPersistence } from './open.ts';
 export { openMemoryPersistence, MemoryPersistence } from './memory/kernel.ts';
 export { openPostgresPersistence, PostgresPersistence } from './postgres/kernel.ts';
 export { loadMigrations, migrate, checksumSql, CURRENT_SCHEMA_VERSION, defaultMigrationsDir } from './postgres/migrate.ts';
+export { isPersistenceConnectionLoss, isTransientDbError } from './postgres/tx.ts';

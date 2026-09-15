@@ -47,6 +47,31 @@ export const PRODUCTION_CONFIG_CATALOGUE: ConfigVarSpec[] = [
   { name: 'ATLAS_FLAG_GENERATION', classification: 'optional', production: 'optional', description: 'Kill switch for generation/runs.' },
   { name: 'ATLAS_FLAG_DUNGEON_WRITING', classification: 'optional', production: 'optional', description: 'Kill switch for Caspa writing.' },
   { name: 'ATLAS_KILL_PROVIDERS', classification: 'optional', production: 'optional', description: 'Comma-separated provider disable list. Not a fallback chain.' },
+  {
+    name: 'ATLAS_DEPLOYMENT_TOPOLOGY',
+    classification: 'optional',
+    production: 'optional',
+    description:
+      'Must be single-instance (the default). Production refuses ha/multi-instance claims; those topologies are unsolved.',
+  },
+  {
+    name: 'ATLAS_HA',
+    classification: 'dev',
+    production: 'forbidden',
+    description: 'Forbidden in production. In-process SSE, rate limits, and RunPod runtime.json are not an HA plane.',
+  },
+  {
+    name: 'ATLAS_MULTI_INSTANCE',
+    classification: 'dev',
+    production: 'forbidden',
+    description: 'Forbidden in production. Horizontal host replicas are not a supported topology.',
+  },
+  {
+    name: 'ATLAS_REPLICAS',
+    classification: 'dev',
+    production: 'forbidden',
+    description: 'Must be unset or 1. Values greater than 1 are refused in production.',
+  },
   { name: 'OPENAI_API_KEY', classification: 'secret', production: 'optional', description: 'Marks OpenAI unavailable when missing. Does not crash the host.' },
   { name: 'ANTHROPIC_API_KEY', classification: 'secret', production: 'optional', description: 'Optional provider credential.' },
   { name: 'GEMINI_API_KEY', classification: 'secret', production: 'optional', description: 'Optional provider credential.' },
@@ -75,6 +100,27 @@ export interface TimeoutContract {
   shutdownMs: number;
 }
 
+export const ACCEPTED_PRODUCTION_TOPOLOGY = 'single-instance' as const;
+export type DeploymentTopology = typeof ACCEPTED_PRODUCTION_TOPOLOGY;
+
+export interface TopologyContract {
+  topology: DeploymentTopology;
+  ha: false;
+  rateLimiterScope: 'in-process';
+  sseFanout: 'in-process';
+  runpodScheduler: 'local-file';
+  tracingExporter: 'none';
+}
+
+export const SINGLE_INSTANCE_TOPOLOGY: TopologyContract = {
+  topology: ACCEPTED_PRODUCTION_TOPOLOGY,
+  ha: false,
+  rateLimiterScope: 'in-process',
+  sseFanout: 'in-process',
+  runpodScheduler: 'local-file',
+  tracingExporter: 'none',
+};
+
 export interface ProductionHostConfig {
   production: boolean;
   persistenceMode: 'postgres' | 'file' | 'memory';
@@ -88,6 +134,7 @@ export interface ProductionHostConfig {
   mockProviders: boolean;
   hsts: boolean;
   timeouts: TimeoutContract;
+  topology: TopologyContract;
 }
 
 export function isProductionEnv(env: Record<string, string | undefined> = process.env): boolean {
@@ -164,6 +211,7 @@ export function readProductionHostConfig(
     if (allowedOrigins.includes('*')) {
       throw new ProductionConfigError('Production forbids wildcard CORS origins.');
     }
+    assertSingleInstanceTopology(env);
   }
 
   if (!Number.isFinite(port) || port <= 0) {
@@ -183,6 +231,7 @@ export function readProductionHostConfig(
     mockProviders,
     hsts: production && env.ATLAS_TLS === '1',
     timeouts: readTimeoutContract(env),
+    topology: SINGLE_INSTANCE_TOPOLOGY,
   };
 }
 
@@ -200,7 +249,48 @@ export function publicConfigView(config: ProductionHostConfig): Record<string, u
     mockProviders: config.mockProviders,
     hsts: config.hsts,
     timeouts: config.timeouts,
+    topology: config.topology.topology,
+    ha: config.topology.ha,
+    rateLimiterScope: config.topology.rateLimiterScope,
+    sseFanout: config.topology.sseFanout,
+    runpodScheduler: config.topology.runpodScheduler,
+    tracingExporter: config.topology.tracingExporter,
   };
+}
+
+export function assertSingleInstanceTopology(
+  env: Record<string, string | undefined> = process.env,
+): TopologyContract {
+  const claimed = (env.ATLAS_DEPLOYMENT_TOPOLOGY ?? ACCEPTED_PRODUCTION_TOPOLOGY).trim().toLowerCase();
+  if (claimed && claimed !== ACCEPTED_PRODUCTION_TOPOLOGY) {
+    throw new ProductionConfigError(
+      `Production topology '${claimed}' is not supported. Atlas vNext is production-safe only as a documented single-instance PostgreSQL+CAS deploy. Multi-instance SSE fan-out, distributed rate limiting, and a shared RunPod runtime.json scheduler are unsolved. Set ATLAS_DEPLOYMENT_TOPOLOGY=single-instance.`,
+    );
+  }
+  if (isClaimedEnabled(env.ATLAS_HA) || isClaimedEnabled(env.ATLAS_MULTI_INSTANCE) || isClaimedEnabled(env.ATLAS_HORIZONTAL_SCALE)) {
+    throw new ProductionConfigError(
+      'Production refuses ATLAS_HA / ATLAS_MULTI_INSTANCE. In-process rate limiting, SSE subscribers, and the RunPod file store are not an HA control plane.',
+    );
+  }
+  const replicas = replicaCount(env);
+  if (replicas > 1) {
+    throw new ProductionConfigError(
+      `Production refuses ATLAS_REPLICAS=${replicas}. Run a single host process against PostgreSQL+CAS; extra replicas multiply rate-limit ceilings and can fight over RunPod runtime.json.`,
+    );
+  }
+  return SINGLE_INSTANCE_TOPOLOGY;
+}
+
+function isClaimedEnabled(raw: string | undefined): boolean {
+  const value = raw?.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on' || value === 'enabled' || value === 'ha';
+}
+
+function replicaCount(env: Record<string, string | undefined>): number {
+  const raw = env.ATLAS_REPLICAS ?? env.ATLAS_INSTANCE_COUNT ?? env.ATLAS_REPLICA_COUNT;
+  if (!raw?.trim()) return 1;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : 1;
 }
 
 function trim(raw: string | undefined): string | null {

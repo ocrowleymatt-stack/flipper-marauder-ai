@@ -4,6 +4,9 @@ import { PRODUCTION_CONFIG_CATALOGUE, publicConfigView, readProductionHostConfig
 const production = process.argv.includes('--production');
 if (production) {
   const config = readProductionHostConfig(process.env);
+  if (config.topology.ha !== false || config.topology.topology !== 'single-instance') {
+    throw new Error('Production config refused to claim an unsupported HA topology.');
+  }
   console.log(JSON.stringify({ ok: true, config: publicConfigView(config) }, null, 2));
 } else {
   console.log(

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import pg from 'pg';
 import { logPlatform } from '@atlas-vnext/observability';
-import { PersistenceClosedError } from '../errors.ts';
+import { PersistenceClosedError, PersistenceUnavailableError } from '../errors.ts';
 
 const { Pool } = pg;
 
@@ -50,16 +50,25 @@ export class PgTx {
     params: unknown[] = [],
   ): Promise<pg.QueryResult<T>> {
     if (this.closed) throw new PersistenceClosedError();
-    const client = this.als.getStore();
-    if (client) return client.query<T>(text, params);
-    return queryWithBoundedRetry(this.pool, text, params);
+    try {
+      const client = this.als.getStore();
+      if (client) return await client.query<T>(text, params);
+      return await queryWithBoundedRetry(this.pool, text, params);
+    } catch (err) {
+      throw remapUnavailable(err);
+    }
   }
 
   async run<T>(fn: () => Promise<T>): Promise<T> {
     if (this.closed) throw new PersistenceClosedError();
     const existing = this.als.getStore();
     if (existing) return fn();
-    const client = await this.pool.connect();
+    let client: pg.PoolClient;
+    try {
+      client = await this.pool.connect();
+    } catch (err) {
+      throw remapUnavailable(err);
+    }
     try {
       await client.query('BEGIN');
       const result = await this.als.run(client, fn);
@@ -76,7 +85,7 @@ export class PgTx {
         { error: err instanceof Error ? err.message : String(err) },
         'error',
       );
-      throw err;
+      throw remapUnavailable(err);
     } finally {
       client.release();
     }
@@ -143,6 +152,39 @@ export function isTransientDbError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
   const code = 'code' in err ? String((err as { code?: unknown }).code) : '';
   return TRANSIENT_CODES.has(code);
+}
+
+const CONNECTION_LOSS_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EPIPE',
+  '57P01',
+  '57P02',
+  '57P03',
+  '08000',
+  '08001',
+  '08003',
+  '08006',
+]);
+
+export function isPersistenceConnectionLoss(err: unknown): boolean {
+  if (err instanceof PersistenceClosedError || err instanceof PersistenceUnavailableError) return true;
+  if (err && typeof err === 'object' && 'code' in err && CONNECTION_LOSS_CODES.has(String((err as { code?: unknown }).code))) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return /pool after calling end|Connection terminated|Client has encountered a connection error|connect ECONNREFUSED/i.test(
+    message,
+  );
+}
+
+function remapUnavailable(err: unknown): unknown {
+  if (err instanceof PersistenceClosedError || err instanceof PersistenceUnavailableError) return err;
+  if (isPersistenceConnectionLoss(err)) {
+    return new PersistenceUnavailableError('Persistence unavailable.');
+  }
+  return err;
 }
 
 function delay(ms: number): Promise<void> {

@@ -25,3 +25,5 @@ Future `atlas-vnext/ops/deploy` is a later PR. Permission to promote: `deploymen
 
 See [PRODUCTION.md](./PRODUCTION.md) for the actual topology, health contract, and human-gated cutover. The optional `atlas-vnext/Dockerfile` packages the Node host; it is not a Kubernetes control plane.
 
+**Supported production topology is one host process + one PostgreSQL primary + one CAS volume.** Do not put two hosts behind a load balancer and call that HA: SSE fan-out, the platform rate limiter, and the RunPod `runtime.json` scheduler are in-process / local-file. Production config refuses `ATLAS_HA=1` and `ATLAS_REPLICAS>1` so those claims cannot be made silently.
+

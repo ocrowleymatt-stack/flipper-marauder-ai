@@ -50,6 +50,8 @@ If a production concern requires weakening a contract: **stop for a human decisi
 
 No Kubernetes manifests are added. `atlas-vnext/Dockerfile` is a packaging sketch, not a production cluster.
 
+**Enforced single-instance topology.** Production startup and `npm run config:validate -- --production` refuse `ATLAS_HA=1`, `ATLAS_MULTI_INSTANCE=1`, `ATLAS_REPLICAS>1`, and `ATLAS_DEPLOYMENT_TOPOLOGY` other than `single-instance`. `/api/health` and `/api/health/ready` always report `ha: false` with `rateLimiterScope=in-process`, `sseFanout=in-process`, `runpodScheduler=local-file`, and `tracingExporter=none`. There is no code path that claims horizontal HA is solved.
+
 ## 6. Config / secrets
 
 Catalogue: `PRODUCTION_CONFIG_CATALOGUE` in `apps/host/src/production-config.ts`. Validate with `npm run config:validate` and `tsx scripts/validate-config.ts --production`.
@@ -186,7 +188,7 @@ Statuses: PASS / FAIL / CONDITIONAL / N/A. GO for **cutover** requires no unreso
 
 | # | Item | Status | Evidence / notes |
 |---|---|---|---|
-| 5 | Deployment topology | PASS | Documented actual host, web dist, PG, CAS, providers, RunPod. No invented K8s. |
+| 5 | Deployment topology | PASS | Documented and **enforced** as single-instance PostgreSQL+CAS. Production refuses HA/replica claims. No invented K8s. |
 | 6 | Config/secrets | PASS | `readProductionHostConfig` fails loud; secrets not in public view/logs/frontend. |
 | 7 | Migrations | PASS | Empty→latest, v1→latest, interrupted rollback, checksum mismatch. Forward-only. |
 | 8 | DB connections | PASS | Pool timeouts; ≤2 transient retries; startup fail-closed; closed kernel rejects work. |
@@ -196,13 +198,13 @@ Statuses: PASS / FAIL / CONDITIONAL / N/A. GO for **cutover** requires no unreso
 | 12 | Health | PASS | Live ≠ ready. Dead DB → 503. No secrets on health. |
 | 13 | Observability logs | PASS | Structured JSON + correlation ids; prompt/file/secret redaction tests. |
 | 14 | Metrics | PASS | Low-cardinality `/api/metrics`. No ID labels. In-process. |
-| 15 | Tracing | CONDITIONAL | Request correlation ALS HTTP→actor→route. No OpenTelemetry exporter. |
+| 15 | Tracing | CONDITIONAL | Request correlation ALS HTTP→actor→route. No OpenTelemetry exporter. Health reports `tracingExporter=none`. |
 | 16 | Error classification | PASS | Host mapper; cross-tenant → generic 404. |
-| 17 | Rate limiting | CONDITIONAL | Platform tenant/actor limiter. Per-process (multiplies across instances). |
+| 17 | Rate limiting | CONDITIONAL | Platform tenant/actor limiter. Per-process (multiplies across instances). Production refuses replica claims that would pretend this is global. |
 | 18 | Resource limits | PASS | Bodies, streams, runs, approvals, tool args, context files. Rejects deliberately. Per-process stream/run guards. |
 | 19 | Timeouts | PASS | HTTP/provider/RunPod/DB/tool/stream idle/startup/shutdown contract. |
 | 20 | Provider failure drills | PASS | Failover before visible; terminal after visible. No hardcoded fallback list. |
-| 21 | RunPod drills | PASS | Existing scheduler tests (unavailable, idle, recover). Not in Workbench/Caspa. |
+| 21 | RunPod drills | PASS | Existing scheduler tests cover unavailable/idle/recover in-process. Multi-instance `runtime.json` coordination remains item 31 CONDITIONAL; production refuses replica claims. Not in Workbench/Caspa. |
 | 22 | Tool side-effect drills | PASS | Uncertain not replayed; restart; approval idempotency via durable rows. |
 | 23 | Auth/session | PASS | HttpOnly SameSite; Secure in production; CSRF; origin allowlist; logout; no prod bootstrap. |
 | 24 | Security headers | PASS | CSP, frame, nosniff, referrer, permissions-policy; HSTS if `ATLAS_TLS=1`. Vite CSS minify warning remains (pre-existing). |

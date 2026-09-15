@@ -3,7 +3,7 @@ import { AuthenticationError } from '@atlas-vnext/auth';
 import { CASPA_WRITING_DUNGEON, WritingError, WritingService, type WritingActor } from '@atlas-vnext/dungeon-writing';
 import { writingOperationSchema } from '@atlas-vnext/contracts';
 import { CasMissingError, FilesAccessError } from '@atlas-vnext/files';
-import { ConflictError, OwnershipError } from '@atlas-vnext/persistence';
+import { ConflictError, OwnershipError, PersistenceClosedError, PersistenceUnavailableError, isPersistenceConnectionLoss } from '@atlas-vnext/persistence';
 import { AuthorityDeniedError } from '@atlas-vnext/permissions';
 import { header, isMutating, json, readJson, sseHeaders, urlPath, writeSse } from './http.ts';
 import { resolveActor, type WorkbenchHostOptions } from './workbench.ts';
@@ -180,6 +180,10 @@ function handleCaspaError(res: ServerResponse, err: unknown): true {
   }
   if (err instanceof CasMissingError) {
     json(res, 503, { error: 'CAS object missing.', code: 'cas_unavailable' });
+    return true;
+  }
+  if (err instanceof PersistenceUnavailableError || err instanceof PersistenceClosedError || isPersistenceConnectionLoss(err)) {
+    json(res, 503, { error: 'Persistence unavailable.', code: 'persistence_unavailable' });
     return true;
   }
   if (err instanceof ConflictError) {

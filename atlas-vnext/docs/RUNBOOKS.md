@@ -34,6 +34,8 @@ Owned by execution, not Workbench/Caspa.
 | Stream interrupt | Classify; no second answer after visible tokens |
 | Two hosts sharing `runtime.json` | Stop one scheduler; this candidate is single-scheduler |
 
+Do not scale the Node host horizontally in production. Extra processes multiply in-process rate-limit ceilings, do not share live SSE subscribers, and can fight over RunPod `runtime.json`. Production refuses `ATLAS_HA=1` / `ATLAS_REPLICAS>1`.
+
 ## Tool uncertain / pending approvals
 
 - `uncertain` means the side effect may have happened. **Do not replay.**

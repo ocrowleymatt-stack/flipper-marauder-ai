@@ -5,7 +5,7 @@ import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { ContextService } from '@atlas-vnext/context';
 import type { FilesService } from '@atlas-vnext/files';
 import { CasMissingError, FilesAccessError, PathSafetyError, UnsupportedMediaError } from '@atlas-vnext/files';
-import { OwnershipError } from '@atlas-vnext/persistence';
+import { OwnershipError, PersistenceClosedError, PersistenceUnavailableError, isPersistenceConnectionLoss } from '@atlas-vnext/persistence';
 import type { PlatformPersistence } from '@atlas-vnext/persistence';
 import type { ProjectService } from '@atlas-vnext/projects';
 import { ToolError, type ToolEngine } from '@atlas-vnext/tools';
@@ -641,6 +641,10 @@ function handleWorkbenchError(res: ServerResponse, err: unknown): true {
   }
   if (err instanceof CasMissingError) {
     json(res, 503, { error: 'CAS object missing.', code: 'cas_unavailable' });
+    return true;
+  }
+  if (err instanceof PersistenceUnavailableError || err instanceof PersistenceClosedError || isPersistenceConnectionLoss(err)) {
+    json(res, 503, { error: 'Persistence unavailable.', code: 'persistence_unavailable' });
     return true;
   }
   if (err instanceof PathSafetyError || err instanceof UnsupportedMediaError) {

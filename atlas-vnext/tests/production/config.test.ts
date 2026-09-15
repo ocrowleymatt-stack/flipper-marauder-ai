@@ -61,6 +61,11 @@ describe('production configuration contract', () => {
     expect(JSON.stringify(view)).not.toContain('super-secret');
     expect(JSON.stringify(view)).not.toContain('session-secret');
     expect(view.sessionSecretConfigured).toBe(true);
+    expect(view.ha).toBe(false);
+    expect(view.topology).toBe('single-instance');
+    expect(view.rateLimiterScope).toBe('in-process');
+    expect(view.runpodScheduler).toBe('local-file');
+    expect(view.tracingExporter).toBe('none');
     expect(parseOrigins('https://a.example, https://b.example')).toEqual(['https://a.example', 'https://b.example']);
     expect(readTimeoutContract({}).providerMs).toBeGreaterThan(0);
   });
@@ -89,5 +94,27 @@ describe('kill switches', () => {
     expect(killed.generation).toBe(false);
     expect(killed.dungeonWriting).toBe(false);
     expect(killed.disabledProviders).toEqual(['openai', 'anthropic']);
+  });
+});
+
+describe('single-instance topology contract', () => {
+  const complete = {
+    NODE_ENV: 'production',
+    ATLAS_PERSISTENCE: 'postgres',
+    ATLAS_DATABASE_URL: 'postgres://atlas:x@127.0.0.1/atlas',
+    ATLAS_TENANT_ID: 'tenant_prod',
+    ATLAS_SESSION_SECRET: 'session-secret-value-not-real',
+    ATLAS_ALLOWED_ORIGINS: 'https://atlas.example',
+    ATLAS_CAS_ROOT: '/var/lib/atlas/cas',
+  };
+
+  it('accepts explicit single-instance topology and refuses HA / replica claims', () => {
+    expect(readProductionHostConfig({ ...complete, ATLAS_DEPLOYMENT_TOPOLOGY: 'single-instance' }).topology.ha).toBe(
+      false,
+    );
+    expect(() => readProductionHostConfig({ ...complete, ATLAS_HA: '1' })).toThrow(/ATLAS_HA/);
+    expect(() => readProductionHostConfig({ ...complete, ATLAS_MULTI_INSTANCE: 'true' })).toThrow(/MULTI_INSTANCE/);
+    expect(() => readProductionHostConfig({ ...complete, ATLAS_REPLICAS: '2' })).toThrow(/ATLAS_REPLICAS/);
+    expect(() => readProductionHostConfig({ ...complete, ATLAS_DEPLOYMENT_TOPOLOGY: 'ha' })).toThrow(/not supported/);
   });
 });

@@ -4,4 +4,7 @@ export { createHost, listen } from './server.ts';
 export type { HostOptions } from './server.ts';
 export { resolveActor } from './workbench.ts';
 export { DEV_CATALOGUE, MODEL_CATALOGUE } from './catalogue.ts';
-export { readOperationalLimits, readiness, ShutdownController, SECURITY_HEADERS } from './ops.ts';
+export { readOperationalLimits, readiness, ShutdownController, SECURITY_HEADERS, securityHeaders } from './ops.ts';
+export { readProductionHostConfig, ProductionConfigError, publicConfigView } from './production-config.ts';
+export { PlatformHttpError } from './errors.ts';
+export { PlatformRateLimiter, ResourceGuard } from './limits.ts';

@@ -22,3 +22,6 @@ Specified AM `deploy/hetzner` atomic symlink (unverified this run) and Caspa `ve
 - Declaring success from CI green alone
 
 Future `atlas-vnext/ops/deploy` is a later PR. Permission to promote: `deployment.promote`.
+
+See [PRODUCTION.md](./PRODUCTION.md) for the actual topology, health contract, and human-gated cutover. The optional `atlas-vnext/Dockerfile` packages the Node host; it is not a Kubernetes control plane.
+

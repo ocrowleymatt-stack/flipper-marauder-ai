@@ -2,4 +2,5 @@
 
 Platform primitive: route/attempt/cost/tool traces.
 
-Dungeons must not invent their own telemetry pipelines. Persistence and exporters are deferred; this package freezes the sink interface.
+Structured JSON logs (`logPlatform`) carry request correlation ids. Metrics are low-cardinality counters/histograms (`platformMetrics`). Redaction strips secrets, tokens, cookies, prompts, and file bodies. Exporters remain optional.
+

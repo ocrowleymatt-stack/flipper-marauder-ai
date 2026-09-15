@@ -3,21 +3,36 @@ import { fileURLToPath } from 'node:url';
 import { composeSpine } from './compose.ts';
 import { createHost, listen } from './server.ts';
 import { readPersistenceConfig } from '@atlas-vnext/persistence';
+import { logPlatform } from '@atlas-vnext/observability';
+import { readiness } from './ops.ts';
+import { readProductionHostConfig, publicConfigView } from './production-config.ts';
 
 const root = fileURLToPath(new URL('../../..', import.meta.url));
+const hostConfig = readProductionHostConfig(process.env);
 const dataPath = process.env.ATLAS_VNEXT_DATA ?? join(root, '.data', 'state.json');
 const staticDir = process.env.ATLAS_VNEXT_STATIC ?? join(root, 'apps/web/dist');
-const port = Number(process.env.PORT ?? 8787);
-const mode = process.env.ATLAS_USE_MOCK_PROVIDERS === '1' ? 'mock' : 'live';
+const mode = hostConfig.mockProviders ? 'mock' : 'live';
 const persistence = readPersistenceConfig(process.env);
+
+logPlatform('host.starting', publicConfigView(hostConfig));
 
 const spine = await composeSpine({
   dataPath,
   mode,
   env: process.env,
   persistence,
+  casRoot: hostConfig.casRoot ?? undefined,
   streamDelayMs: Number(process.env.ATLAS_VNEXT_STREAM_DELAY_MS ?? 18),
 });
+
+if (hostConfig.production) {
+  const ready = await readiness(spine.healthProbe, true);
+  if (!ready.ready) {
+    await spine.close();
+    throw new Error(`Host refused to listen: dependencies not ready (${JSON.stringify(ready.dependencies)}).`);
+  }
+}
+
 const server = createHost({
   runtime: spine.runtime,
   staticDir,
@@ -33,22 +48,33 @@ const server = createHost({
   writing: spine.writing,
   tenantId: spine.tenantId,
   principalId: spine.principalId,
-  production: persistence.production,
-  allowedOrigins: (process.env.ATLAS_ALLOWED_ORIGINS ?? '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean),
+  production: hostConfig.production,
+  allowedOrigins: hostConfig.allowedOrigins,
+  flags: spine.flags,
+  killSwitches: spine.killSwitches,
+  rateLimiter: spine.rateLimiter,
+  resources: spine.resources,
+  hsts: hostConfig.hsts,
+  timeouts: spine.timeouts,
 });
-const bound = await listen(server, port, '127.0.0.1');
+const bound = await listen(server, hostConfig.port, hostConfig.bindHost);
 spine.scheduler?.startIdleWatch();
+logPlatform('host.listening', { url: bound.url, mode: spine.mode });
 console.log(`Atlas vNext Workbench host at ${bound.url}`);
 console.log(`Durable store: ${persistence.mode === 'postgres' ? 'postgresql' : dataPath}`);
 console.log(`Execution mode: ${spine.mode}`);
 console.log(`Available runtimes: ${spine.availableRuntimes.join(', ') || '(none)'}`);
 
 async function shutdown(signal: string): Promise<void> {
+  logPlatform('host.shutdown', { signal });
   console.log(`Shutting down (${signal})`);
+  spine.shutdown.begin();
   spine.scheduler?.stopIdleWatch();
+  const force = setTimeout(() => {
+    logPlatform('host.shutdown_timeout', { ms: hostConfig.timeouts.shutdownMs }, 'error');
+    process.exit(1);
+  }, hostConfig.timeouts.shutdownMs);
+  force.unref();
   await spine.close();
   await new Promise<void>((resolve, reject) => {
     server.close((err) => (err ? reject(err) : resolve()));

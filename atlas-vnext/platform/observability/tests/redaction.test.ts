@@ -21,5 +21,6 @@ describe('observability redaction', () => {
     expect(lines[0]).not.toContain('sk-live-secret-value');
     expect(lines[0]).toContain('tenant_a');
     expect(redactFields({ authorization: 'Bearer abc' }).authorization).toBe('[redacted]');
+    expect(redactFields({ cookie: 'atlas_session=ses_secret' }).cookie).toBe('[redacted]');
   });
 });

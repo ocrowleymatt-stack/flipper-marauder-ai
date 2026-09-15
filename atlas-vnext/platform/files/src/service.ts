@@ -4,9 +4,9 @@ import { logPlatform } from '@atlas-vnext/observability';
 import type { PersistenceActor, PlatformPersistence, FileRecord, ArtefactMetadata } from '@atlas-vnext/persistence';
 import { OwnershipError } from '@atlas-vnext/persistence';
 import type { CasStore } from '@atlas-vnext/storage';
-import { sha256Hex } from '@atlas-vnext/storage';
+import { CasNotFoundError, sha256Hex } from '@atlas-vnext/storage';
 import { CHUNKER_ID, CHUNKER_VERSION, chunkBlocks } from './chunk.ts';
-import { FilesAccessError, IngestionError } from './errors.ts';
+import { CasMissingError, FilesAccessError, IngestionError } from './errors.ts';
 import { EXTRACTOR_ID, EXTRACTOR_VERSION, extractBytes, estimateTokens } from './extract/index.ts';
 import { resolveMime, type AllowedMime } from './mime.ts';
 import { displayNameFromPath, sanitiseRelPath } from './path.ts';
@@ -150,7 +150,7 @@ export class FilesService {
     if (!allowed) {
       throw new FilesAccessError('Fail-closed: content hash does not grant access without a tenant-owned ref.');
     }
-    return this.cas.get(file.contentHash);
+    return this.readCas(file.contentHash);
   }
 
   async readByHash(actor: PersistenceActor, sha256: string): Promise<Uint8Array> {
@@ -160,7 +160,43 @@ export class FilesService {
     if (!allowed) {
       throw new FilesAccessError('Fail-closed: hash does not grant cross-tenant or unreferenced CAS access.');
     }
-    return this.cas.get(sha256);
+    return this.readCas(sha256);
+  }
+
+  /**
+   * Observable metadata/object divergence. Never synthesises file bytes.
+   */
+  async inspectCas(
+    actor: PersistenceActor,
+    fileId: string,
+  ): Promise<{ fileId: string; contentHash: string; metadata: true; object: 'ok' | 'missing' }> {
+    const scoped = this.scoped(actor, 'inspect CAS');
+    const bound = this.persistence.forActor(scoped);
+    const file = await bound.files.get(scoped, fileId);
+    if (!file || file.deletedAt) {
+      throw new FilesAccessError(`Fail-closed: file ${fileId} is not visible to this tenant.`);
+    }
+    const present = await this.cas.has(file.contentHash);
+    if (!present) {
+      logPlatform(
+        'cas.divergence',
+        { tenantId: scoped.tenantId, fileId: file.id, contentHash: file.contentHash, object: 'missing' },
+        'error',
+      );
+    }
+    return { fileId: file.id, contentHash: file.contentHash, metadata: true, object: present ? 'ok' : 'missing' };
+  }
+
+  private async readCas(sha256: string): Promise<Uint8Array> {
+    try {
+      return await this.cas.get(sha256);
+    } catch (err) {
+      if (err instanceof CasNotFoundError) {
+        logPlatform('cas.missing', { contentHash: sha256 }, 'error');
+        throw new CasMissingError(sha256);
+      }
+      throw err;
+    }
   }
 
   async logicalDelete(actor: PersistenceActor, fileId: string): Promise<FileRecord> {

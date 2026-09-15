@@ -14,6 +14,23 @@ export function assertIdent(value: string): string {
   return value;
 }
 
+const TRANSIENT_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EPIPE',
+  '57P01',
+  '57P02',
+  '57P03',
+  '08000',
+  '08001',
+  '08003',
+  '08006',
+  '40001',
+]);
+
+const MAX_TRANSIENT_RETRIES = 2;
+
 export class PgTx {
   readonly als = new AsyncLocalStorage<pg.PoolClient>();
   private closed = false;
@@ -35,7 +52,7 @@ export class PgTx {
     if (this.closed) throw new PersistenceClosedError();
     const client = this.als.getStore();
     if (client) return client.query<T>(text, params);
-    return this.pool.query<T>(text, params);
+    return queryWithBoundedRetry(this.pool, text, params);
   }
 
   async run<T>(fn: () => Promise<T>): Promise<T> {
@@ -76,7 +93,7 @@ export function createPool(input: {
 }): pg.Pool {
   const flags = [`-c statement_timeout=${input.statementTimeoutMs}`];
   if (input.schema) flags.push(`-c search_path=${assertIdent(input.schema)}`);
-  return new Pool({
+  const pool = new Pool({
     connectionString: input.connectionString,
     max: input.max,
     idleTimeoutMillis: input.idleTimeoutMs,
@@ -84,6 +101,52 @@ export function createPool(input: {
     options: flags.join(' '),
     application_name: 'atlas-vnext',
   });
+  pool.on('error', (err) => {
+    logPlatform('db.pool.idle_error', { error: err instanceof Error ? err.message : String(err) }, 'error');
+  });
+  pool.on('connect', () => {
+    if (pool.waitingCount > 0) {
+        logPlatform(
+          'db.pool.pressure',
+          { total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount, max: input.max },
+          'warn',
+        );
+    }
+  });
+  return pool;
+}
+
+async function queryWithBoundedRetry<T extends pg.QueryResultRow>(
+  pool: pg.Pool,
+  text: string,
+  params: unknown[],
+): Promise<pg.QueryResult<T>> {
+  let last: unknown;
+  for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt += 1) {
+    try {
+      return await pool.query<T>(text, params);
+    } catch (err) {
+      last = err;
+      if (!isTransientDbError(err) || attempt === MAX_TRANSIENT_RETRIES) break;
+      logPlatform(
+        'db.transient_retry',
+        { attempt: attempt + 1, max: MAX_TRANSIENT_RETRIES, error: err instanceof Error ? err.message : String(err) },
+        'warn',
+      );
+      await delay(50 * 2 ** attempt);
+    }
+  }
+  throw last instanceof Error ? last : new Error(String(last));
+}
+
+export function isTransientDbError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = 'code' in err ? String((err as { code?: unknown }).code) : '';
+  return TRANSIENT_CODES.has(code);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export { Pool };

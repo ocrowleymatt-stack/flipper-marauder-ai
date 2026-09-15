@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { AuthenticationError } from '@atlas-vnext/auth';
 import { CASPA_WRITING_DUNGEON, WritingError, WritingService, type WritingActor } from '@atlas-vnext/dungeon-writing';
 import { writingOperationSchema } from '@atlas-vnext/contracts';
-import { FilesAccessError } from '@atlas-vnext/files';
+import { CasMissingError, FilesAccessError } from '@atlas-vnext/files';
 import { ConflictError, OwnershipError } from '@atlas-vnext/persistence';
 import { AuthorityDeniedError } from '@atlas-vnext/permissions';
 import { header, isMutating, json, readJson, sseHeaders, urlPath, writeSse } from './http.ts';
@@ -176,6 +176,10 @@ function handleCaspaError(res: ServerResponse, err: unknown): true {
   }
   if (err instanceof OwnershipError || err instanceof FilesAccessError || err instanceof AuthorityDeniedError) {
     json(res, 404, { error: 'Permission denied.' });
+    return true;
+  }
+  if (err instanceof CasMissingError) {
+    json(res, 503, { error: 'CAS object missing.', code: 'cas_unavailable' });
     return true;
   }
   if (err instanceof ConflictError) {

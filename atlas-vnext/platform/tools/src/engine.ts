@@ -98,6 +98,7 @@ export class ToolEngine {
   private readonly jailRoot: string;
   private accepting = true;
   private inFlight = 0;
+  private readonly quotaHits = new Map<string, number[]>();
 
   constructor(private readonly options: ToolEngineOptions) {
     this.limits = options.limits ?? DEFAULT_OPERATIONAL_LIMITS;
@@ -118,6 +119,10 @@ export class ToolEngine {
     if (!isPlainObject(request.arguments) || !request.toolId?.trim()) {
       throw new IncompleteToolCallError();
     }
+    const argBytes = Buffer.byteLength(JSON.stringify(request.arguments));
+    if (argBytes > this.limits.maxToolArgBytes) {
+      throw new ToolError('payload_too_large', 'Fail-closed: tool arguments exceed the configured limit.', false);
+    }
     const definition = this.lookupTool(request.toolId, request.pluginId);
     const argumentHash = sha256Stable(request.arguments);
     const idempotencyKey = request.idempotencyKey ?? (definition.idempotency === 'none' ? null : `${definition.id}:${argumentHash}`);
@@ -134,6 +139,10 @@ export class ToolEngine {
       return { invocation, provenance: this.provenance(invocation) };
     }
     if (needsApproval(definition) && invocation.status === 'authorised') {
+      const pending = await this.options.invocations.listByStatus(actor.tenantId, ['awaiting_approval']);
+      if (pending.length >= this.limits.maxPendingApprovals) {
+        throw new ToolError('rate_limit', 'Fail-closed: pending approval ceiling reached.', true);
+      }
       invocation = await this.suspendForApproval(invocation);
       return { invocation, provenance: this.provenance(invocation) };
     }
@@ -319,6 +328,7 @@ export class ToolEngine {
     if (this.inFlight >= this.limits.maxToolConcurrency) {
       throw new ToolError('tool_concurrency', 'Fail-closed: tool concurrency ceiling reached.', true);
     }
+    this.assertTenantQuota(actor.tenantId);
     const adapter = this.adapters.get(definition.adapter);
     if (!adapter) {
       const failed = await this.transition(invocation, 'failed', {
@@ -627,6 +637,17 @@ export class ToolEngine {
 
   private assertAccepting(): void {
     if (!this.accepting) throw new ToolError('shutting_down', 'Process is shutting down; new tool work is not accepted.', true);
+  }
+
+  private assertTenantQuota(tenantId: string): void {
+    const quota = this.limits.perTenantToolInvocationsPerMinute;
+    const now = Date.now();
+    const hits = (this.quotaHits.get(tenantId) ?? []).filter((ts) => now - ts < 60_000);
+    if (hits.length >= quota) {
+      throw new ToolError('rate_limit', 'Fail-closed: tenant tool invocation quota exceeded.', true);
+    }
+    hits.push(now);
+    this.quotaHits.set(tenantId, hits);
   }
 }
 

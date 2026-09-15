@@ -24,6 +24,13 @@ export function readOperationalLimits(env: Record<string, string | undefined> = 
     maxCodeOutputBytes: num(env.ATLAS_CODE_OUTPUT_BYTES, DEFAULT_OPERATIONAL_LIMITS.maxCodeOutputBytes),
     sessionTtlMs: num(env.ATLAS_SESSION_TTL_MS, DEFAULT_OPERATIONAL_LIMITS.sessionTtlMs),
     approvalTtlMs: num(env.ATLAS_APPROVAL_TTL_MS, DEFAULT_OPERATIONAL_LIMITS.approvalTtlMs),
+    maxContextFiles: num(env.ATLAS_MAX_CONTEXT_FILES, DEFAULT_OPERATIONAL_LIMITS.maxContextFiles),
+    maxRetrievalChunks: num(env.ATLAS_MAX_RETRIEVAL_CHUNKS, DEFAULT_OPERATIONAL_LIMITS.maxRetrievalChunks),
+    maxGeneratedBytes: num(env.ATLAS_MAX_GENERATED_BYTES, DEFAULT_OPERATIONAL_LIMITS.maxGeneratedBytes),
+    maxToolArgBytes: num(env.ATLAS_MAX_TOOL_ARG_BYTES, DEFAULT_OPERATIONAL_LIMITS.maxToolArgBytes),
+    maxConcurrentStreams: num(env.ATLAS_MAX_CONCURRENT_STREAMS, DEFAULT_OPERATIONAL_LIMITS.maxConcurrentStreams),
+    maxPendingApprovals: num(env.ATLAS_MAX_PENDING_APPROVALS, DEFAULT_OPERATIONAL_LIMITS.maxPendingApprovals),
+    maxConcurrentRuns: num(env.ATLAS_MAX_CONCURRENT_RUNS, DEFAULT_OPERATIONAL_LIMITS.maxConcurrentRuns),
   };
 }
 
@@ -38,31 +45,49 @@ export interface HealthProbe {
   dependencies(): Promise<DependencyHealth>;
 }
 
-export async function readiness(probe: HealthProbe): Promise<{
+export async function readiness(
+  probe: HealthProbe,
+  production = false,
+): Promise<{
   ready: boolean;
   live: boolean;
   dependencies: DependencyHealth;
 }> {
   const live = probe.live();
   const dependencies = await probe.dependencies();
-  const ready = live && isReady(dependencies);
+  const ready = live && isReady(dependencies, production);
   return { ready, live, dependencies };
 }
 
-function isReady(deps: DependencyHealth): boolean {
-  return (['postgres', 'cas', 'jobs', 'runtimeScheduler'] as const).every((key) => {
-    const status: HealthComponent = deps[key];
-    return status === 'ok' || status === 'not_configured' || status === 'degraded';
-  });
+function isReady(deps: DependencyHealth, production: boolean): boolean {
+  const postgresOk = production ? deps.postgres === 'ok' : isOptionalOk(deps.postgres);
+  const casOk = production ? deps.cas === 'ok' : isOptionalOk(deps.cas);
+  const jobsOk = isOptionalOk(deps.jobs);
+  const runtimeOk = isOptionalOk(deps.runtimeScheduler);
+  return postgresOk && casOk && jobsOk && runtimeOk;
 }
 
-export const SECURITY_HEADERS: Record<string, string> = {
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'no-referrer',
-  'Cache-Control': 'no-store',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'",
-};
+function isOptionalOk(status: HealthComponent): boolean {
+  return status === 'ok' || status === 'not_configured' || status === 'degraded';
+}
+
+export function securityHeaders(options: { hsts?: boolean } = {}): Record<string, string> {
+  const headers: Record<string, string> = {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'Cache-Control': 'no-store',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+    'Content-Security-Policy':
+      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+  };
+  if (options.hsts) {
+    headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains';
+  }
+  return headers;
+}
+
+export const SECURITY_HEADERS: Record<string, string> = securityHeaders();
 
 export class ShutdownController {
   accepting = true;

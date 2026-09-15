@@ -48,6 +48,7 @@ export interface ConversationRuntimeDeps {
   unitOfWork?: UnitOfWork;
   toolOrchestrator?: ToolOrchestrator;
   principalId?: string;
+  maxConcurrentExecutions?: number;
 }
 
 export class ConversationRuntime {
@@ -152,6 +153,17 @@ export class ConversationRuntime {
     }
 
     const capability = input.capability?.trim() || 'nexus/fast';
+    const maxConcurrent = this.deps.maxConcurrentExecutions;
+    if (maxConcurrent) {
+      const running = (await this.deps.executions.listInFlight()).length;
+      if (running >= maxConcurrent || this.inflight.size >= maxConcurrent) {
+        yield {
+          type: 'error',
+          failure: failure('rate_limit', 'Concurrent run limit reached.', true),
+        };
+        return;
+      }
+    }
     const started = await this.transact(async () => {
       const userMessage = await this.deps.messages.append({
         conversationId,

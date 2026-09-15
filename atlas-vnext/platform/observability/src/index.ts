@@ -1,4 +1,10 @@
 import type { ObservedRouteAttempt, RejectedCandidate, RouteDecision } from '@atlas-vnext/contracts';
+import { correlationFields } from './context.ts';
+
+export { createRequestId, getRequestContext, patchRequestContext, runWithRequestContext, correlationFields } from './context.ts';
+export type { RequestContext } from './context.ts';
+export { MetricsRegistry, platformMetrics, classifyRoute } from './metrics.ts';
+export type { MetricLabels, MetricSnapshot } from './metrics.ts';
 
 export interface RouteTrace {
   traceId: string;
@@ -58,8 +64,8 @@ export class MemoryRouteLog implements ObservabilitySink {
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-const REDACT_KEY = /password|secret|token|authorization|api[_-]?key|database_url|connectionstring|credential/i;
-const REDACT_BODY_KEY = /^(content|body|text|prompt|payload|message|bytes|filebody|extracted|chunk)$/i;
+const REDACT_KEY = /password|secret|token|authorization|api[_-]?key|database_url|connectionstring|credential|cookie|set-cookie/i;
+const REDACT_BODY_KEY = /^(content|body|text|prompt|payload|message|bytes|filebody|extracted|chunk|source|dump)$/i;
 
 export function redactSecret(value: string): string {
   return value.replace(/:([^:@/]+)@/g, ':***@');
@@ -69,7 +75,7 @@ export function redactFields(fields: Record<string, unknown>): Record<string, un
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(fields)) {
     if (REDACT_KEY.test(key) || REDACT_BODY_KEY.test(key)) {
-      out[key] = typeof value === 'string' ? redactSecret(value) === value ? '[redacted]' : redactSecret(value) : '[redacted]';
+      out[key] = typeof value === 'string' ? (redactSecret(value) === value ? '[redacted]' : redactSecret(value)) : '[redacted]';
       if (typeof value === 'string' && /:/.test(value) && /@/.test(value)) out[key] = redactSecret(value);
       continue;
     }
@@ -99,7 +105,7 @@ export function logPlatform(
       component: 'atlas-vnext',
       level,
       event,
-      ...redactFields(fields),
+      ...redactFields({ ...correlationFields(), ...fields }),
     }),
   );
 }

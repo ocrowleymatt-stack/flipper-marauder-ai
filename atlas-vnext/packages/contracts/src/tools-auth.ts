@@ -261,6 +261,13 @@ export const operationalLimitsSchema = z.object({
   maxCodeOutputBytes: z.number().int().positive(),
   sessionTtlMs: z.number().int().positive(),
   approvalTtlMs: z.number().int().positive(),
+  maxContextFiles: z.number().int().positive(),
+  maxRetrievalChunks: z.number().int().positive(),
+  maxGeneratedBytes: z.number().int().positive(),
+  maxToolArgBytes: z.number().int().positive(),
+  maxConcurrentStreams: z.number().int().positive(),
+  maxPendingApprovals: z.number().int().positive(),
+  maxConcurrentRuns: z.number().int().positive(),
 });
 export type OperationalLimits = z.infer<typeof operationalLimitsSchema>;
 
@@ -279,6 +286,13 @@ export const DEFAULT_OPERATIONAL_LIMITS: OperationalLimits = {
   maxCodeOutputBytes: 64 * 1024,
   sessionTtlMs: 12 * 60 * 60 * 1000,
   approvalTtlMs: 24 * 60 * 60 * 1000,
+  maxContextFiles: 32,
+  maxRetrievalChunks: 64,
+  maxGeneratedBytes: 2_000_000,
+  maxToolArgBytes: 64 * 1024,
+  maxConcurrentStreams: 32,
+  maxPendingApprovals: 50,
+  maxConcurrentRuns: 16,
 };
 
 export const toolProvenanceSchema = z.object({

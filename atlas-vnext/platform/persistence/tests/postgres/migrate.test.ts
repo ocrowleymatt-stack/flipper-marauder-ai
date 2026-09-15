@@ -152,4 +152,38 @@ describe('schema bootstrap and migrations', () => {
       expect(versions.rows[0]?.n).toBe(CURRENT_SCHEMA_VERSION);
     }
   });
+
+  it('rolls back an interrupted migration and does not record the version', async () => {
+    const handle = await openTestKernel();
+    cleanups.push(handle.close);
+    await handle.kernel.ensureTenant({ id: 'tenant_keep', name: 'Keep' });
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-mig-int-'));
+    for (const migration of loadMigrations(defaultMigrationsDir())) {
+      writeFileSync(join(dir, migration.filename), readFileSync(join(defaultMigrationsDir(), migration.filename)));
+    }
+    writeFileSync(
+      join(dir, '008_interrupt.sql'),
+      `CREATE TABLE interrupted_probe (id TEXT PRIMARY KEY);
+       SELECT 1/0;`,
+    );
+    const client = await handle.kernel.tx.pool.connect();
+    try {
+      await client.query(`SET search_path TO ${assertIdent(handle.schema)}`);
+      await expect(migrate(client, loadMigrations(dir))).rejects.toThrow(/Migration 8/);
+      const versions = await client.query('SELECT version FROM schema_migrations ORDER BY version');
+      expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      const probe = await client.query(
+        `SELECT EXISTS (
+           SELECT 1 FROM information_schema.tables
+           WHERE table_schema = $1 AND table_name = 'interrupted_probe'
+         ) AS present`,
+        [handle.schema],
+      );
+      expect(probe.rows[0]?.present).toBe(false);
+      const tenant = await client.query('SELECT id FROM tenants WHERE id = $1', ['tenant_keep']);
+      expect(tenant.rows).toHaveLength(1);
+    } finally {
+      client.release();
+    }
+  });
 });

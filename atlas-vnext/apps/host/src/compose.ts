@@ -42,8 +42,12 @@ import {
   ToolRegistry,
 } from '@atlas-vnext/tools';
 import { WritingService } from '@atlas-vnext/dungeon-writing';
+import { EnvFlagStore, type KillSwitchState } from '@atlas-vnext/flags';
+import { logPlatform } from '@atlas-vnext/observability';
 import { MODEL_CATALOGUE } from './catalogue.ts';
 import { ShutdownController, readOperationalLimits, type HealthProbe } from './ops.ts';
+import { PlatformRateLimiter, ResourceGuard } from './limits.ts';
+import { readTimeoutContract, type TimeoutContract } from './production-config.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
@@ -70,6 +74,11 @@ export interface Spine {
   healthProbe: HealthProbe;
   tenantId: string;
   principalId: string;
+  flags: EnvFlagStore;
+  killSwitches: KillSwitchState;
+  rateLimiter: PlatformRateLimiter;
+  resources: ResourceGuard;
+  timeouts: TimeoutContract;
   close: () => Promise<void>;
 }
 
@@ -97,6 +106,11 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   const persistenceConfig = options.persistence ?? readPersistenceConfig(env);
   const limits = readOperationalLimits(env);
   const shutdown = new ShutdownController();
+  const flags = new EnvFlagStore(env);
+  const killSwitches = flags.snapshot();
+  const rateLimiter = new PlatformRateLimiter();
+  const resources = new ResourceGuard(limits);
+  const timeouts = readTimeoutContract(env);
 
   const registry = new NexusRegistry();
   for (const model of MODEL_CATALOGUE) {
@@ -123,6 +137,10 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
 
   for (const [provider, health] of Object.entries(plane.health)) {
     registry.setHealth(provider, health);
+  }
+  for (const provider of killSwitches.disabledProviders) {
+    registry.setHealth(provider, 'unavailable');
+    logPlatform('flags.provider_killed', { provider }, 'warn');
   }
 
   if (mode === 'live') {
@@ -266,12 +284,15 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       executor: plane.broker,
       availableRuntimes: plane.available,
       unitOfWork: persistence,
-      toolOrchestrator: makeOrchestrator(tools),
+      toolOrchestrator: killSwitches.tools ? makeOrchestrator(tools) : undefined,
       principalId,
+      maxConcurrentExecutions: limits.maxConcurrentRuns,
     });
     await persistence.recoverOnStart();
     await tools.reconcile();
-    cas = await openFilesystemCas(options.casRoot ?? join(dirname(options.dataPath), 'cas'));
+    cas = await openFilesystemCas(
+      options.casRoot ?? env.ATLAS_CAS_ROOT?.trim() ?? join(dirname(options.dataPath), 'cas'),
+    );
     files = new FilesService(persistence, cas);
     projects = new ProjectService(persistence);
     context = new ContextService(persistence);
@@ -297,8 +318,9 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       router,
       executor: plane.broker,
       availableRuntimes: plane.available,
-      toolOrchestrator: makeOrchestrator(tools),
+      toolOrchestrator: killSwitches.tools ? makeOrchestrator(tools) : undefined,
       principalId,
+      maxConcurrentExecutions: limits.maxConcurrentRuns,
     });
     await runtime.recoverInFlight();
     await tools.reconcile();
@@ -360,6 +382,11 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     healthProbe,
     tenantId,
     principalId,
+    flags,
+    killSwitches,
+    rateLimiter,
+    resources,
+    timeouts,
     close: async () => {
       shutdown.begin();
       tools.stopAccepting();

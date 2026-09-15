@@ -17,6 +17,22 @@ export interface MigrationFile {
 
 export const CURRENT_SCHEMA_VERSION = 7;
 
+/**
+ * Session-level lock shared by every Atlas process on this database.
+ * Parallel test schemas and multi-instance boots must not interleave DDL
+ * against PostgreSQL catalogs (CREATE/DROP SCHEMA, CREATE TABLE).
+ */
+export const ATLAS_POSTGRES_DDL_LOCK = 415_641_511;
+
+export async function withPostgresDdlLock<T>(client: pg.PoolClient, fn: () => Promise<T>): Promise<T> {
+  await client.query('SELECT pg_advisory_lock($1)', [ATLAS_POSTGRES_DDL_LOCK]);
+  try {
+    return await fn();
+  } finally {
+    await client.query('SELECT pg_advisory_unlock($1)', [ATLAS_POSTGRES_DDL_LOCK]);
+  }
+}
+
 export function defaultMigrationsDir(): string {
   return fileURLToPath(new URL('../../migrations', import.meta.url));
 }
@@ -70,11 +86,18 @@ function isPool(value: pg.Pool | pg.PoolClient): value is pg.Pool {
   return 'totalCount' in value;
 }
 
-async function migrateOnClient(client: pg.PoolClient | pg.Pool, migrations: MigrationFile[]): Promise<{
+async function migrateOnClient(client: pg.PoolClient, migrations: MigrationFile[]): Promise<{
   applied: number[];
   skipped: number[];
 }> {
   logPlatform('migration.start', { count: migrations.length });
+  return withPostgresDdlLock(client, () => migrateWhileLocked(client, migrations));
+}
+
+async function migrateWhileLocked(client: pg.PoolClient, migrations: MigrationFile[]): Promise<{
+  applied: number[];
+  skipped: number[];
+}> {
   try {
     await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -144,5 +167,15 @@ async function migrateOnClient(client: pg.PoolClient | pg.Pool, migrations: Migr
 
 export async function ensureSchema(client: pg.Pool | pg.PoolClient, schema: string): Promise<void> {
   const ident = assertIdent(schema);
-  await client.query(`CREATE SCHEMA IF NOT EXISTS ${ident}`);
+  const sql = `CREATE SCHEMA IF NOT EXISTS ${ident}`;
+  if (isPool(client)) {
+    const leased = await client.connect();
+    try {
+      await withPostgresDdlLock(leased, () => leased.query(sql));
+    } finally {
+      leased.release();
+    }
+    return;
+  }
+  await withPostgresDdlLock(client, () => client.query(sql));
 }

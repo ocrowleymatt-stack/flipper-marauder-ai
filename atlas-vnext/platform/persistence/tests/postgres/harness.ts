@@ -2,9 +2,37 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import type { PersistenceConfig } from '../../src/config.ts';
 import { openPostgresPersistence, type PostgresPersistence } from '../../src/postgres/kernel.ts';
+import { withPostgresDdlLock } from '../../src/postgres/migrate.ts';
 import { assertIdent } from '../../src/postgres/tx.ts';
 
 const { Pool } = pg;
+
+async function withAdminClient<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+  const admin = new Pool({
+    connectionString: postgresUrl(),
+    connectionTimeoutMillis: 5_000,
+    options: '-c statement_timeout=15000',
+  });
+  const client = await admin.connect();
+  try {
+    return await fn(client);
+  } finally {
+    client.release();
+    await admin.end();
+  }
+}
+
+async function createTestSchema(schema: string): Promise<void> {
+  await withAdminClient((client) =>
+    withPostgresDdlLock(client, () => client.query(`CREATE SCHEMA IF NOT EXISTS ${assertIdent(schema)}`)),
+  );
+}
+
+export async function dropTestSchema(schema: string): Promise<void> {
+  await withAdminClient((client) =>
+    withPostgresDdlLock(client, () => client.query(`DROP SCHEMA IF EXISTS ${assertIdent(schema)} CASCADE`)),
+  );
+}
 
 export function postgresUrl(): string {
   return (
@@ -34,24 +62,14 @@ export async function openTestKernel(schema = `t_${randomUUID().replace(/-/g, ''
   kernel: PostgresPersistence;
   close: () => Promise<void>;
 }> {
-  const admin = new Pool({ connectionString: postgresUrl(), connectionTimeoutMillis: 5_000 });
-  try {
-    await admin.query(`CREATE SCHEMA IF NOT EXISTS ${assertIdent(schema)}`);
-  } finally {
-    await admin.end();
-  }
+  await createTestSchema(schema);
   const kernel = await openPostgresPersistence(persistenceConfig(schema));
   return {
     schema,
     kernel,
     close: async () => {
       await kernel.close();
-      const cleanup = new Pool({ connectionString: postgresUrl(), connectionTimeoutMillis: 5_000 });
-      try {
-        await cleanup.query(`DROP SCHEMA IF EXISTS ${assertIdent(schema)} CASCADE`);
-      } finally {
-        await cleanup.end();
-      }
+      await dropTestSchema(schema);
     },
   };
 }
@@ -63,12 +81,7 @@ export async function openPairedKernels(): Promise<{
   close: () => Promise<void>;
 }> {
   const schema = `t_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-  const admin = new Pool({ connectionString: postgresUrl(), connectionTimeoutMillis: 5_000 });
-  try {
-    await admin.query(`CREATE SCHEMA IF NOT EXISTS ${assertIdent(schema)}`);
-  } finally {
-    await admin.end();
-  }
+  await createTestSchema(schema);
   const config = persistenceConfig(schema);
   const a = await openPostgresPersistence(config);
   const b = await openPostgresPersistence(config);
@@ -79,12 +92,7 @@ export async function openPairedKernels(): Promise<{
     close: async () => {
       await a.close();
       await b.close();
-      const cleanup = new Pool({ connectionString: postgresUrl(), connectionTimeoutMillis: 5_000 });
-      try {
-        await cleanup.query(`DROP SCHEMA IF EXISTS ${assertIdent(schema)} CASCADE`);
-      } finally {
-        await cleanup.end();
-      }
+      await dropTestSchema(schema);
     },
   };
 }

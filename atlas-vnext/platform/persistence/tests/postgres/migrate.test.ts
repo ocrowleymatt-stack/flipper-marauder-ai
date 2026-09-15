@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import pg from 'pg';
-import { CURRENT_SCHEMA_VERSION, checksumSql, defaultMigrationsDir, loadMigrations, migrate } from '../../src/postgres/migrate.ts';
+import { CURRENT_SCHEMA_VERSION, checksumSql, defaultMigrationsDir, loadMigrations, migrate, withPostgresDdlLock } from '../../src/postgres/migrate.ts';
 import { assertIdent } from '../../src/postgres/tx.ts';
-import { openTestKernel, postgresUrl } from './harness.ts';
+import { dropTestSchema, openTestKernel, postgresUrl } from './harness.ts';
 
 const { Pool } = pg;
 const cleanups: Array<() => Promise<void>> = [];
@@ -38,21 +38,28 @@ describe('schema bootstrap and migrations', () => {
     const schema = `t_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
     const pool = new Pool({ connectionString: postgresUrl(), connectionTimeoutMillis: 5_000 });
     cleanups.push(async () => {
-      await pool.query(`DROP SCHEMA IF EXISTS ${assertIdent(schema)} CASCADE`);
+      await dropTestSchema(schema);
       await pool.end();
     });
-    await pool.query(`CREATE SCHEMA ${assertIdent(schema)}`);
+    const admin = await pool.connect();
+    try {
+      await withPostgresDdlLock(admin, () => admin.query(`CREATE SCHEMA ${assertIdent(schema)}`));
+    } finally {
+      admin.release();
+    }
     const client = await pool.connect();
     try {
       await client.query(`SET search_path TO ${assertIdent(schema)}`);
       const v1 = loadMigrations().find((item) => item.version === 1);
       expect(v1).toBeTruthy();
-      await client.query(v1!.sql);
-      await client.query('INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, $2, $3)', [
-        1,
-        v1!.name,
-        v1!.checksum,
-      ]);
+      await withPostgresDdlLock(client, async () => {
+        await client.query(v1!.sql);
+        await client.query('INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, $2, $3)', [
+          1,
+          v1!.name,
+          v1!.checksum,
+        ]);
+      });
       await client.query(
         `INSERT INTO tenants (id, urn, name, created_at, updated_at)
          VALUES ('tenant_keep', 'urn:atlas:tenant:keep', 'Keep', now(), now())`,
@@ -133,5 +140,16 @@ describe('schema bootstrap and migrations', () => {
       client.release();
     }
     expect(checksumSql('abc')).toHaveLength(64);
+  });
+
+  it('bootstraps several schemas in parallel without stalling on catalog DDL', async () => {
+    const handles = await Promise.all(Array.from({ length: 4 }, () => openTestKernel()));
+    cleanups.push(...handles.map((handle) => handle.close));
+    for (const handle of handles) {
+      const versions = await handle.kernel.tx.query<{ n: number }>(
+        'SELECT COUNT(*)::int AS n FROM schema_migrations',
+      );
+      expect(versions.rows[0]?.n).toBe(CURRENT_SCHEMA_VERSION);
+    }
   });
 });

@@ -6,6 +6,10 @@ const root = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   test: {
+    // Kernel bootstrap now applies seven migrations. Parallel workers queue on
+    // the Postgres DDL advisory lock, so the default 5s cap is too tight in CI.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
     include: [
       'platform/**/*.test.ts',
       'apps/**/*.test.ts',

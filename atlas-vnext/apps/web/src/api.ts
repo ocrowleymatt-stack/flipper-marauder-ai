@@ -203,8 +203,16 @@ async function readError(response: Response): Promise<string> {
 }
 
 async function parseJson<T>(response: Response): Promise<T> {
-  if (!response.ok) throw new Error(await readError(response));
+  if (!response.ok) {
+    const error = new Error(await readError(response)) as Error & { status: number };
+    error.status = response.status;
+    throw error;
+  }
   return response.json() as Promise<T>;
+}
+
+export function isProjectsUnavailable(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'status' in error && (error as { status: number }).status === 503);
 }
 
 export async function getSession(): Promise<SessionState> {
@@ -268,9 +276,12 @@ export async function listProjectConversations(projectId: string): Promise<Conve
   );
 }
 
-export async function createConversation(projectId: string, title?: string): Promise<Conversation> {
+export async function createConversation(projectId?: string | null, title?: string): Promise<Conversation> {
+  const path = projectId
+    ? `/api/projects/${encodeURIComponent(projectId)}/conversations`
+    : '/api/conversations';
   return parseJson(
-    await fetch(`/api/projects/${encodeURIComponent(projectId)}/conversations`, {
+    await fetch(path, {
       method: 'POST',
       credentials: 'include',
       headers: mutatingHeaders(),

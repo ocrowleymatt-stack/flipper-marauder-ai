@@ -33,6 +33,10 @@ const server = createHost({
   tenantId: spine.tenantId,
   principalId: spine.principalId,
   production: persistence.production,
+  allowedOrigins: (process.env.ATLAS_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean),
 });
 const bound = await listen(server, port, '127.0.0.1');
 spine.scheduler?.startIdleWatch();

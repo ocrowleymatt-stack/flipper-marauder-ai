@@ -32,7 +32,13 @@ export function applyStream(view: StreamView, conversationId: string, event: Str
   }
   if (event.type === 'execution' && event.execution) {
     const next = event.execution as ExecutionRecord;
+    const previousLatest = snapshot.executions.at(-1);
     snapshot = { ...snapshot, executions: upsert(snapshot.executions, next) };
+    if (!previousLatest || previousLatest.id !== next.id) {
+      sealedResponse = false;
+      classifiedFailure = null;
+      waitLabel = null;
+    }
     if (next.status === 'failed' && next.failureReason) {
       classifiedFailure = next.failureReason.message;
       if (next.attempts.some((attempt) => attempt.emittedVisibleOutput)) {
@@ -41,6 +47,13 @@ export function applyStream(view: StreamView, conversationId: string, event: Str
     }
     if (next.status === 'completed' || next.status === 'cancelled') {
       waitLabel = null;
+    }
+  }
+  if (event.type === 'execution.started' && typeof event.executionId === 'string') {
+    const latest = snapshot.executions.at(-1);
+    if (!latest || latest.id !== event.executionId) {
+      sealedResponse = false;
+      classifiedFailure = null;
     }
   }
   if (event.type === 'attempt.failed') {
@@ -75,6 +88,18 @@ export function emptyView(conversation: ConversationSnapshot['conversation']): S
     waitLabel: null,
     sealedResponse: false,
     classifiedFailure: null,
+  };
+}
+
+export function viewFromSnapshot(snapshot: ConversationSnapshot): StreamView {
+  const latest = snapshot.executions.at(-1);
+  const sealed =
+    latest?.status === 'failed' && latest.attempts.some((attempt) => attempt.emittedVisibleOutput);
+  return {
+    snapshot,
+    waitLabel: null,
+    sealedResponse: Boolean(sealed),
+    classifiedFailure: latest?.failureReason?.message ?? null,
   };
 }
 

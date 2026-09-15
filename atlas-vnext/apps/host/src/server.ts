@@ -23,7 +23,12 @@ import {
   urlQuery,
   writeSse,
 } from './http.ts';
-import { handleWorkbench, resolveActor, sessionOwnsHostConversations } from './workbench.ts';
+import {
+  conversationSessionMissing,
+  handleWorkbench,
+  isForeignHostSession,
+  resolveActor,
+} from './workbench.ts';
 
 export interface HostOptions {
   runtime: ConversationRuntime;
@@ -57,7 +62,7 @@ export function createHost(options: HostOptions): Server {
 
 async function handle(req: IncomingMessage, res: ServerResponse, options: HostOptions): Promise<void> {
   applySecurityHeaders(res);
-  cors(res, req, options.allowedOrigins);
+  cors(res, req, options);
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
@@ -109,7 +114,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
     const conversationActor = await resolveActor(req, options);
 
     if (req.method === 'POST' && urlPath(req) === '/api/conversations') {
-      if (conversationActor && !sessionOwnsHostConversations(conversationActor, options)) {
+      if (conversationSessionMissing(conversationActor, options)) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      if (isForeignHostSession(conversationActor, options)) {
         json(res, 404, { error: 'Permission denied.' });
         return;
       }
@@ -139,7 +148,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
       return;
     }
     if (req.method === 'GET' && urlPath(req) === '/api/conversations') {
-      if (conversationActor && !sessionOwnsHostConversations(conversationActor, options)) {
+      if (conversationSessionMissing(conversationActor, options)) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      if (isForeignHostSession(conversationActor, options)) {
         json(res, 200, []);
         return;
       }
@@ -157,7 +170,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
     const pathname = urlPath(req);
     const conversationMatch = pathname.match(/^\/api\/conversations\/([^/]+)$/);
     if (req.method === 'GET' && conversationMatch) {
-      if (conversationActor && !sessionOwnsHostConversations(conversationActor, options)) {
+      if (conversationSessionMissing(conversationActor, options)) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      if (isForeignHostSession(conversationActor, options)) {
         json(res, 404, { error: 'Conversation not found.' });
         return;
       }
@@ -171,7 +188,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
     }
     const messageMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/messages$/);
     if (req.method === 'POST' && messageMatch) {
-      if (conversationActor && !sessionOwnsHostConversations(conversationActor, options)) {
+      if (conversationSessionMissing(conversationActor, options)) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      if (isForeignHostSession(conversationActor, options)) {
         json(res, 404, { error: 'Conversation not found.' });
         return;
       }
@@ -191,6 +212,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
     }
     const cancelMatch = pathname.match(/^\/api\/executions\/([^/]+)\/cancel$/);
     if (req.method === 'POST' && cancelMatch) {
+      if (conversationSessionMissing(conversationActor, options)) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      if (isForeignHostSession(conversationActor, options)) {
+        json(res, 404, { error: 'Execution not found.' });
+        return;
+      }
       const execution = await options.runtime.cancel(decodeURIComponent(cancelMatch[1]!));
       json(res, 200, execution);
       return;
@@ -263,6 +292,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
 
 async function enforceCsrfIfNeeded(req: IncomingMessage, options: HostOptions): Promise<void> {
   if (!options.auth || !isMutating(req.method)) return;
+  const pathname = urlPath(req);
+  if (pathname === '/api/session' || pathname === '/api/session/revoke') return;
   const cookie = options.auth.parseCookie(header(req, 'cookie'));
   if (!cookie) return;
   await options.auth.resolve({
@@ -279,16 +310,21 @@ function applySecurityHeaders(res: ServerResponse): void {
   }
 }
 
-function cors(res: ServerResponse, req: IncomingMessage, allowedOrigins?: string[]): void {
+function cors(res: ServerResponse, req: IncomingMessage, options: HostOptions): void {
   const origin = header(req, 'origin');
+  const allowedOrigins = options.allowedOrigins;
   if (allowedOrigins?.length) {
     if (origin && allowedOrigins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Credentials', 'true');
       res.setHeader('Vary', 'Origin');
+    } else {
+      res.setHeader('Vary', 'Origin');
     }
-  } else {
+  } else if (!options.auth) {
     res.setHeader('Access-Control-Allow-Origin', '*');
+  } else {
+    res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Headers', 'content-type, x-atlas-csrf');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');

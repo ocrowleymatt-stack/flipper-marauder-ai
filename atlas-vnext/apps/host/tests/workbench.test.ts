@@ -323,4 +323,148 @@ describe('Atlas Workbench host', () => {
     });
     expect(response.status).toBe(401);
   });
+
+  it('rejects missing sessions on conversation routes when auth is configured', async () => {
+    const { url } = await startWorkbench();
+    const session = await bootstrap(url);
+    const created = await fetch(`${url}/api/conversations`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ title: 'secret thread' }),
+    });
+    expect(created.status).toBe(201);
+    const conversation = (await created.json()) as { id: string };
+
+    const listed = await fetch(`${url}/api/conversations`, {
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(listed.status).toBe(401);
+    expect(listed.headers.get('access-control-allow-origin')).not.toBe('*');
+
+    const snapshot = await fetch(`${url}/api/conversations/${conversation.id}`, {
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(snapshot.status).toBe(401);
+
+    const turn = await fetch(`${url}/api/conversations/${conversation.id}/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+      body: JSON.stringify({ content: 'steal', capability: 'nexus/fast' }),
+    });
+    expect(turn.status).toBe(401);
+
+    const cancel = await fetch(`${url}/api/executions/ex_guessed/cancel`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(cancel.status).toBe(401);
+
+    const allowed = await fetch(`${url}/api/conversations`, { headers: { cookie: session.cookie } });
+    expect(allowed.status).toBe(200);
+    const rows = (await allowed.json()) as Array<{ id: string }>;
+    expect(rows.some((item) => item.id === conversation.id)).toBe(true);
+
+    const reflected = await fetch(`${url}/api/conversations`, {
+      headers: { cookie: session.cookie, origin: 'https://workbench.example' },
+    });
+    expect(reflected.headers.get('access-control-allow-origin')).not.toBe('https://workbench.example');
+
+    const csrfTurn = await fetch(`${url}/api/conversations/${conversation.id}/messages`, {
+      method: 'POST',
+      headers: { cookie: session.cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'no csrf', capability: 'nexus/fast' }),
+    });
+    expect(csrfTurn.status).toBe(403);
+  });
+
+  it('treats revoked session cookies as signed out and allows a fresh local bootstrap', async () => {
+    const { url, spine } = await startWorkbench();
+    const session = await bootstrap(url);
+    const cookie = /atlas_session=([^;]+)/.exec(session.cookie)?.[1];
+    expect(cookie).toBeTruthy();
+    await spine.auth.revoke(cookie!);
+
+    const probe = await fetch(`${url}/api/session`, { headers: { cookie: session.cookie } });
+    expect(probe.status).toBe(200);
+    const body = (await probe.json()) as { authenticated: boolean; bootstrapAllowed: boolean };
+    expect(body.authenticated).toBe(false);
+    expect(body.bootstrapAllowed).toBe(true);
+    expect(probe.headers.get('set-cookie') ?? '').toMatch(/Max-Age=0/i);
+
+    const issued = await fetch(`${url}/api/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: session.cookie },
+      body: '{}',
+    });
+    expect(issued.status).toBe(201);
+    const next = (await issued.json()) as { authenticated: boolean; csrfToken: string };
+    expect(next.authenticated).toBe(true);
+    expect(next.csrfToken).toBeTruthy();
+  });
+
+  it('keeps file-mode conversation routes session-bound and does not require projects', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-workbench-file-'));
+    const spine = await composeSpine({
+      dataPath: join(dir, 'state.json'),
+      mode: 'mock',
+    });
+    spines.push(spine);
+    expect(spine.projects).toBeNull();
+    const server = createHost({
+      runtime: spine.runtime,
+      auth: spine.auth,
+      tools: spine.tools,
+      projects: spine.projects,
+      files: spine.files,
+      context: spine.context,
+      tenantId: spine.tenantId,
+      principalId: spine.principalId,
+    });
+    servers.push(server);
+    const bound = await listen(server, 0, '127.0.0.1');
+    const session = await bootstrap(bound.url);
+    const projects = await fetch(`${bound.url}/api/projects`, { headers: { cookie: session.cookie } });
+    expect(projects.status).toBe(503);
+    const listed = await fetch(`${bound.url}/api/conversations`, { headers: { cookie: session.cookie } });
+    expect(listed.status).toBe(200);
+    const created = await fetch(`${bound.url}/api/conversations`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ title: 'file mode' }),
+    });
+    expect(created.status).toBe(201);
+    const anonymous = await fetch(`${bound.url}/api/conversations`);
+    expect(anonymous.status).toBe(401);
+  });
+
+  it('reflects an explicit origin allowlist with credentials and never uses * with auth', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-workbench-cors-'));
+    const spine = await composeSpine({
+      dataPath: join(dir, 'state.json'),
+      mode: 'mock',
+      persistence: memoryConfig('tenant_a'),
+      casRoot: join(dir, 'cas'),
+    });
+    spines.push(spine);
+    const server = createHost({
+      runtime: spine.runtime,
+      auth: spine.auth,
+      tenantId: spine.tenantId,
+      principalId: spine.principalId,
+      allowedOrigins: ['https://workbench.example'],
+    });
+    servers.push(server);
+    const bound = await listen(server, 0, '127.0.0.1');
+    const ok = await fetch(`${bound.url}/api/session`, {
+      headers: { origin: 'https://workbench.example' },
+    });
+    expect(ok.headers.get('access-control-allow-origin')).toBe('https://workbench.example');
+    expect(ok.headers.get('access-control-allow-credentials')).toBe('true');
+    const evil = await fetch(`${bound.url}/api/session`, {
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(evil.headers.get('access-control-allow-origin')).not.toBe('*');
+    expect(evil.headers.get('access-control-allow-origin')).not.toBe('https://evil.example');
+  });
 });

@@ -44,7 +44,6 @@ export function sseHeaders(res: ServerResponse): void {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
   });
   res.write(': connected\n\n');
 }

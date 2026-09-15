@@ -12,12 +12,14 @@ import {
   inspectExecution,
   listApprovals,
   listConversationTools,
+  listConversations,
   listFiles,
   listProjectConversations,
   listProjects,
   runtimeWaitingLabel,
   sendMessage,
   uploadTextFile,
+  isProjectsUnavailable,
   type AssembledContext,
   type Capability,
   type Conversation,
@@ -27,7 +29,7 @@ import {
   type SessionState,
   type ToolPresentation,
 } from './api';
-import { applyStream, emptyView, runStatusLabel, type StreamView } from './stream';
+import { applyStream, emptyView, runStatusLabel, viewFromSnapshot, type StreamView } from './stream';
 
 type InspectorTab = 'run' | 'files' | 'context' | 'tools';
 
@@ -36,6 +38,7 @@ export function App() {
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
+  const [projectsAvailable, setProjectsAvailable] = useState(true);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [view, setView] = useState<StreamView | null>(null);
@@ -71,14 +74,7 @@ export function App() {
 
   const loadConversation = useCallback(async (conversationId: string) => {
     const snapshot = await getSnapshot(conversationId);
-    setView({
-      snapshot,
-      waitLabel: null,
-      sealedResponse: snapshot.executions.some(
-        (execution) => execution.status === 'failed' && execution.attempts.some((attempt) => attempt.emittedVisibleOutput),
-      ),
-      classifiedFailure: snapshot.executions.at(-1)?.failureReason?.message ?? null,
-    });
+    setView(viewFromSnapshot(snapshot));
     const [conversationTools, assembled, pending] = await Promise.all([
       listConversationTools(conversationId).catch(() => []),
       snapshot.conversation.projectId
@@ -127,11 +123,27 @@ export function App() {
           setLoading(false);
           return;
         }
-        const items = await loadProjects();
-        const first = items[0]?.id ?? null;
-        setProjectId(first);
-        if (first) await loadProject(first);
-        setStatus(first ? 'Workbench ready.' : 'Create a project to begin.');
+        let projectItems: Project[] | null = null;
+        try {
+          projectItems = await loadProjects();
+        } catch (err) {
+          if (!isProjectsUnavailable(err)) throw err;
+        }
+        if (projectItems) {
+          setProjectsAvailable(true);
+          const first = projectItems[0]?.id ?? null;
+          setProjectId(first);
+          if (first) await loadProject(first);
+          setStatus(first ? 'Workbench ready.' : 'Create a project to begin.');
+        } else {
+          setProjectsAvailable(false);
+          const convos = await listConversations();
+          setConversations(convos);
+          const nextId = convos[0]?.id ?? null;
+          setActiveConversationId(nextId);
+          if (nextId) await loadConversation(nextId);
+          setStatus('Conversation-only mode.');
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         setStatus('Workbench failed to load.');
@@ -139,18 +151,23 @@ export function App() {
         setLoading(false);
       }
     })();
-  }, [loadProject, loadProjects]);
+  }, [loadConversation, loadProject, loadProjects]);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' });
   }, [snapshot?.messages, snapshot?.executions, view?.waitLabel]);
 
   async function refreshAll() {
-    if (!projectId) return;
     setError(null);
     try {
-      await loadProjects();
-      await loadProject(projectId, activeConversationId);
+      if (projectsAvailable) {
+        await loadProjects();
+        if (projectId) await loadProject(projectId, activeConversationId);
+      } else {
+        const convos = await listConversations();
+        setConversations(convos);
+        if (activeConversationId) await loadConversation(activeConversationId);
+      }
       setStatus('Reloaded from the server.');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -188,7 +205,7 @@ export function App() {
   }
 
   async function onCreateConversation() {
-    if (!projectId) return;
+    if (projectsAvailable && !projectId) return;
     setError(null);
     try {
       const conversation = await createConversation(projectId);
@@ -218,6 +235,9 @@ export function App() {
     setBusy(true);
     setError(null);
     setStatus('Running.');
+    setView((current) =>
+      current ? { ...current, sealedResponse: false, classifiedFailure: null, waitLabel: null } : current,
+    );
     try {
       for await (const event of sendMessage(conversationId, content, selected)) {
         setView((current) => {
@@ -234,7 +254,7 @@ export function App() {
         }
       }
       await loadConversation(conversationId);
-      setConversations(await listProjectConversations(projectId!));
+      setConversations(projectId ? await listProjectConversations(projectId) : await listConversations());
       setStatus('Run finished.');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -247,7 +267,7 @@ export function App() {
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     const content = draft.trim();
-    if (!content || busy || !projectId) return;
+    if (!content || busy || (projectsAvailable && !projectId)) return;
     let conversationId = activeConversationId;
     if (!conversationId) {
       const conversation = await createConversation(projectId);
@@ -374,7 +394,7 @@ export function App() {
           )}
           <div className="row">
             <h2>Conversations</h2>
-            <button type="button" className="ghost compact" onClick={() => void onCreateConversation()} disabled={!projectId}>
+            <button type="button" className="ghost compact" onClick={() => void onCreateConversation()} disabled={projectsAvailable && !projectId}>
               New
             </button>
           </div>
@@ -451,8 +471,8 @@ export function App() {
               <textarea
                 id="draft"
                 value={draft}
-                placeholder={projectId ? 'Write to Atlas…' : 'Create or open a project first.'}
-                disabled={!projectId || busy}
+                placeholder={projectId || !projectsAvailable ? 'Write to Atlas…' : 'Create or open a project first.'}
+                disabled={(projectsAvailable && !projectId) || busy}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey) {
@@ -476,7 +496,7 @@ export function App() {
                   </option>
                 ))}
               </select>
-              <button className="send" type="submit" disabled={busy || !draft.trim() || !projectId}>
+              <button className="send" type="submit" disabled={busy || !draft.trim() || (projectsAvailable && !projectId)}>
                 {busy ? 'Running' : 'Send'}
               </button>
             </div>

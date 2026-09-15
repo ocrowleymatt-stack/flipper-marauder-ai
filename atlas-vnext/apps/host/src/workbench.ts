@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AuthService } from '@atlas-vnext/auth';
-import { AuthenticationError } from '@atlas-vnext/auth';
+import { AuthenticationError, SessionRevokedError } from '@atlas-vnext/auth';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { ContextService } from '@atlas-vnext/context';
 import type { FilesService } from '@atlas-vnext/files';
@@ -46,24 +46,49 @@ export async function resolveActor(req: IncomingMessage, options: WorkbenchHostO
   if (options.auth) {
     const cookie = options.auth.parseCookie(header(req, 'cookie'));
     if (!cookie) return null;
-    const resolved = await options.auth.resolve({
-      sessionId: cookie,
-      csrfToken: header(req, options.auth.csrfHeader),
-      origin: header(req, 'origin'),
-      mutating: isMutating(req.method),
-      claimedTenantId: null,
-    });
-    if (!resolved.actor.tenantId) return null;
-    return {
-      tenantId: resolved.actor.tenantId,
-      principalId: resolved.actor.principalId,
-      sessionId: resolved.session?.id ?? cookie,
-    };
+    try {
+      const resolved = await options.auth.resolve({
+        sessionId: cookie,
+        csrfToken: header(req, options.auth.csrfHeader),
+        origin: header(req, 'origin'),
+        mutating: isMutating(req.method),
+        claimedTenantId: null,
+      });
+      if (!resolved.actor.tenantId) return null;
+      return {
+        tenantId: resolved.actor.tenantId,
+        principalId: resolved.actor.principalId,
+        sessionId: resolved.session?.id ?? cookie,
+      };
+    } catch (err) {
+      if (err instanceof SessionRevokedError) return null;
+      if (err instanceof AuthenticationError && err.code === 'unauthenticated') return null;
+      throw err;
+    }
   }
   if (options.tenantId && options.principalId) {
     return { tenantId: options.tenantId, principalId: options.principalId, sessionId: null };
   }
   return null;
+}
+
+/** Cookie-free conversation access is only for hosts that did not wire auth. */
+export function conversationSessionMissing(
+  actor: WorkbenchActor | null,
+  options: WorkbenchHostOptions,
+): boolean {
+  return Boolean(options.auth && !actor);
+}
+
+export function isForeignHostSession(actor: WorkbenchActor | null, options: WorkbenchHostOptions): boolean {
+  return Boolean(actor && !sessionOwnsHostConversations(actor, options));
+}
+
+export function expireSessionCookie(res: ServerResponse, options: WorkbenchHostOptions): void {
+  if (!options.auth) return;
+  const parts = [`${options.auth.cookieName}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
+  if (options.production) parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
 }
 
 export async function handleWorkbench(
@@ -392,8 +417,23 @@ function inspectExecution(execution: {
     startedAt: execution.startedAt,
     completedAt: execution.completedAt,
     visibleOutputBegun: visibleBegun,
-    providerSwitchDisguised: false,
+    providerSwitchDisguised: disguisedProviderSwitch(execution.attempts),
   };
+}
+
+function disguisedProviderSwitch(
+  attempts: Array<{ provider: string; emittedVisibleOutput: boolean }>,
+): boolean {
+  let visibleProvider: string | null = null;
+  for (const attempt of attempts) {
+    if (attempt.emittedVisibleOutput) {
+      if (visibleProvider && visibleProvider !== attempt.provider) return true;
+      visibleProvider = attempt.provider;
+      continue;
+    }
+    if (visibleProvider && attempt.provider !== visibleProvider) return true;
+  }
+  return false;
 }
 
 async function handleGetSession(req: IncomingMessage, res: ServerResponse, options: WorkbenchHostOptions): Promise<void> {
@@ -418,22 +458,36 @@ async function handleGetSession(req: IncomingMessage, res: ServerResponse, optio
     });
     return;
   }
-  const resolved = await options.auth.resolve({
-    sessionId: cookie,
-    csrfToken: header(req, options.auth.csrfHeader),
-    origin: header(req, 'origin'),
-    mutating: false,
-  });
-  json(res, 200, {
-    authenticated: true,
-    bootstrapAllowed: false,
-    principal: {
-      id: resolved.actor.principalId,
-      kind: resolved.actor.kind,
-      tenantBound: Boolean(resolved.actor.tenantId),
-    },
-    csrfToken: resolved.csrfToken ?? null,
-  });
+  try {
+    const resolved = await options.auth.resolve({
+      sessionId: cookie,
+      csrfToken: header(req, options.auth.csrfHeader),
+      origin: header(req, 'origin'),
+      mutating: false,
+    });
+    json(res, 200, {
+      authenticated: true,
+      bootstrapAllowed: false,
+      principal: {
+        id: resolved.actor.principalId,
+        kind: resolved.actor.kind,
+        tenantBound: Boolean(resolved.actor.tenantId),
+      },
+      csrfToken: resolved.csrfToken ?? null,
+    });
+  } catch (err) {
+    if (err instanceof SessionRevokedError || (err instanceof AuthenticationError && err.code === 'unauthenticated')) {
+      expireSessionCookie(res, options);
+      json(res, 200, {
+        authenticated: false,
+        bootstrapAllowed: !options.production,
+        principal: null,
+        csrfToken: null,
+      });
+      return;
+    }
+    throw err;
+  }
 }
 
 async function handleIssueSession(req: IncomingMessage, res: ServerResponse, options: WorkbenchHostOptions): Promise<void> {
@@ -472,8 +526,14 @@ async function handleRevokeSession(req: IncomingMessage, res: ServerResponse, op
     json(res, 200, { revoked: false });
     return;
   }
-  await options.auth.revoke(cookie);
-  res.setHeader('Set-Cookie', `${options.auth.cookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  try {
+    await options.auth.revoke(cookie);
+  } catch (err) {
+    if (!(err instanceof SessionRevokedError) && !(err instanceof AuthenticationError && err.code === 'unauthenticated')) {
+      throw err;
+    }
+  }
+  expireSessionCookie(res, options);
   json(res, 200, { revoked: true });
 }
 

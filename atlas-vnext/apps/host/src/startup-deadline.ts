@@ -24,6 +24,32 @@ export async function raceStartup<T>(
 }
 
 /**
+ * Race a closeable open against the startup deadline.
+ *
+ * If the deadline fires while `work` is still pending, a later successful
+ * result is closed exactly once. A later failed open is ignored. Adopting the
+ * result on success does not close it. Cleanup is idempotent: `closeIfPossible`
+ * swallows close errors, and a second discard is a no-op once closed.
+ */
+export async function raceStartupCloseable<T>(
+  signal: AbortSignal | undefined,
+  work: Promise<T>,
+  budgetMs = 0,
+): Promise<T> {
+  if (!signal) return work;
+  if (signal.aborted) {
+    void work.then(closeIfPossible, () => undefined);
+    throw new StartupTimeoutError(budgetMs);
+  }
+  try {
+    return await raceStartup(signal, work, budgetMs);
+  } catch (err) {
+    void work.then(closeIfPossible, () => undefined);
+    throw err;
+  }
+}
+
+/**
  * One coherent startup deadline covering the whole `work` callback.
  * Nested stages share this signal; they do not each receive a fresh budget.
  */

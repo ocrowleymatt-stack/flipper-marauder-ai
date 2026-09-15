@@ -8,7 +8,7 @@ import {
   withStartupDeadline,
 } from './startup-deadline.ts';
 
-export { StartupTimeoutError, raceStartup, throwIfStartupAborted, withStartupDeadline } from './startup-deadline.ts';
+export { StartupTimeoutError, raceStartup, raceStartupCloseable, throwIfStartupAborted, withStartupDeadline } from './startup-deadline.ts';
 
 export async function bootSpine(
   options: ComposeOptions & {

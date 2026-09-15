@@ -5,6 +5,7 @@ import {
   ConversationRuntime,
   conversationChannel,
   memoryStores,
+  nextStreamPersistCheckpoint,
   STREAM_PERSIST_CHECKPOINT_BYTES,
   type CapabilityRouter,
   type ModelExecutor,
@@ -547,6 +548,56 @@ describe('true-delta streaming, bounded persistence, and abort teardown', () => 
     expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe('y'.repeat(bytes));
     expect(saveCalls).toBeGreaterThanOrEqual(3);
     expect(saveCalls).toBeLessThan(bytes / 10);
+  });
+
+  it('keeps cumulative persistence linear for a near-limit stream of thousands of tiny chunks', async () => {
+    const stores = memoryStores();
+    const persistPayloads: string[] = [];
+    const persistCalls = { append: 0, save: 0 };
+    const originalAppend = stores.messages.append.bind(stores.messages);
+    const originalSave = stores.messages.save.bind(stores.messages);
+    stores.messages.append = async (input) => {
+      persistCalls.append += 1;
+      persistPayloads.push(input.content);
+      return originalAppend(input);
+    };
+    stores.messages.save = async (message) => {
+      persistCalls.save += 1;
+      persistPayloads.push(message.content);
+      return originalSave(message);
+    };
+    const limit = 128 * 1024;
+    const byteCount = limit - 64;
+    const runtime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events: new MemoryEventBus(),
+      router: fakeRouter(() => decision('nexus/fast', ['openai/gpt-4o'])),
+      executor: fakeExecutor(async function* () {
+        for (let i = 0; i < byteCount; i += 1) yield { type: 'text', text: 'x' };
+      }),
+      maxGeneratedBytes: limit,
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'near-limit tiny');
+    const assembled = stream
+      .filter((event) => event.type === 'assistant.delta')
+      .map((event) => (event.type === 'assistant.delta' ? event.text : ''))
+      .join('');
+    expect(assembled).toBe('x'.repeat(byteCount));
+    expect(Buffer.byteLength(assembled, 'utf8')).toBe(byteCount);
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe(assembled);
+    const persistedBytes = persistPayloads.reduce((sum, text) => sum + Buffer.byteLength(text, 'utf8'), 0);
+    // Fixed 8 KiB prefix checkpoints would write 8+16+...+N ≈ N²/(2·8KiB) bytes
+    // (~1 MiB here). Geometric checkpoints stay within a small linear multiple of N.
+    expect(persistedBytes).toBeLessThan(byteCount * 3);
+    expect(persistedBytes).toBeGreaterThanOrEqual(byteCount);
+    expect(persistCalls.append + persistCalls.save).toBeLessThan(
+      Math.log2(byteCount / STREAM_PERSIST_CHECKPOINT_BYTES) + 6,
+    );
+    expect(nextStreamPersistCheckpoint(STREAM_PERSIST_CHECKPOINT_BYTES)).toBe(STREAM_PERSIST_CHECKPOINT_BYTES * 2);
   });
 
   it('treats cancellation after visible output as terminal and does not fail over', async () => {

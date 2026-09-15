@@ -30,6 +30,12 @@ export function header(req: IncomingMessage, name: string): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+export function matchingOrigin(req: IncomingMessage, allowedOrigins?: string[]): string | undefined {
+  const origin = header(req, 'origin');
+  if (origin && allowedOrigins?.includes(origin)) return origin;
+  return undefined;
+}
+
 export function json(res: ServerResponse, status: number, body: unknown): void {
   const payload = `${JSON.stringify(body)}\n`;
   res.writeHead(status, {

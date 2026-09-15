@@ -19,6 +19,7 @@ export {
   conversationChannel,
   estimateTokens,
   GeneratedOutputLimitError,
+  nextStreamPersistCheckpoint,
   STREAM_PERSIST_CHECKPOINT_BYTES,
 } from './runtime.ts';
 export type { ConversationRuntimeDeps } from './runtime.ts';

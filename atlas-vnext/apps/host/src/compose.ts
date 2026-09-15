@@ -48,7 +48,7 @@ import { MODEL_CATALOGUE } from './catalogue.ts';
 import { ShutdownController, readOperationalLimits, type HealthProbe } from './ops.ts';
 import { PlatformRateLimiter, ResourceGuard } from './limits.ts';
 import { readTimeoutContract, type TimeoutContract } from './production-config.ts';
-import { raceStartup, throwIfStartupAborted } from './startup-deadline.ts';
+import { raceStartup, raceStartupCloseable, throwIfStartupAborted } from './startup-deadline.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
@@ -93,6 +93,7 @@ export interface ComposeOptions {
   runtimeStatePath?: string | null;
   runpodClient?: RunPodClient;
   persistence?: PersistenceConfig;
+  openPersistence?: (config: PersistenceConfig) => Promise<PlatformPersistence>;
   casRoot?: string;
   signal?: AbortSignal;
 }
@@ -257,7 +258,8 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
 
   if (persistenceConfig.mode === 'postgres' || persistenceConfig.mode === 'memory') {
     throwIfStartupAborted(signal, budgetMs);
-    persistence = await raceStartup(signal, openPlatformPersistence(persistenceConfig), budgetMs);
+    const opening = (options.openPersistence ?? openPlatformPersistence)(persistenceConfig);
+    persistence = await raceStartupCloseable(signal, opening, budgetMs);
     remember(() => persistence?.close());
     if (!persistenceConfig.defaultTenantId) {
       await persistence.close();

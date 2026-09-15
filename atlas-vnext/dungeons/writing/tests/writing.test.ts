@@ -441,6 +441,36 @@ describe('Caspa writing service', () => {
     expect(events.some((event) => event.type === 'document' && event.document.status === 'committed')).toBe(false);
   });
 
+  it('seals a cancelled draft when the generate iterator is returned after visible output', async () => {
+    const { writing, actor, project } = await makeWriting(async function* (_prompt, signal) {
+      yield { type: 'text', text: 'Visible draft that must not become a version.' };
+      await new Promise<never>(() => {
+        void signal;
+      });
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'Return after visible' });
+    const iterator = writing.generate(actor, created.id, {
+      operation: 'create',
+      instruction: 'Write a sealed draft.',
+      expectedRevision: created.revision,
+    })[Symbol.asyncIterator]();
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) throw new Error('generate ended before visible draft');
+      const event = next.value;
+      if (event.type === 'draft.delta' && event.text.includes('Visible draft')) {
+        await iterator.return?.(undefined);
+        break;
+      }
+    }
+    const after = await writing.get(actor, created.id);
+    expect(after.status).toBe('failed');
+    expect(after.failure?.code).toBe('cancelled');
+    expect(after.currentVersion).toBe(0);
+    expect(after.content).toBe('');
+    expect(after.draft).toContain('Visible draft that must not become a version.');
+  });
+
   it('persists later streamed chunks before a multi-chunk provider failure is sealed', async () => {
     const { writing, actor, project } = await makeWriting(async function* () {
       yield { type: 'text', text: 'First visible chunk. ' };

@@ -30,8 +30,27 @@ import type {
 import { iterateUntilAborted } from './async-iterator.ts';
 import { assertExecutionTransition } from './transitions.ts';
 
-/** Persist assembled assistant text at most this often between the first write and finalization. */
+/** Base UTF-8 size for the first stream persist checkpoint. Later checkpoints double. */
 export const STREAM_PERSIST_CHECKPOINT_BYTES = 8 * 1024;
+
+/**
+ * Next persist threshold after `persistedBytes`. Thresholds grow geometrically
+ * (8 KiB, 16 KiB, 32 KiB, …) so cumulative saved payload stays O(n) while crash
+ * recovery still has a checkpointed prefix.
+ */
+export function nextStreamPersistCheckpoint(
+  persistedBytes: number,
+  baseBytes = STREAM_PERSIST_CHECKPOINT_BYTES,
+): number {
+  if (persistedBytes < baseBytes) return baseBytes;
+  let next = baseBytes;
+  while (next <= persistedBytes) {
+    const doubled = next * 2;
+    if (!Number.isFinite(doubled) || doubled <= next) return Number.MAX_SAFE_INTEGER;
+    next = doubled;
+  }
+  return next;
+}
 
 const DEFAULT_TITLE = 'New conversation';
 const TITLE_LIMIT = 72;
@@ -236,6 +255,7 @@ export class ConversationRuntime {
     let assembled = '';
     let generatedBytes = 0;
     let persistedGeneratedBytes = 0;
+    let nextPersistAt = STREAM_PERSIST_CHECKPOINT_BYTES;
     let usage: TokenUsage | null = null;
     let attempts: ExecutionAttempt[] = [];
     let startedMs = Date.now();
@@ -294,14 +314,15 @@ export class ConversationRuntime {
 
       const persistAssembled = async (force = false): Promise<void> => {
         if (!assistant) return;
-        const pendingBytes = generatedBytes - persistedGeneratedBytes;
-        if (!force && pendingBytes < STREAM_PERSIST_CHECKPOINT_BYTES) return;
+        if (generatedBytes === persistedGeneratedBytes) return;
+        if (!force && generatedBytes < nextPersistAt) return;
         assistant = await this.deps.messages.save({
           ...assistant,
           content: assembled,
           updatedAt: this.clock.now(),
         });
         persistedGeneratedBytes = generatedBytes;
+        nextPersistAt = nextStreamPersistCheckpoint(generatedBytes);
       };
 
       const acceptGenerated = (text: string): void => {
@@ -341,6 +362,7 @@ export class ConversationRuntime {
           assistant = first.message;
           execution = first.execution;
           persistedGeneratedBytes = generatedBytes;
+          nextPersistAt = nextStreamPersistCheckpoint(generatedBytes);
           events.push({ type: 'message', message: { ...assistant, content: '' } });
           events.push({ type: 'execution', execution });
         } else {

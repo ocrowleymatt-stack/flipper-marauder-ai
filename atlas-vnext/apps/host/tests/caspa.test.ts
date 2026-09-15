@@ -56,6 +56,10 @@ async function startCaspa() {
     writing: spine.writing,
     tenantId: spine.tenantId,
     principalId: spine.principalId,
+    flags: spine.flags,
+    killSwitches: spine.killSwitches,
+    resources: spine.resources,
+    timeouts: spine.timeouts,
   });
   servers.push(server);
   const bound = await listen(server, 0, '127.0.0.1');

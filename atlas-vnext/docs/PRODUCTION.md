@@ -174,8 +174,61 @@ This file + [RUNBOOKS.md](./RUNBOOKS.md) + [BACKUP-AND-RECOVERY.md](./BACKUP-AND
 
 ## 47. GO / NO-GO matrix
 
-See the matrix at the end of this document. GO requires no unresolved critical FAIL. Cutover is still human-gated if every row is PASS.
+Statuses: PASS / FAIL / CONDITIONAL / N/A. GO for **cutover** requires no unresolved critical FAIL. This table is not massaged.
+
+| # | Item | Status | Evidence / notes |
+|---|---|---|---|
+| 5 | Deployment topology | PASS | Documented actual host, web dist, PG, CAS, providers, RunPod. No invented K8s. |
+| 6 | Config/secrets | PASS | `readProductionHostConfig` fails loud; secrets not in public view/logs/frontend. |
+| 7 | Migrations | PASS | Empty→latest, v1→latest, interrupted rollback, checksum mismatch. Forward-only. |
+| 8 | DB connections | PASS | Pool timeouts; ≤2 transient retries; startup fail-closed; closed kernel rejects work. |
+| 9 | CAS durability | PASS | Hash stable, dedup, missing detected, divergence logged, never invents bytes. |
+| 10 | Backup/restore | PASS | pg_dump+CAS copy story; CI drill restores project/file/provenance/conversation/approval/document. Not a vendor WAL replica. |
+| 11 | Startup/restart/shutdown | PASS | Ready-before-listen in production; recoverOnStart; bounded graceful shutdown. |
+| 12 | Health | PASS | Live ≠ ready. Dead DB → 503. No secrets on health. |
+| 13 | Observability logs | PASS | Structured JSON + correlation ids; prompt/file/secret redaction tests. |
+| 14 | Metrics | PASS | Low-cardinality `/api/metrics`. No ID labels. In-process. |
+| 15 | Tracing | CONDITIONAL | Request correlation ALS HTTP→actor→route. No OpenTelemetry exporter. |
+| 16 | Error classification | PASS | Host mapper; cross-tenant → generic 404. |
+| 17 | Rate limiting | CONDITIONAL | Platform tenant/actor limiter. Per-process (multiplies across instances). |
+| 18 | Resource limits | PASS | Bodies, streams, runs, approvals, tool args, context files. Rejects deliberately. Per-process stream/run guards. |
+| 19 | Timeouts | PASS | HTTP/provider/RunPod/DB/tool/stream idle/startup/shutdown contract. |
+| 20 | Provider failure drills | PASS | Failover before visible; terminal after visible. No hardcoded fallback list. |
+| 21 | RunPod drills | PASS | Existing scheduler tests (unavailable, idle, recover). Not in Workbench/Caspa. |
+| 22 | Tool side-effect drills | PASS | Uncertain not replayed; restart; approval idempotency via durable rows. |
+| 23 | Auth/session | PASS | HttpOnly SameSite; Secure in production; CSRF; origin allowlist; logout; no prod bootstrap. |
+| 24 | Security headers | PASS | CSP, frame, nosniff, referrer, permissions-policy; HSTS if `ATLAS_TLS=1`. Vite CSS minify warning remains (pre-existing). |
+| 25 | CORS | PASS | No wildcard+credentials. SSE no longer forces `*`. |
+| 26 | Tenant isolation | PASS | Adapter + HTTP guessed-id smoke. Generic deny. |
+| 27 | Authority | PASS | Existing suite + kill-switch ≠ Authority. |
+| 28 | Workbench failure surfaces | PASS | Existing Workbench tests + host health/CSRF/CAS missing. |
+| 29 | Caspa | PASS | Existing Caspa tests + stale 409 smoke. Long commissions not pulled. |
+| 30 | Concurrency | PASS | Optimistic revisions, idempotency keys. Not process mutex. |
+| 31 | Multi-instance | CONDITIONAL | Durable: sessions/approvals/jobs/docs. In-memory: SSE fan-out, rate limits, RunPod `runtime.json` (single scheduler). |
+| 32 | Production build | PASS | lockfile, `npm ci`, frontend Vite, backend `tsx` as a runtime dependency. |
+| 33 | Container/packaging | PASS | Dockerfile sketch. No Kubernetes. |
+| 34 | Supply chain | PASS | 2 moderate vitest advisories classified informational; no critical/high runtime blockers patched. |
+| 35 | Retention/cleanup | PASS | Existing event/site GC; no silent user-data delete added. |
+| 36 | Privacy logging | PASS | Redaction tests include cookie/token/prompt. |
+| 37 | CI production gates | PASS | Existing gates kept; added production tests + config validate + advisories. |
+| 38 | Failure-injection harness | PASS | `tests/production/failure-injection.test.ts`. |
+| 39 | Rollback plan | PASS | App vs schema vs data vs cutover in RUNBOOKS. |
+| 40 | Cutover strategy | PASS | Greenfield; dual-write not justified. |
+| 41 | Cutover data | PASS | Classified. Legacy Mountain/Caspa not imported. |
+| 42 | Feature flags/kill switches | PASS | Env flags. Not Authority. |
+| 43 | Smoke 1–17 | PASS | `tests/production/smoke.test.ts`. |
+| 44 | Performance baseline | PASS | Startup budget; no pathological query rewrite. |
+| 45 | Ops docs | PASS | PRODUCTION.md describes what exists. |
+| 46 | Runbooks | PASS | RUNBOOKS.md. |
+| 47 | This matrix | PASS | Honest CONDITIONAL rows, no hidden FAIL. |
+| 48 | Human cutover gate | N/A (always human) | Even all-PASS is not permission to switch DNS. |
+| — | Stack merged to main | FAIL (cutover) | tools/Workbench/Caspa/this PR are unmerged. Cutover cannot proceed until a human merges the stack. |
+
+**Tranche verdict:** operational production **candidate** is defensible for a single-instance PostgreSQL+CAS deploy of this stack.
+
+**Cutover verdict: NO-GO** until a human merges the unmerged stack onto main and accepts the CONDITIONAL multi-instance/RunPod-scheduler rows.
 
 ## 48. Human gate
 
 Even if all tests pass, DNS, secret rotation, production migration apply, and traffic switch require a human.
+

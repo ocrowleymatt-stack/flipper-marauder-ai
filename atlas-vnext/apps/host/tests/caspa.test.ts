@@ -382,4 +382,111 @@ describe('Caspa writing dungeon host', () => {
     };
     expect(continued.currentVersion).toBe(2);
   });
+
+  it('fail-closes Caspa routes for missing and revoked sessions without opening CORS', async () => {
+    const { url, spine } = await startCaspa();
+    const session = await bootstrap(url);
+    const project = (await (
+      await fetch(`${url}/api/projects`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({ name: 'Auth recon' }),
+      })
+    ).json()) as { id: string };
+    const document = (await (
+      await fetch(`${url}/api/projects/${project.id}/documents`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({ title: 'Secret' }),
+      })
+    ).json()) as { id: string };
+
+    const missing = await fetch(`${url}/api/dungeons`, { headers: { origin: 'https://evil.example' } });
+    expect(missing.status).toBe(401);
+    expect(missing.headers.get('access-control-allow-origin')).not.toBe('*');
+
+    const listed = await fetch(`${url}/api/projects/${project.id}/documents`, {
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(listed.status).toBe(401);
+
+    const generate = await fetch(`${url}/api/documents/${document.id}/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+      body: JSON.stringify({ operation: 'create', instruction: 'steal', expectedRevision: 0 }),
+    });
+    expect(generate.status).toBe(401);
+
+    const cookie = /atlas_session=([^;]+)/.exec(session.cookie)?.[1];
+    expect(cookie).toBeTruthy();
+    await spine.auth.revoke(cookie!);
+
+    const revokedDungeons = await fetch(`${url}/api/dungeons`, { headers: { cookie: session.cookie } });
+    expect(revokedDungeons.status).toBe(401);
+    const revokedDocs = await fetch(`${url}/api/projects/${project.id}/documents`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(revokedDocs.status).toBe(401);
+    const revokedPatch = await fetch(`${url}/api/documents/${document.id}`, {
+      method: 'PATCH',
+      headers: auth(session),
+      body: JSON.stringify({ title: 'stolen', expectedRevision: 1 }),
+    });
+    expect([401, 403]).toContain(revokedPatch.status);
+
+    const preflight = await fetch(`${url}/api/documents/${document.id}`, {
+      method: 'OPTIONS',
+      headers: { origin: 'https://evil.example', 'access-control-request-method': 'PATCH' },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('access-control-allow-methods')).toMatch(/PATCH/);
+    expect(preflight.headers.get('access-control-allow-methods')).toMatch(/DELETE/);
+    expect(preflight.headers.get('access-control-allow-origin')).not.toBe('*');
+    expect(preflight.headers.get('access-control-allow-origin')).not.toBe('https://evil.example');
+  });
+
+  it('keeps file-mode conversation routes working when Caspa writing is unwired', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-caspa-file-'));
+    const spine = await composeSpine({
+      dataPath: join(dir, 'state.json'),
+      mode: 'mock',
+    });
+    spines.push(spine);
+    expect(spine.writing).toBeNull();
+    const server = createHost({
+      runtime: spine.runtime,
+      auth: spine.auth,
+      tools: spine.tools,
+      projects: spine.projects,
+      files: spine.files,
+      context: spine.context,
+      persistence: spine.persistence,
+      writing: spine.writing,
+      tenantId: spine.tenantId,
+      principalId: spine.principalId,
+    });
+    servers.push(server);
+    const bound = await listen(server, 0, '127.0.0.1');
+    const session = await bootstrap(bound.url);
+    const projects = await fetch(`${bound.url}/api/projects`, { headers: { cookie: session.cookie } });
+    expect(projects.status).toBe(503);
+    const dungeons = await fetch(`${bound.url}/api/dungeons`, { headers: { cookie: session.cookie } });
+    expect(dungeons.status).toBe(200);
+    const docs = await fetch(`${bound.url}/api/projects/proj_x/documents`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ title: 'Nope' }),
+    });
+    expect(docs.status).toBe(503);
+    const listed = await fetch(`${bound.url}/api/conversations`, { headers: { cookie: session.cookie } });
+    expect(listed.status).toBe(200);
+    const created = await fetch(`${bound.url}/api/conversations`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ title: 'file mode' }),
+    });
+    expect(created.status).toBe(201);
+    const anonymous = await fetch(`${bound.url}/api/conversations`);
+    expect(anonymous.status).toBe(401);
+  });
 });

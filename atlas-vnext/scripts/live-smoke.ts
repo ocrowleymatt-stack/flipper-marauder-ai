@@ -34,7 +34,8 @@ for await (const event of spine.runtime.sendMessage(conversation.id, {
   capability: 'nexus/fast',
 })) {
   types.push(event.type);
-  if (event.type === 'message.delta') text = event.content;
+  if (event.type === 'message.delta') text += event.content;
+  if (event.type === 'assistant.completed') text = event.text;
   if (event.type === 'error') {
     console.error('structured failure', event.failure);
     process.exit(1);

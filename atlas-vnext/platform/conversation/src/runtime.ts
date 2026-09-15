@@ -27,7 +27,11 @@ import type {
   ToolOrchestrator,
   UnitOfWork,
 } from './ports.ts';
+import { iterateUntilAborted } from './async-iterator.ts';
 import { assertExecutionTransition } from './transitions.ts';
+
+/** Persist assembled assistant text at most this often between the first write and finalization. */
+export const STREAM_PERSIST_CHECKPOINT_BYTES = 8 * 1024;
 
 const DEFAULT_TITLE = 'New conversation';
 const TITLE_LIMIT = 72;
@@ -228,9 +232,19 @@ export class ConversationRuntime {
     const controller = new AbortController();
     this.inflight.set(executionId, controller);
 
+    let assistant: Message | null = null;
+    let assembled = '';
+    let generatedBytes = 0;
+    let persistedGeneratedBytes = 0;
+    let usage: TokenUsage | null = null;
+    let attempts: ExecutionAttempt[] = [];
+    let startedMs = Date.now();
+    let settled = false;
+
     try {
       if (controller.signal.aborted) {
         execution = await this.finishCancelled(execution, [], null);
+        settled = true;
         yield { type: 'execution', execution };
         yield { type: 'done' };
         return;
@@ -257,6 +271,7 @@ export class ConversationRuntime {
           failureReason: failure('routing_failed', message, false),
         });
         await this.publish(conversationId, 'execution.failed', { executionId, code: 'routing_failed' });
+        settled = true;
         yield { type: 'execution', execution };
         yield { type: 'execution.failed', executionId, failure: execution.failureReason ?? failure('routing_failed', message, false) };
         yield { type: 'error', failure: execution.failureReason ?? failure('routing_failed', message, false) };
@@ -277,10 +292,17 @@ export class ConversationRuntime {
       });
       yield { type: 'execution', execution };
 
-      let assistant: Message | null = null;
-      let assembled = '';
-      let generatedBytes = 0;
-      let usage: TokenUsage | null = null;
+      const persistAssembled = async (force = false): Promise<void> => {
+        if (!assistant) return;
+        const pendingBytes = generatedBytes - persistedGeneratedBytes;
+        if (!force && pendingBytes < STREAM_PERSIST_CHECKPOINT_BYTES) return;
+        assistant = await this.deps.messages.save({
+          ...assistant,
+          content: assembled,
+          updatedAt: this.clock.now(),
+        });
+        persistedGeneratedBytes = generatedBytes;
+      };
 
       const acceptGenerated = (text: string): void => {
         const extra = utf8ByteLength(text);
@@ -290,8 +312,46 @@ export class ConversationRuntime {
         }
         generatedBytes += extra;
       };
-      const attempts: ExecutionAttempt[] = [];
-      const startedMs = Date.now();
+
+      const applyText = async (text: string): Promise<ConversationStreamEvent[]> => {
+        acceptGenerated(text);
+        assembled += text;
+        const events: ConversationStreamEvent[] = [];
+        if (!assistant) {
+          const first = await this.transact(async () => {
+            const message = await this.deps.messages.append({
+              conversationId,
+              role: 'assistant',
+              content: assembled,
+              executionId,
+            });
+            const nextExecution = await this.saveExecution({
+              ...execution,
+              assistantMessageId: message.id,
+              attempts: [...attempts],
+              selectedProvider: execution.selectedProvider,
+              selectedModel: execution.selectedModel,
+            });
+            await this.publish(conversationId, 'message.appended', {
+              messageId: message.id,
+              role: 'assistant',
+            });
+            return { message, execution: nextExecution };
+          });
+          assistant = first.message;
+          execution = first.execution;
+          persistedGeneratedBytes = generatedBytes;
+          events.push({ type: 'message', message: { ...assistant, content: '' } });
+          events.push({ type: 'execution', execution });
+        } else {
+          await persistAssembled(false);
+        }
+        events.push({ type: 'assistant.delta', executionId, text });
+        events.push({ type: 'message.delta', messageId: assistant.id, content: text });
+        return events;
+      };
+
+      startedMs = Date.now();
       const pending: ConversationStreamEvent[] = [];
       const toolResults: Array<{
         callId: string;
@@ -363,10 +423,13 @@ export class ConversationRuntime {
       };
 
       try {
-        for await (const chunk of this.deps.executor.execute(
-          decision,
-          { prompt: content, systemPrompt: input.systemPrompt, signal: controller.signal, traceId: decision.traceId },
-          observer,
+        for await (const chunk of iterateUntilAborted(
+          this.deps.executor.execute(
+            decision,
+            { prompt: content, systemPrompt: input.systemPrompt, signal: controller.signal, traceId: decision.traceId },
+            observer,
+          ),
+          controller.signal,
         )) {
           for (const event of pending.splice(0)) yield event;
           if (chunk.type === 'usage') {
@@ -433,47 +496,14 @@ export class ConversationRuntime {
           if (chunk.type !== 'text' || chunk.text.length === 0) {
             continue;
           }
-          acceptGenerated(chunk.text);
-          assembled += chunk.text;
-          if (!assistant) {
-            const first = await this.transact(async () => {
-              const message = await this.deps.messages.append({
-                conversationId,
-                role: 'assistant',
-                content: assembled,
-                executionId,
-              });
-              const nextExecution = await this.saveExecution({
-                ...execution,
-                assistantMessageId: message.id,
-                attempts: [...attempts],
-                selectedProvider: execution.selectedProvider,
-                selectedModel: execution.selectedModel,
-              });
-              await this.publish(conversationId, 'message.appended', {
-                messageId: message.id,
-                role: 'assistant',
-              });
-              return { message, execution: nextExecution };
-            });
-            assistant = first.message;
-            execution = first.execution;
-            yield { type: 'message', message: assistant };
-            yield { type: 'execution', execution };
-          } else {
-            assistant = await this.deps.messages.save({
-              ...assistant,
-              content: assembled,
-              updatedAt: this.clock.now(),
-            });
-          }
-          yield { type: 'assistant.delta', executionId, text: assembled };
-          yield { type: 'message.delta', messageId: assistant.id, content: assembled };
+          for (const event of await applyText(chunk.text)) yield event;
         }
         for (const event of pending.splice(0)) yield event;
 
         if (controller.signal.aborted) {
+          await persistAssembled(true);
           execution = await this.finishCancelled(execution, attempts, usage, Date.now() - startedMs);
+          settled = true;
           yield { type: 'execution', execution };
           yield { type: 'done' };
           return;
@@ -482,16 +512,19 @@ export class ConversationRuntime {
         const canContinue =
           toolResults.length > 0 && toolResults.every((row) => row.status === 'succeeded');
         if (canContinue && !controller.signal.aborted) {
-          for await (const chunk of this.deps.executor.execute(
-            decision,
-            {
-              prompt: content,
-              systemPrompt: input.systemPrompt,
-              signal: controller.signal,
-              traceId: decision.traceId,
-              priorToolResults: toolResults,
-            },
-            observer,
+          for await (const chunk of iterateUntilAborted(
+            this.deps.executor.execute(
+              decision,
+              {
+                prompt: content,
+                systemPrompt: input.systemPrompt,
+                signal: controller.signal,
+                traceId: decision.traceId,
+                priorToolResults: toolResults,
+              },
+              observer,
+            ),
+            controller.signal,
           )) {
             for (const event of pending.splice(0)) yield event;
             if (chunk.type === 'usage') {
@@ -500,36 +533,22 @@ export class ConversationRuntime {
               continue;
             }
             if (chunk.type === 'text' && chunk.text.length > 0) {
-              acceptGenerated(chunk.text);
-              assembled += chunk.text;
-              if (!assistant) {
-                assistant = await this.deps.messages.append({
-                  conversationId,
-                  role: 'assistant',
-                  content: assembled,
-                  executionId,
-                });
-                execution = await this.saveExecution({
-                  ...execution,
-                  assistantMessageId: assistant.id,
-                  attempts: [...attempts],
-                });
-                yield { type: 'message', message: assistant };
-                yield { type: 'execution', execution };
-              } else {
-                assistant = await this.deps.messages.save({
-                  ...assistant,
-                  content: assembled,
-                  updatedAt: this.clock.now(),
-                });
-              }
-              yield { type: 'assistant.delta', executionId, text: assembled };
-              yield { type: 'message.delta', messageId: assistant.id, content: assembled };
+              for (const event of await applyText(chunk.text)) yield event;
             }
           }
           for (const event of pending.splice(0)) yield event;
         }
 
+        if (controller.signal.aborted) {
+          await persistAssembled(true);
+          execution = await this.finishCancelled(execution, attempts, usage, Date.now() - startedMs);
+          settled = true;
+          yield { type: 'execution', execution };
+          yield { type: 'done' };
+          return;
+        }
+
+        await persistAssembled(true);
         execution = await this.transition(
           { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
           'completed',
@@ -545,6 +564,7 @@ export class ConversationRuntime {
           provider: execution.selectedProvider,
           model: execution.selectedModel,
         }, `execution:${executionId}:completed`);
+        settled = true;
         yield {
           type: 'execution.completed',
           executionId,
@@ -559,6 +579,7 @@ export class ConversationRuntime {
         if (limited && !controller.signal.aborted) {
           controller.abort();
         }
+        await persistAssembled(true);
         const aborted = controller.signal.aborted && !limited;
         const message = err instanceof Error ? err.message : String(err);
         const visible = attempts.some((attempt) => attempt.emittedVisibleOutput) || assembled.length > 0;
@@ -581,6 +602,7 @@ export class ConversationRuntime {
           code,
           visibleOutput: visible,
         }, `execution:${executionId}:${status}`);
+        settled = true;
         yield { type: 'execution', execution };
         if (status === 'failed') {
           yield { type: 'execution.failed', executionId, failure: structured };
@@ -589,6 +611,23 @@ export class ConversationRuntime {
         yield { type: 'done' };
       }
     } finally {
+      try {
+        if (!settled) {
+          const pendingAssistant = assistant;
+          if (pendingAssistant !== null) {
+            assistant = await this.deps.messages.save({
+              ...(pendingAssistant as Message),
+              content: assembled,
+              updatedAt: this.clock.now(),
+            });
+          }
+        }
+        if (!settled && (execution.status === 'queued' || execution.status === 'running')) {
+          execution = await this.finishCancelled(execution, attempts, usage, Date.now() - startedMs);
+        }
+      } catch {
+        // Teardown must still drop inflight even if a late persist fails.
+      }
       this.inflight.delete(executionId);
     }
   }

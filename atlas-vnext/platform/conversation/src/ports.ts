@@ -84,7 +84,7 @@ export interface ModelExecutor {
       onAttempt(attempt: Pick<ExecutionAttempt, 'index' | 'provider' | 'model' | 'outcome' | 'error' | 'emittedVisibleOutput'>): void;
       onSelected?(selection: { provider: string; model: string }): void;
     },
-  ): AsyncGenerator<StreamChunk>;
+  ): AsyncIterable<StreamChunk>;
 }
 
 export interface ToolOrchestrator {

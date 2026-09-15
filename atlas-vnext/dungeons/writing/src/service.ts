@@ -303,7 +303,16 @@ export class WritingService {
       })) {
         yield { type: 'execution', event };
         if (event.type === 'execution') executionId = event.execution.id;
-        if (event.type === 'assistant.delta' || event.type === 'assistant.completed') {
+        if (event.type === 'assistant.delta') {
+          draft += event.text;
+          if (!visible && draft.trim()) {
+            visible = true;
+            await persistAccumulatedDraft();
+            yield { type: 'document', document: await this.present(actor, record, { content: currentText, draft }) };
+          }
+          yield { type: 'draft.delta', documentId: record.id, text: draft };
+        }
+        if (event.type === 'assistant.completed') {
           draft = event.text;
           if (!visible && draft.trim()) {
             visible = true;

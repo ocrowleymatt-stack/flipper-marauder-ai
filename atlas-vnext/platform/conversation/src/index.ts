@@ -14,5 +14,17 @@ export type {
   UnitOfWork,
 } from './ports.ts';
 export { memoryStores } from './memory.ts';
-export { ConversationRuntime, conversationChannel, estimateTokens, GeneratedOutputLimitError } from './runtime.ts';
+export {
+  ConversationRuntime,
+  conversationChannel,
+  estimateTokens,
+  GeneratedOutputLimitError,
+  STREAM_PERSIST_CHECKPOINT_BYTES,
+} from './runtime.ts';
 export type { ConversationRuntimeDeps } from './runtime.ts';
+export {
+  closeAsyncIteratorBounded,
+  delayUnref,
+  iterateUntilAborted,
+  ITERATOR_TEARDOWN_BUDGET_MS,
+} from './async-iterator.ts';

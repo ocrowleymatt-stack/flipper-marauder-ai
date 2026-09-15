@@ -108,16 +108,16 @@ describe('P1: ATLAS_MAX_GENERATED_BYTES bounds streamed output', () => {
     started.spine.runtime.sendMessage = (async function* () {
       yield { type: 'execution', execution: { id: 'ex_small', status: 'running' } } as never;
       yield { type: 'assistant.delta', executionId: 'ex_small', text: 'ab' } as never;
-      yield { type: 'assistant.delta', executionId: 'ex_small', text: 'abc' } as never;
-      yield { type: 'assistant.delta', executionId: 'ex_small', text: 'abcd' } as never;
-      yield { type: 'assistant.delta', executionId: 'ex_small', text: 'abcde' } as never;
+      yield { type: 'assistant.delta', executionId: 'ex_small', text: 'c' } as never;
+      yield { type: 'assistant.delta', executionId: 'ex_small', text: 'd' } as never;
+      yield { type: 'assistant.delta', executionId: 'ex_small', text: 'e' } as never;
       yield { type: 'done' } as never;
     }) as ConversationRuntime['sendMessage'];
     const { stream } = await openMessageStream(started.url, 'chunks');
     const frames = await readSse(stream);
     const deltas = frames.filter((frame) => frame.event === 'assistant.delta');
     expect(deltas).toHaveLength(3);
-    expect((deltas.at(-1)?.data as { text?: string }).text).toBe('abcd');
+    expect((deltas.at(-1)?.data as { text?: string }).text).toBe('d');
     expect(frames.find((frame) => frame.event === 'error')?.data).toMatchObject({
       failure: { code: 'payload_too_large' },
     });
@@ -144,11 +144,9 @@ describe('P1: ATLAS_MAX_GENERATED_BYTES bounds streamed output', () => {
     let continued = 0;
     started.spine.runtime.sendMessage = (async function* () {
       yield { type: 'execution', execution: { id: 'ex_runaway', status: 'running' } } as never;
-      let text = '';
       for (let i = 0; i < 10_000; i += 1) {
-        text += 'x';
         continued = i;
-        yield { type: 'assistant.delta', executionId: 'ex_runaway', text } as never;
+        yield { type: 'assistant.delta', executionId: 'ex_runaway', text: 'x' } as never;
       }
     }) as ConversationRuntime['sendMessage'];
     const { stream } = await openMessageStream(started.url, 'runaway');
@@ -177,7 +175,7 @@ describe('P1: ATLAS_MAX_GENERATED_BYTES bounds streamed output', () => {
       return (async function* () {
         yield { type: 'execution', execution: { id: 'ex_limit_cancel', status: 'running' } } as never;
         yield { type: 'assistant.delta', executionId: 'ex_limit_cancel', text: 'abcdefgh' } as never;
-        yield { type: 'assistant.delta', executionId: 'ex_limit_cancel', text: 'abcdefghi' } as never;
+        yield { type: 'assistant.delta', executionId: 'ex_limit_cancel', text: 'i' } as never;
         await new Promise<void>((resolve) => hangReleases.push(resolve));
       })();
     }) as ConversationRuntime['sendMessage'];
@@ -201,7 +199,7 @@ describe('P1: ATLAS_MAX_GENERATED_BYTES bounds streamed output', () => {
     started.spine.runtime.sendMessage = (async function* () {
       yield { type: 'execution', execution: { id: 'ex_limit_disconnect', status: 'running' } } as never;
       yield { type: 'assistant.delta', executionId: 'ex_limit_disconnect', text: 'abcdefgh' } as never;
-      yield { type: 'assistant.delta', executionId: 'ex_limit_disconnect', text: 'abcdefghi' } as never;
+      yield { type: 'assistant.delta', executionId: 'ex_limit_disconnect', text: 'i' } as never;
       await new Promise<void>((resolve) => hangReleases.push(resolve));
     }) as ConversationRuntime['sendMessage'];
     const abort = new AbortController();

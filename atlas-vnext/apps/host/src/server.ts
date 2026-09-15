@@ -1,5 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { GeneratedOutputLimitError, type ConversationRuntime } from '@atlas-vnext/conversation';
+import {
+  closeAsyncIteratorBounded,
+  delayUnref,
+  GeneratedOutputLimitError,
+  ITERATOR_TEARDOWN_BUDGET_MS,
+  type ConversationRuntime,
+} from '@atlas-vnext/conversation';
 import type { ProviderHealth } from '@atlas-vnext/contracts';
 import { sanitizeText, type RuntimeSnapshot } from '@atlas-vnext/execution';
 import type { AuthService } from '@atlas-vnext/auth';
@@ -553,10 +559,22 @@ async function pipeSse(
   let finished = false;
   let assistantBytes = 0;
   let reasoningBytes = 0;
+  let pendingNext: Promise<unknown> | undefined;
+  let iteratorClosed = false;
 
   const disarmIdle = (): void => {
     if (idle) clearTimeout(idle);
     idle = undefined;
+  };
+
+  const closeIterator = async (): Promise<void> => {
+    if (iteratorClosed) return;
+    iteratorClosed = true;
+    const pending = pendingNext;
+    if (pending) {
+      await Promise.race([Promise.resolve(pending).then(() => undefined, () => undefined), delayUnref(ITERATOR_TEARDOWN_BUDGET_MS)]);
+    }
+    await closeAsyncIteratorBounded(iterator);
   };
 
   const terminate = (reason: 'idle_timeout' | 'disconnect' | 'output_limit'): Promise<void> => {
@@ -568,6 +586,7 @@ async function pipeSse(
         } catch {
           // Runtime cancellation is idempotent; never fail the HTTP teardown.
         }
+        await closeIterator();
         if (reason === 'idle_timeout' && !res.writableEnded && !res.destroyed) {
           writeSse(res, 'error', {
             type: 'error',
@@ -605,6 +624,7 @@ async function pipeSse(
         (result) => ({ kind: 'next' as const, result }),
         (error: unknown) => ({ kind: 'error' as const, error }),
       );
+      pendingNext = next;
       const idleWait = new Promise<{ kind: 'idle' }>((resolve) => {
         idle = setTimeout(() => resolve({ kind: 'idle' }), idleMs);
       });
@@ -618,6 +638,7 @@ async function pipeSse(
         await terminate('disconnect');
         return;
       }
+      pendingNext = undefined;
       if (winner.kind === 'error') {
         throw winner.error;
       }
@@ -647,6 +668,7 @@ async function pipeSse(
     } else if (!res.writableEnded) {
       res.end();
     }
+    await closeIterator();
   }
 }
 
@@ -656,13 +678,19 @@ function projectGeneratedBytes(
   reasoningBytes: number,
 ): { assistantBytes: number; reasoningBytes: number; total: number } | null {
   const record = event as { type: string; text?: unknown; content?: unknown };
-  if (record.type === 'assistant.delta' || record.type === 'assistant.completed') {
+  if (record.type === 'assistant.delta') {
+    const extra = typeof record.text === 'string' ? Buffer.byteLength(record.text, 'utf8') : 0;
+    const nextAssistant = assistantBytes + extra;
+    return { assistantBytes: nextAssistant, reasoningBytes, total: nextAssistant + reasoningBytes };
+  }
+  if (record.type === 'assistant.completed') {
     const bytes = typeof record.text === 'string' ? Buffer.byteLength(record.text, 'utf8') : 0;
-    return { assistantBytes: bytes, reasoningBytes, total: bytes + reasoningBytes };
+    const nextAssistant = Math.max(assistantBytes, bytes);
+    return { assistantBytes: nextAssistant, reasoningBytes, total: nextAssistant + reasoningBytes };
   }
   if (record.type === 'message.delta') {
-    const bytes = typeof record.content === 'string' ? Buffer.byteLength(record.content, 'utf8') : 0;
-    return { assistantBytes: bytes, reasoningBytes, total: bytes + reasoningBytes };
+    // True incremental text is already counted on assistant.delta; do not double-count.
+    return null;
   }
   if (record.type === 'reasoning.delta') {
     const extra = typeof record.text === 'string' ? Buffer.byteLength(record.text, 'utf8') : 0;

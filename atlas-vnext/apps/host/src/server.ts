@@ -1,24 +1,34 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { createReadStream, existsSync, statSync } from 'node:fs';
-import { extname, join, normalize, resolve } from 'node:path';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { ProviderHealth } from '@atlas-vnext/contracts';
 import { sanitizeText, type RuntimeSnapshot } from '@atlas-vnext/execution';
 import type { AuthService } from '@atlas-vnext/auth';
-import type { ToolEngine } from '@atlas-vnext/tools';
 import { CsrfError, OriginError, AuthenticationError } from '@atlas-vnext/auth';
+import type { ContextService } from '@atlas-vnext/context';
+import type { FilesService } from '@atlas-vnext/files';
+import type { PlatformPersistence } from '@atlas-vnext/persistence';
+import type { ProjectService } from '@atlas-vnext/projects';
+import type { ToolEngine } from '@atlas-vnext/tools';
+import { ToolError } from '@atlas-vnext/tools';
 import { DEFAULT_OPERATIONAL_LIMITS } from '@atlas-vnext/contracts';
 import { readiness, SECURITY_HEADERS, type HealthProbe, type ShutdownController } from './ops.ts';
-
-const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-};
+import {
+  header,
+  isMutating,
+  json,
+  readJson,
+  serveStatic,
+  sseHeaders,
+  urlPath,
+  urlQuery,
+  writeSse,
+} from './http.ts';
+import {
+  conversationSessionMissing,
+  handleWorkbench,
+  isForeignHostSession,
+  resolveActor,
+} from './workbench.ts';
 
 export interface HostOptions {
   runtime: ConversationRuntime;
@@ -32,9 +42,15 @@ export interface HostOptions {
   shutdown?: ShutdownController;
   auth?: AuthService;
   tools?: ToolEngine;
+  projects?: ProjectService | null;
+  files?: FilesService | null;
+  context?: ContextService | null;
+  persistence?: PlatformPersistence | null;
   tenantId?: string;
   principalId?: string;
+  production?: boolean;
   maxRequestBytes?: number;
+  maxUploadBytes?: number;
   allowedOrigins?: string[];
 }
 
@@ -46,7 +62,7 @@ export function createHost(options: HostOptions): Server {
 
 async function handle(req: IncomingMessage, res: ServerResponse, options: HostOptions): Promise<void> {
   applySecurityHeaders(res);
-  cors(res, req, options.allowedOrigins);
+  cors(res, req, options);
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
@@ -93,21 +109,75 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
 
     await enforceCsrfIfNeeded(req, options);
 
+    if (await handleWorkbench(req, res, options)) return;
+
+    const conversationActor = await resolveActor(req, options);
+
     if (req.method === 'POST' && urlPath(req) === '/api/conversations') {
+      if (conversationSessionMissing(conversationActor, options)) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      if (isForeignHostSession(conversationActor, options)) {
+        json(res, 404, { error: 'Permission denied.' });
+        return;
+      }
       const body = await readJson(req, options.maxRequestBytes);
+      const projectId = typeof body.projectId === 'string' ? body.projectId : undefined;
+      if (projectId) {
+        const actor = conversationActor;
+        if (!actor) {
+          json(res, 401, { error: 'Authentication required.' });
+          return;
+        }
+        if (!options.projects) {
+          json(res, 503, { error: 'Projects require platform persistence.' });
+          return;
+        }
+        const project = await options.projects.get(actor, projectId);
+        if (!project) {
+          json(res, 404, { error: 'Project not found.' });
+          return;
+        }
+      }
       const conversation = await options.runtime.createConversation({
         title: typeof body.title === 'string' ? body.title : undefined,
+        projectId: projectId ?? null,
       });
       json(res, 201, conversation);
       return;
     }
     if (req.method === 'GET' && urlPath(req) === '/api/conversations') {
-      json(res, 200, await options.runtime.listConversations());
+      if (conversationSessionMissing(conversationActor, options)) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      if (isForeignHostSession(conversationActor, options)) {
+        json(res, 200, []);
+        return;
+      }
+      const projectId = urlQuery(req).get('projectId');
+      const conversations = await options.runtime.listConversations();
+      json(
+        res,
+        200,
+        projectId
+          ? conversations.filter((item) => item.projectId === projectId || item.workspaceId === projectId)
+          : conversations,
+      );
       return;
     }
     const pathname = urlPath(req);
     const conversationMatch = pathname.match(/^\/api\/conversations\/([^/]+)$/);
     if (req.method === 'GET' && conversationMatch) {
+      if (conversationSessionMissing(conversationActor, options)) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      if (isForeignHostSession(conversationActor, options)) {
+        json(res, 404, { error: 'Conversation not found.' });
+        return;
+      }
       const snapshot = await options.runtime.getSnapshot(decodeURIComponent(conversationMatch[1]!));
       if (!snapshot) {
         json(res, 404, { error: 'Conversation not found.' });
@@ -118,6 +188,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
     }
     const messageMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/messages$/);
     if (req.method === 'POST' && messageMatch) {
+      if (conversationSessionMissing(conversationActor, options)) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      if (isForeignHostSession(conversationActor, options)) {
+        json(res, 404, { error: 'Conversation not found.' });
+        return;
+      }
       const body = await readJson(req, options.maxRequestBytes);
       const content = typeof body.content === 'string' ? body.content : '';
       const capability = typeof body.capability === 'string' ? body.capability : 'nexus/fast';
@@ -134,6 +212,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
     }
     const cancelMatch = pathname.match(/^\/api\/executions\/([^/]+)\/cancel$/);
     if (req.method === 'POST' && cancelMatch) {
+      if (conversationSessionMissing(conversationActor, options)) {
+        json(res, 401, { error: 'Authentication required.' });
+        return;
+      }
+      if (isForeignHostSession(conversationActor, options)) {
+        json(res, 404, { error: 'Execution not found.' });
+        return;
+      }
       const execution = await options.runtime.cancel(decodeURIComponent(cancelMatch[1]!));
       json(res, 200, execution);
       return;
@@ -141,22 +227,22 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
 
     const toolMatch = pathname.match(/^\/api\/tools\/([^/]+)$/);
     if (req.method === 'GET' && toolMatch && options.tools) {
-      const actor = await resolveToolActor(req, options);
+      const actor = await resolveActor(req, options);
       if (!actor) {
         json(res, 401, { error: 'Authentication required.' });
         return;
       }
-      const invocation = await options.tools.get(actor, decodeURIComponent(toolMatch[1]!));
-      if (!invocation) {
+      const presented = await options.tools.presentById(actor, decodeURIComponent(toolMatch[1]!));
+      if (!presented) {
         json(res, 404, { error: 'Permission denied.' });
         return;
       }
-      json(res, 200, invocation);
+      json(res, 200, presented);
       return;
     }
     const approveMatch = pathname.match(/^\/api\/tools\/([^/]+)\/(approve|deny)$/);
     if (req.method === 'POST' && approveMatch && options.tools) {
-      const actor = await resolveToolActor(req, options);
+      const actor = await resolveActor(req, options);
       if (!actor) {
         json(res, 401, { error: 'Authentication required.' });
         return;
@@ -168,7 +254,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
         approveMatch[2] === 'approve' ? 'approved' : 'denied',
         typeof body.reason === 'string' ? body.reason : undefined,
       );
-      json(res, 200, { invocation: result.invocation, output: result.output ?? null });
+      json(res, 200, {
+        invocation: await options.tools.present(actor, result.invocation),
+        output: result.output ?? null,
+      });
       return;
     }
 
@@ -184,6 +273,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
       });
       return;
     }
+    if (err instanceof ToolError) {
+      json(res, err.message === 'Permission denied.' || err.code === 'not_found' ? 404 : 400, { error: err.message });
+      return;
+    }
     const message = sanitizeText(err instanceof Error ? err.message : String(err));
     if (!res.headersSent) {
       json(res, 500, { error: message });
@@ -197,39 +290,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
   }
 }
 
-function urlPath(req: IncomingMessage): string {
-  return new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
-}
-
-function isMutating(method?: string): boolean {
-  return method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
-}
-
-async function resolveToolActor(
-  req: IncomingMessage,
-  options: HostOptions,
-): Promise<{ tenantId: string; principalId: string } | null> {
-  if (options.auth) {
-    const cookie = options.auth.parseCookie(header(req, 'cookie'));
-    if (cookie) {
-      const resolved = await options.auth.resolve({
-        sessionId: cookie,
-        csrfToken: header(req, options.auth.csrfHeader),
-        origin: header(req, 'origin'),
-        mutating: isMutating(req.method),
-      });
-      if (!resolved.actor.tenantId) return null;
-      return { tenantId: resolved.actor.tenantId, principalId: resolved.actor.principalId };
-    }
-  }
-  if (options.tenantId && options.principalId) {
-    return { tenantId: options.tenantId, principalId: options.principalId };
-  }
-  return null;
-}
-
 async function enforceCsrfIfNeeded(req: IncomingMessage, options: HostOptions): Promise<void> {
   if (!options.auth || !isMutating(req.method)) return;
+  const pathname = urlPath(req);
+  if (pathname === '/api/session' || pathname === '/api/session/revoke') return;
   const cookie = options.auth.parseCookie(header(req, 'cookie'));
   if (!cookie) return;
   await options.auth.resolve({
@@ -240,83 +304,30 @@ async function enforceCsrfIfNeeded(req: IncomingMessage, options: HostOptions): 
   });
 }
 
-function header(req: IncomingMessage, name: string): string | undefined {
-  const value = req.headers[name];
-  return Array.isArray(value) ? value[0] : value;
-}
-
 function applySecurityHeaders(res: ServerResponse): void {
   for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
     res.setHeader(key, value);
   }
 }
 
-function cors(res: ServerResponse, req: IncomingMessage, allowedOrigins?: string[]): void {
+function cors(res: ServerResponse, req: IncomingMessage, options: HostOptions): void {
   const origin = header(req, 'origin');
+  const allowedOrigins = options.allowedOrigins;
   if (allowedOrigins?.length) {
     if (origin && allowedOrigins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Vary', 'Origin');
+    } else {
       res.setHeader('Vary', 'Origin');
     }
-  } else {
+  } else if (!options.auth) {
     res.setHeader('Access-Control-Allow-Origin', '*');
+  } else {
+    res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Headers', 'content-type, x-atlas-csrf');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-}
-
-function json(res: ServerResponse, status: number, body: unknown): void {
-  const payload = `${JSON.stringify(body)}\n`;
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(payload),
-  });
-  res.end(payload);
-}
-
-function sseHeaders(res: ServerResponse): void {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
-  });
-  res.write(': connected\n\n');
-}
-
-function writeSse(res: ServerResponse, event: string, data: unknown): void {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-}
-
-async function readJson(req: IncomingMessage, maxBytes = DEFAULT_OPERATIONAL_LIMITS.maxRequestBytes): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += buf.length;
-    if (size > maxBytes) throw new Error('Request body too large.');
-    chunks.push(buf);
-  }
-  if (chunks.length === 0) return {};
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
-  if (!raw) return {};
-  const parsed = JSON.parse(raw) as unknown;
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error('JSON object body required.');
-  }
-  return parsed as Record<string, unknown>;
-}
-
-function serveStatic(res: ServerResponse, staticDir: string, pathname: string): boolean {
-  const root = resolve(staticDir);
-  const relativePath = pathname === '/' ? '/index.html' : pathname;
-  const candidate = resolve(root, `.${normalize(relativePath)}`);
-  if (!candidate.startsWith(root)) return false;
-  const filePath = existsSync(candidate) && statSync(candidate).isFile() ? candidate : join(root, 'index.html');
-  if (!existsSync(filePath) || !statSync(filePath).isFile()) return false;
-  res.writeHead(200, { 'Content-Type': MIME[extname(filePath)] ?? 'application/octet-stream' });
-  createReadStream(filePath).pipe(res);
-  return true;
 }
 
 export async function listen(server: Server, port = 0, host = '127.0.0.1'): Promise<{ port: number; url: string }> {
@@ -330,3 +341,5 @@ export async function listen(server: Server, port = 0, host = '127.0.0.1'): Prom
   }
   return { port: address.port, url: `http://${host}:${address.port}` };
 }
+
+void DEFAULT_OPERATIONAL_LIMITS;

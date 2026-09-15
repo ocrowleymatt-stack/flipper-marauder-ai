@@ -59,10 +59,10 @@ Owns conversation, message, and execution records (the chat-turn slice). Does no
 ## Flow
 
 ```text
-UI  →  host (composition root)
+UI (Workbench)  →  host (composition root)
     →  conversation runtime          (simple-chat surface)
          →  Nexus.resolve(alias) → RouteDecision
          →  ExecutionBroker.execute(decision)
          →  durable conversations / messages / executions / events
-    →  jobs / artefacts / workspaces / files / context (first-class; not chat-only)
+    →  jobs / artefacts / workspaces / files / context / tools (first-class; not chat-only)
 ```

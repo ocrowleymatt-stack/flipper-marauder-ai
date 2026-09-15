@@ -26,12 +26,21 @@ const server = createHost({
   shutdown: spine.shutdown,
   auth: spine.auth,
   tools: spine.tools,
+  projects: spine.projects,
+  files: spine.files,
+  context: spine.context,
+  persistence: spine.persistence,
   tenantId: spine.tenantId,
   principalId: spine.principalId,
+  production: persistence.production,
+  allowedOrigins: (process.env.ATLAS_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean),
 });
 const bound = await listen(server, port, '127.0.0.1');
 spine.scheduler?.startIdleWatch();
-console.log(`Atlas vNext conversation spine at ${bound.url}`);
+console.log(`Atlas vNext Workbench host at ${bound.url}`);
 console.log(`Durable store: ${persistence.mode === 'postgres' ? 'postgresql' : dataPath}`);
 console.log(`Execution mode: ${spine.mode}`);
 console.log(`Available runtimes: ${spine.availableRuntimes.join(', ') || '(none)'}`);

@@ -1,6 +1,6 @@
 export { ToolRegistry } from './registry.ts';
-export { ToolEngine } from './engine.ts';
-export type { InvokeRequest, InvokeResult, ToolEngineOptions } from './engine.ts';
+export { ToolEngine, presentTool } from './engine.ts';
+export type { InvokeRequest, InvokeResult, ToolEngineOptions, ToolPresentation, ToolRisk } from './engine.ts';
 export {
   MemoryToolApprovalStore,
   MemoryToolInvocationStore,

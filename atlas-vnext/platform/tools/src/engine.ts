@@ -57,6 +57,39 @@ export interface InvokeResult {
   provenance: ToolProvenance;
 }
 
+export type ToolRisk = 'read' | 'write' | 'external' | 'admin';
+
+export interface ToolPresentation {
+  id: string;
+  toolId: string;
+  title: string;
+  description: string;
+  status: ToolInvocationStatus;
+  arguments: Record<string, unknown>;
+  argumentSummary: string;
+  resource: string | null;
+  conversationId: string | null;
+  executionId: string | null;
+  workspaceId: string | null;
+  sideEffectClass: ToolInvocation['sideEffectClass'];
+  approvalPolicy: string;
+  requiredCapabilities: string[];
+  risk: ToolRisk;
+  awaitingApproval: boolean;
+  failureMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  approval: {
+    id: string;
+    decision: string;
+    decidedBy: string | null;
+    decidedAt: string | null;
+    reason: string | null;
+  } | null;
+}
+
 export class ToolEngine {
   private readonly adapters = new Map<string, ToolAdapter>();
   private readonly controllers = new Map<string, AbortController>();
@@ -199,6 +232,34 @@ export class ToolEngine {
   async get(actor: ToolActor, id: string): Promise<ToolInvocation | null> {
     this.assertActor(actor);
     return this.options.invocations.get(actor.tenantId, id);
+  }
+
+  async listByConversation(actor: ToolActor, conversationId: string): Promise<ToolPresentation[]> {
+    this.assertActor(actor);
+    const rows = await this.options.invocations.listByConversation(actor.tenantId, conversationId);
+    return Promise.all(rows.map((row) => this.present(actor, row)));
+  }
+
+  async listAwaiting(actor: ToolActor): Promise<ToolPresentation[]> {
+    this.assertActor(actor);
+    const rows = await this.options.invocations.listByStatus(actor.tenantId, ['awaiting_approval']);
+    return Promise.all(rows.map((row) => this.present(actor, row)));
+  }
+
+  async present(actor: ToolActor, invocation: ToolInvocation): Promise<ToolPresentation> {
+    this.assertActor(actor);
+    if (invocation.tenantId !== actor.tenantId) {
+      throw new ToolError('permission_denied', 'Permission denied.', false);
+    }
+    const definition = this.options.registry.tryGet(invocation.toolId);
+    const approval = await this.options.approvals.getByInvocation(actor.tenantId, invocation.id);
+    return presentTool(invocation, definition, approval);
+  }
+
+  async presentById(actor: ToolActor, id: string): Promise<ToolPresentation | null> {
+    const invocation = await this.get(actor, id);
+    if (!invocation) return null;
+    return this.present(actor, invocation);
   }
 
   outputFor(_id: string): Record<string, unknown> | undefined {
@@ -567,6 +628,83 @@ export class ToolEngine {
   private assertAccepting(): void {
     if (!this.accepting) throw new ToolError('shutting_down', 'Process is shutting down; new tool work is not accepted.', true);
   }
+}
+
+export function presentTool(
+  invocation: ToolInvocation,
+  definition: ToolDefinition | null,
+  approval: ToolApproval | null,
+): ToolPresentation {
+  const args = redactToolArguments(invocation.arguments);
+  return {
+    id: invocation.id,
+    toolId: invocation.toolId,
+    title: definition?.title ?? invocation.toolId,
+    description: definition?.description ?? '',
+    status: invocation.status,
+    arguments: args,
+    argumentSummary: summariseArguments(args),
+    resource: resourceFromArguments(args) ?? invocation.workspaceId,
+    conversationId: invocation.conversationId ?? null,
+    executionId: invocation.executionId ?? null,
+    workspaceId: invocation.workspaceId,
+    sideEffectClass: invocation.sideEffectClass,
+    approvalPolicy: definition?.approvalPolicy ?? 'required',
+    requiredCapabilities: definition?.requiredCapabilities ?? [],
+    risk: riskFromDefinition(definition, invocation.sideEffectClass),
+    awaitingApproval: invocation.status === 'awaiting_approval',
+    failureMessage: invocation.failureReason?.message ?? null,
+    createdAt: invocation.createdAt,
+    updatedAt: invocation.updatedAt,
+    startedAt: invocation.startedAt,
+    completedAt: invocation.completedAt,
+    approval: approval
+      ? {
+          id: approval.id,
+          decision: approval.decision,
+          decidedBy: approval.decidedBy || null,
+          decidedAt: approval.decidedAt ?? null,
+          reason: approval.reason ?? null,
+        }
+      : null,
+  };
+}
+
+function riskFromDefinition(definition: ToolDefinition | null, sideEffect: ToolInvocation['sideEffectClass']): ToolRisk {
+  const caps = definition?.requiredCapabilities ?? [];
+  if (caps.some((cap) => cap.startsWith('admin') || cap === 'secrets.use')) return 'admin';
+  if (sideEffect === 'uncertain_external' || caps.some((cap) => cap.includes('external') || cap === 'publish.external')) {
+    return 'external';
+  }
+  if (sideEffect !== 'none' || caps.some((cap) => cap.includes('write') || cap.includes('execute') || cap === 'browser.submit')) {
+    return 'write';
+  }
+  return 'read';
+}
+
+function redactToolArguments(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (/secret|token|password|apikey|authorization|cookie/i.test(key)) {
+      out[key] = '[redacted]';
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function summariseArguments(args: Record<string, unknown>): string {
+  const parts = Object.entries(args).map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`);
+  return parts.join(', ') || '(no arguments)';
+}
+
+function resourceFromArguments(args: Record<string, unknown>): string | null {
+  for (const key of ['path', 'url', 'target', 'file', 'resource']) {
+    const value = args[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return null;
 }
 
 function needsApproval(definition: ToolDefinition): boolean {

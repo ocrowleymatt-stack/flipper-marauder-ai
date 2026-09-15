@@ -383,6 +383,24 @@ export class FilesService {
     return file;
   }
 
+  async list(actor: PersistenceActor, projectId: string): Promise<FileRecord[]> {
+    const scoped = this.scoped(actor, 'list files');
+    await this.requireProject(scoped, projectId);
+    return this.persistence.forActor(scoped).files.list(scoped, projectId);
+  }
+
+  async getMetadata(actor: PersistenceActor, fileId: string): Promise<FileRecord | null> {
+    const scoped = this.scoped(actor, 'read file metadata');
+    const file = await this.persistence.forActor(scoped).files.get(scoped, fileId);
+    if (!file || file.deletedAt) return null;
+    return file;
+  }
+
+  async listAttachments(actor: PersistenceActor, conversationId: string) {
+    const scoped = this.scoped(actor, 'list attachments');
+    return this.persistence.forActor(scoped).attachments.listByConversation(scoped, conversationId);
+  }
+
   async attachToConversation(
     actor: PersistenceActor,
     input: { conversationId: string; fileId: string; messageId?: string | null },

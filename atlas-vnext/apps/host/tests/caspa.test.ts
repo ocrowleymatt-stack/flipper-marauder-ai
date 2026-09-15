@@ -287,6 +287,26 @@ describe('Caspa writing dungeon host', () => {
       body: JSON.stringify({ operation: 'not-a-mode', instruction: 'x', expectedRevision: document.revision }),
     });
     expect(malformed.status).toBe(400);
+    const [left, right] = await Promise.all([
+      fetch(`${url}/api/documents/${document.id}`, {
+        method: 'PATCH',
+        headers: auth(session),
+        body: JSON.stringify({ title: 'Left', expectedRevision: document.revision }),
+      }),
+      fetch(`${url}/api/documents/${document.id}`, {
+        method: 'PATCH',
+        headers: auth(session),
+        body: JSON.stringify({ title: 'Right', expectedRevision: document.revision }),
+      }),
+    ]);
+    const statuses = [left.status, right.status].sort();
+    expect(statuses).toEqual([200, 409]);
+    const reloaded = (await (await fetch(`${url}/api/documents/${document.id}`, { headers: { cookie: session.cookie } })).json()) as {
+      title: string;
+      revision: number;
+    };
+    expect(['Left', 'Right']).toContain(reloaded.title);
+    expect(reloaded.revision).toBe(document.revision + 1);
   });
 
   it('grounds a writing run on selected files and returns backend provenance', async () => {

@@ -164,7 +164,7 @@ export class WritingService {
       return;
     }
 
-    let record;
+    let record: Awaited<ReturnType<WritingService['requireDocument']>>;
     try {
       record = await this.requireDocument(actor, id, 'artifact.write');
     } catch (err) {
@@ -265,10 +265,27 @@ export class WritingService {
     yield { type: 'document', document: await this.present(actor, record, { content: currentText }) };
 
     let draft = '';
+    let persistedDraft = '';
     let visible = false;
     let executionId: string | null = null;
     let committed = false;
     let sealedFailure: StructuredFailure | null = null;
+    const persistAccumulatedDraft = async () => {
+      if (draft.trim() && draft !== persistedDraft) {
+        record = await this.persistDraft(actor, record, draft);
+        persistedDraft = draft;
+      }
+    };
+    const sealFailure = async (nextFailure: StructuredFailure) => {
+      sealedFailure = nextFailure;
+      await persistAccumulatedDraft();
+      record = await this.failDocument(actor, record, {
+        draft,
+        failure: sealedFailure,
+        executionId,
+      });
+      return record;
+    };
     try {
       for await (const event of this.deps.runtime.sendMessage(conversationId, {
         content: composed.layers.requestInstructions,
@@ -290,26 +307,28 @@ export class WritingService {
           draft = event.text;
           if (!visible && draft.trim()) {
             visible = true;
-            record = await this.persistDraft(actor, record, draft);
+            await persistAccumulatedDraft();
             yield { type: 'document', document: await this.present(actor, record, { content: currentText, draft }) };
           }
           yield { type: 'draft.delta', documentId: record.id, text: draft };
         }
-        if (event.type === 'execution.failed' || event.type === 'error') {
-          const classified = event.type === 'error' ? event.failure : event.failure;
-          const code = visible
-            ? 'fail_after_visible'
-            : classified.code === 'routing_failed'
-              ? 'provider_unavailable'
-              : 'fail_before_visible';
-          sealedFailure = failure(code, classified.message, !visible);
-          record = await this.failDocument(actor, record, {
-            draft,
-            failure: sealedFailure,
-            executionId,
-          });
+        const cancelled = event.type === 'execution' && event.execution.status === 'cancelled';
+        if (cancelled || event.type === 'execution.failed' || event.type === 'error') {
+          const classified = cancelled
+            ? failure('cancelled', 'The writing run was cancelled.', false)
+            : event.type === 'error' || event.type === 'execution.failed'
+              ? event.failure
+              : failure('fail_before_visible', 'The writing run failed.', true);
+          const code = cancelled
+            ? 'cancelled'
+            : visible
+              ? 'fail_after_visible'
+              : classified.code === 'routing_failed'
+                ? 'provider_unavailable'
+                : 'fail_before_visible';
+          record = await sealFailure(failure(code, classified.message, cancelled ? false : !visible));
           yield { type: 'document', document: await this.present(actor, record, { content: currentText, draft: draft || null }) };
-          yield { type: 'error', failure: record.failure ?? sealedFailure };
+          yield { type: 'error', failure: record.failure ?? sealedFailure ?? classified };
           yield { type: 'done' };
           return;
         }
@@ -324,17 +343,14 @@ export class WritingService {
       }
 
       if (!draft.trim()) {
-        record = await this.failDocument(actor, record, {
-          draft: '',
-          failure: failure('fail_before_visible', 'The writing run produced no visible document text.', true),
-          executionId,
-        });
+        record = await sealFailure(failure('fail_before_visible', 'The writing run produced no visible document text.', true));
         yield { type: 'document', document: await this.present(actor, record, { content: currentText }) };
         yield { type: 'error', failure: record.failure! };
         yield { type: 'done' };
         return;
       }
 
+      await persistAccumulatedDraft();
       record = await this.store(actor).update(actor, record.id, {
         status: 'candidate',
         originatingRunId: executionId,
@@ -362,7 +378,7 @@ export class WritingService {
       if (!committed) {
         const classified = this.failureFrom(err, visible);
         try {
-          record = await this.failDocument(actor, record, { draft, failure: classified, executionId });
+          record = await sealFailure(classified);
           yield { type: 'document', document: await this.present(actor, record, { content: currentText, draft: draft || null }) };
         } catch {
           // Persistence of the classified failure is best-effort after the run error.
@@ -525,7 +541,7 @@ export class WritingService {
   ) {
     const apply = async (current: Awaited<ReturnType<WritingService['requireDocument']>>) => {
       let next = current;
-      if (input.draft.trim() && (next.status !== 'streaming' || !next.draftArtefactId)) {
+      if (input.draft.trim()) {
         next = await this.persistDraft(actor, next, input.draft);
       }
       return this.store(actor).update(actor, next.id, {
@@ -541,12 +557,7 @@ export class WritingService {
       if (!(err instanceof ConflictError)) throw err;
       const latest = await this.store(actor).get(actor, record.id);
       if (!latest) throw err;
-      return this.store(actor).update(actor, latest.id, {
-        status: 'failed',
-        originatingRunId: input.executionId,
-        failure: input.failure,
-        expectedRevision: latest.revision,
-      });
+      return apply(latest);
     }
   }
 
@@ -576,39 +587,42 @@ export class WritingService {
         type: 'writing.document',
       });
     }
-    const committed = await this.store(actor).addVersion(actor, record.id, {
-      contentHash: artefact.contentHash ?? '',
-      artefactId: artefact.id,
-      title: record.title,
-      operation: input.operation,
-      executionId: input.executionId,
-      expectedRevision: input.expectedRevision,
-    });
     const execution = input.executionId ? await this.deps.runtime.getExecution(input.executionId) : null;
-    await this.deps.persistence.forActor(actor).provenance.record({
-      artefactId: artefact.id,
-      projectId: record.workspaceId,
-      sourceInputs: unique([
-        ...(input.sourceInputs ?? []),
-        ...input.fileIds,
-        ...(record.currentContentHash ? [record.currentContentHash] : []),
-      ]),
-      inputManifestHash: null,
-      provider: execution?.selectedProvider ?? execution?.route?.provider ?? 'atlas.writing',
-      model: execution?.selectedModel ?? execution?.route?.model ?? 'caspa.document',
-      toolCalls: [],
-      jobId: input.executionId,
-      timestamp: new Date().toISOString(),
-      traceId: `writing:${record.id}:v${committed.document.currentVersion}`,
-      capability: 'writing',
-      selectedRouteId: execution?.route?.resolvedRouteId,
-      locality: execution?.route?.locality,
-      attemptOutcomes: execution?.attempts.map((attempt) => ({
-        provider: attempt.provider,
-        model: attempt.model,
-        outcome: attempt.outcome,
-        emittedVisibleOutput: attempt.emittedVisibleOutput,
-      })),
+    const committed = await this.deps.persistence.run(async () => {
+      const versioned = await this.store(actor).addVersion(actor, record.id, {
+        contentHash: artefact.contentHash ?? '',
+        artefactId: artefact.id,
+        title: record.title,
+        operation: input.operation,
+        executionId: input.executionId,
+        expectedRevision: input.expectedRevision,
+      });
+      await this.deps.persistence.forActor(actor).provenance.record({
+        artefactId: artefact.id,
+        projectId: record.workspaceId,
+        sourceInputs: unique([
+          ...(input.sourceInputs ?? []),
+          ...input.fileIds,
+          ...(record.currentContentHash ? [record.currentContentHash] : []),
+        ]),
+        inputManifestHash: null,
+        provider: execution?.selectedProvider ?? execution?.route?.provider ?? 'atlas.writing',
+        model: execution?.selectedModel ?? execution?.route?.model ?? 'caspa.document',
+        toolCalls: [],
+        jobId: input.executionId,
+        timestamp: new Date().toISOString(),
+        traceId: `writing:${record.id}:v${versioned.document.currentVersion}`,
+        capability: 'writing',
+        selectedRouteId: execution?.route?.resolvedRouteId,
+        locality: execution?.route?.locality,
+        attemptOutcomes: execution?.attempts.map((attempt) => ({
+          provider: attempt.provider,
+          model: attempt.model,
+          outcome: attempt.outcome,
+          emittedVisibleOutput: attempt.emittedVisibleOutput,
+        })),
+      });
+      return versioned;
     });
     return this.present(actor, committed.document, { content: input.text });
   }

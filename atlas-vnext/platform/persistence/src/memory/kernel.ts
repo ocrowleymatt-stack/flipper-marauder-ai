@@ -100,7 +100,17 @@ export class MemoryPersistence implements PlatformPersistence {
 
   async run<T>(fn: () => Promise<T>): Promise<T> {
     this.assertOpen();
-    return this.mutex.run(fn);
+    return this.mutex.run(async () => {
+      const documents = this.documentStore.snapshot();
+      const provenance = this.provenance.map((item) => ({ tenantId: item.tenantId, entry: { ...item.entry } }));
+      try {
+        return await fn();
+      } catch (err) {
+        this.documentStore.restore(documents);
+        this.provenance.splice(0, this.provenance.length, ...provenance);
+        throw err;
+      }
+    });
   }
 
   forActor(actor: PersistenceActor): ActorBoundPersistence {

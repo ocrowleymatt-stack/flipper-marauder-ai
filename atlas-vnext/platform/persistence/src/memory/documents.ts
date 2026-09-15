@@ -4,7 +4,17 @@ import { assertActor, sameWorkspace, type PersistenceActor } from '../actor.ts';
 import { ConflictError, OwnershipError } from '../errors.ts';
 import type { DocumentRecord, DocumentStore, DocumentVersionRecord } from '../document-types.ts';
 
-export function createMemoryDocumentStore(clock: () => string): DocumentStore {
+export interface MemoryDocumentSnapshot {
+  documents: Array<[string, DocumentRecord]>;
+  versions: Array<[string, DocumentVersionRecord[]]>;
+}
+
+export interface MemoryDocumentStore extends DocumentStore {
+  snapshot(): MemoryDocumentSnapshot;
+  restore(snapshot: MemoryDocumentSnapshot): void;
+}
+
+export function createMemoryDocumentStore(clock: () => string): MemoryDocumentStore {
   const documents = new Map<string, DocumentRecord>();
   const versions = new Map<string, DocumentVersionRecord[]>();
 
@@ -73,8 +83,7 @@ export function createMemoryDocumentStore(clock: () => string): DocumentStore {
         revision: current.revision + 1,
         updatedAt: now,
       };
-      documents.set(id, next);
-      return next;
+      return replaceIfRevision(id, patch.expectedRevision, next);
     },
     async logicalDelete(actor, id, expectedRevision) {
       const current = await requireDocument(actor, id, expectedRevision);
@@ -85,8 +94,7 @@ export function createMemoryDocumentStore(clock: () => string): DocumentStore {
         revision: current.revision + 1,
         updatedAt: now,
       };
-      documents.set(id, next);
-      return next;
+      return replaceIfRevision(id, expectedRevision, next);
     },
     async listInFlight() {
       return [...documents.values()].filter(
@@ -124,9 +132,9 @@ export function createMemoryDocumentStore(clock: () => string): DocumentStore {
         revision: current.revision + 1,
         updatedAt: now,
       };
-      documents.set(documentId, next);
+      const document = replaceIfRevision(documentId, input.expectedRevision, next);
       versions.set(documentId, [...(versions.get(documentId) ?? []), version]);
-      return { document: next, version };
+      return { document, version };
     },
     async listVersions(actor, documentId) {
       const current = await store.get(actor, documentId);
@@ -154,6 +162,32 @@ export function createMemoryDocumentStore(clock: () => string): DocumentStore {
     return record;
   }
 
+  function replaceIfRevision(id: string, expectedRevision: number | undefined, next: DocumentRecord): DocumentRecord {
+    const latest = documents.get(id);
+    if (!latest || latest.tenantId !== next.tenantId || latest.deletedAt) {
+      throw new OwnershipError(`Fail-closed: document ${id} is not visible to tenant ${next.tenantId}.`);
+    }
+    if (expectedRevision != null && latest.revision !== expectedRevision) {
+      throw new ConflictError(`Document ${id} revision ${expectedRevision} does not match ${latest.revision}.`);
+    }
+    documents.set(id, next);
+    return next;
+  }
+
   void (null as StructuredFailure | null);
-  return store;
+  return {
+    ...store,
+    snapshot() {
+      return {
+        documents: [...documents.entries()].map(([id, row]) => [id, { ...row }]),
+        versions: [...versions.entries()].map(([id, rows]) => [id, rows.map((row) => ({ ...row }))]),
+      };
+    },
+    restore(snapshot) {
+      documents.clear();
+      versions.clear();
+      for (const [id, row] of snapshot.documents) documents.set(id, { ...row });
+      for (const [id, rows] of snapshot.versions) versions.set(id, rows.map((row) => ({ ...row })));
+    },
+  };
 }

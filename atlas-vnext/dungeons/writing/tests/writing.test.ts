@@ -5,13 +5,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { composeWritingPrompt, writingRouteRequirements, WritingService } from '../src/index.ts';
 import { ConversationRuntime, memoryStores } from '@atlas-vnext/conversation';
 import { MemoryEventBus } from '@atlas-vnext/events';
-import { openMemoryPersistence } from '@atlas-vnext/persistence';
+import { openMemoryPersistence, type PlatformPersistence } from '@atlas-vnext/persistence';
 import { ProjectService } from '@atlas-vnext/projects';
 import { FilesService } from '@atlas-vnext/files';
 import { ContextService } from '@atlas-vnext/context';
 import { openFilesystemCas } from '@atlas-vnext/storage';
 import { AuthorityEngine } from '@atlas-vnext/permissions';
-import type { RouteDecision, StreamChunk } from '@atlas-vnext/contracts';
+import type { ProvenanceRecord, RouteDecision, StreamChunk } from '@atlas-vnext/contracts';
+import type { WritingStreamEvent } from '../src/service.ts';
 
 const dirs: string[] = [];
 
@@ -35,7 +36,10 @@ function decision(): RouteDecision {
   };
 }
 
-async function makeWriting(stream: (prompt: string) => AsyncGenerator<StreamChunk>, capture?: { target?: string; systemPrompt?: string }) {
+async function makeWriting(
+  stream: (prompt: string, signal?: AbortSignal) => AsyncGenerator<StreamChunk>,
+  capture?: { target?: string; systemPrompt?: string },
+) {
   const dir = mkdtempSync(join(tmpdir(), 'caspa-unit-'));
   dirs.push(dir);
   const persistence = await openMemoryPersistence();
@@ -72,9 +76,15 @@ async function makeWriting(stream: (prompt: string) => AsyncGenerator<StreamChun
         });
         let visible = false;
         try {
-          for await (const chunk of stream(execContext.prompt)) {
+          for await (const chunk of stream(execContext.prompt, execContext.signal)) {
+            if (execContext.signal?.aborted) {
+              throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+            }
             if (chunk.type === 'text') visible = true;
             yield chunk;
+          }
+          if (execContext.signal?.aborted) {
+            throw Object.assign(new Error('aborted'), { name: 'AbortError' });
           }
           observer?.onAttempt({
             index: 1,
@@ -90,11 +100,11 @@ async function makeWriting(stream: (prompt: string) => AsyncGenerator<StreamChun
             index: 1,
             provider: 'mock',
             model: 'mock-reason',
-            outcome: 'failed',
+            outcome: execContext.signal?.aborted ? 'cancelled' : 'failed',
             error: {
-              code: 'provider_error',
+              code: execContext.signal?.aborted ? 'cancelled' : 'provider_error',
               message: err instanceof Error ? err.message : String(err),
-              retryable: !visible,
+              retryable: !visible && !execContext.signal?.aborted,
               at: new Date().toISOString(),
             },
             emittedVisibleOutput: visible,
@@ -111,7 +121,38 @@ async function makeWriting(stream: (prompt: string) => AsyncGenerator<StreamChun
   }
   const writing = new WritingService({ persistence, projects, files, context, runtime, authority });
   const project = await projects.create(actor, { name: 'Book', dungeon: 'writing' });
-  return { writing, actor, project, files, persistence, authority };
+  return { writing, actor, project, files, persistence, authority, runtime, context, projects };
+}
+
+async function collect(events: AsyncGenerator<WritingStreamEvent>): Promise<WritingStreamEvent[]> {
+  const out: WritingStreamEvent[] = [];
+  for await (const event of events) out.push(event);
+  return out;
+}
+
+function withInjectedWritingProvenanceFailure(persistence: PlatformPersistence): PlatformPersistence {
+  return new Proxy(persistence, {
+    get(target, prop, receiver) {
+      if (prop === 'forActor') {
+        return (actor: { tenantId: string; principalId: string }) => {
+          const bound = target.forActor(actor);
+          return {
+            ...bound,
+            provenance: {
+              ...bound.provenance,
+              async record(entry: ProvenanceRecord) {
+                if (entry.capability === 'writing') {
+                  throw new Error('injected provenance write failure');
+                }
+                return bound.provenance.record(entry);
+              },
+            },
+          };
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
 }
 
 describe('Caspa writing service', () => {
@@ -318,5 +359,162 @@ describe('Caspa writing service', () => {
     expect(capture.target).not.toMatch(/openai|anthropic|runpod/i);
     const after = await writing.get(actor, created.id);
     expect(after.status).toBe('committed');
+  });
+
+  it('lets only one concurrent same-revision generate succeed', async () => {
+    const { writing, actor, project } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'Only one winner may commit this document.' };
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'Race' });
+    const results = await Promise.all([
+      collect(
+        writing.generate(actor, created.id, {
+          operation: 'create',
+          instruction: 'Write first.',
+          expectedRevision: created.revision,
+        }),
+      ),
+      collect(
+        writing.generate(actor, created.id, {
+          operation: 'create',
+          instruction: 'Write second.',
+          expectedRevision: created.revision,
+        }),
+      ),
+    ]);
+    const stale = results.filter((events) =>
+      events.some((event) => event.type === 'error' && event.failure.code === 'stale_revision'),
+    );
+    const committedEvents = results.filter((events) =>
+      events.some((event) => event.type === 'document' && event.document.status === 'committed'),
+    );
+    expect(stale).toHaveLength(1);
+    expect(committedEvents).toHaveLength(1);
+    const after = await writing.get(actor, created.id);
+    expect(after.status).toBe('committed');
+    expect(after.currentVersion).toBe(1);
+  });
+
+  it('treats cancellation after multiple visible chunks as terminal and keeps the full draft', async () => {
+    const { writing, actor, project, runtime } = await makeWriting(async function* (_prompt, signal) {
+      yield { type: 'text', text: 'First visible paragraph. ' };
+      yield { type: 'text', text: 'Second visible paragraph. ' };
+      yield { type: 'text', text: 'Third visible paragraph.' };
+      await new Promise<never>((_resolve, reject) => {
+        if (signal?.aborted) {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          return;
+        }
+        signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        });
+      });
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'Cancel after visible' });
+    let executionId: string | null = null;
+    let deltas = 0;
+    const events: WritingStreamEvent[] = [];
+    for await (const event of writing.generate(actor, created.id, {
+      operation: 'create',
+      instruction: 'Write several paragraphs.',
+      expectedRevision: created.revision,
+    })) {
+      events.push(event);
+      if (event.type === 'execution' && event.event.type === 'execution') {
+        executionId = event.event.execution.id;
+      }
+      if (event.type === 'draft.delta') {
+        deltas += 1;
+        if (deltas === 2 && executionId) {
+          await runtime.cancel(executionId);
+        }
+      }
+    }
+    const after = await writing.get(actor, created.id);
+    expect(after.status).toBe('failed');
+    expect(after.failure?.code).toBe('cancelled');
+    expect(after.currentVersion).toBe(0);
+    expect(after.content).toBe('');
+    expect(after.draft).toContain('First visible paragraph.');
+    expect(after.draft).toContain('Second visible paragraph.');
+    expect(events.some((event) => event.type === 'error' && event.failure.code === 'cancelled')).toBe(true);
+    expect(events.some((event) => event.type === 'document' && event.document.status === 'committed')).toBe(false);
+  });
+
+  it('persists later streamed chunks before a multi-chunk provider failure is sealed', async () => {
+    const { writing, actor, project } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'First visible chunk. ' };
+      yield { type: 'text', text: 'Second visible chunk. ' };
+      yield { type: 'text', text: 'Third visible chunk.' };
+      throw new Error('provider died after later chunks');
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'Multi-chunk fail' });
+    await collect(
+      writing.generate(actor, created.id, {
+        operation: 'create',
+        instruction: 'Write several chunks.',
+        expectedRevision: created.revision,
+      }),
+    );
+    const after = await writing.get(actor, created.id);
+    expect(after.status).toBe('failed');
+    expect(after.failure?.code).toBe('fail_after_visible');
+    expect(after.currentVersion).toBe(0);
+    expect(after.content).toBe('');
+    expect(after.draft).toBe('First visible chunk. Second visible chunk. Third visible chunk.');
+  });
+
+  it('persists later streamed chunks before commit:false is sealed', async () => {
+    const { writing, actor, project } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'First candidate chunk. ' };
+      yield { type: 'text', text: 'Second candidate chunk. ' };
+      yield { type: 'text', text: 'Third candidate chunk.' };
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'Commit false' });
+    await collect(
+      writing.generate(actor, created.id, {
+        operation: 'create',
+        instruction: 'Hold as a candidate.',
+        expectedRevision: created.revision,
+        commit: false,
+      }),
+    );
+    const after = await writing.get(actor, created.id);
+    expect(after.status).toBe('candidate');
+    expect(after.currentVersion).toBe(0);
+    expect(after.content).toBe('');
+    expect(after.draft).toBe('First candidate chunk. Second candidate chunk. Third candidate chunk.');
+  });
+
+  it('does not advance canonical content when the writing provenance write fails', async () => {
+    const base = await makeWriting(async function* () {
+      yield { type: 'text', text: 'Canonical text that must not stick without provenance.' };
+    });
+    const persistence = withInjectedWritingProvenanceFailure(base.persistence);
+    const writing = new WritingService({
+      persistence,
+      projects: base.projects,
+      files: base.files,
+      context: base.context,
+      runtime: base.runtime,
+      authority: base.authority,
+    });
+    const created = await writing.create(base.actor, { projectId: base.project.id, title: 'Provenance fail' });
+    const events = await collect(
+      writing.generate(base.actor, created.id, {
+        operation: 'create',
+        instruction: 'Write a chapter.',
+        expectedRevision: created.revision,
+      }),
+    );
+    const after = await writing.get(base.actor, created.id);
+    expect(after.status).toBe('failed');
+    expect(after.currentVersion).toBe(0);
+    expect(after.content).toBe('');
+    expect(after.draft).toContain('Canonical text that must not stick without provenance.');
+    expect(events.some((event) => event.type === 'error')).toBe(true);
+    expect(events.some((event) => event.type === 'document' && event.document.status === 'committed')).toBe(false);
+    const provenance = await writing.provenance(base.actor, created.id);
+    expect(provenance.some((entry) => entry.capability === 'writing')).toBe(false);
   });
 });

@@ -99,6 +99,32 @@ export function createDocumentStore(tx: PgTx, clock: () => string): DocumentStor
     return row;
   }
 
+  function revisionConflict(id: string, expectedRevision: number, actual: number): ConflictError {
+    return new ConflictError(`Document ${id} revision ${expectedRevision} does not match ${actual}.`);
+  }
+
+  async function lockedMutation(
+    actor: PersistenceActor,
+    id: string,
+    action: string,
+    expectedRevision: number | undefined,
+    write: (current: DocumentRow) => Promise<DocumentRow | undefined>,
+  ): Promise<DocumentRecord> {
+    return tx.run(async () => {
+      const scoped = assertActor(actor, action);
+      const current = await load(scoped, id, action, true);
+      const actual = Number(current.revision);
+      if (expectedRevision != null && actual !== expectedRevision) {
+        throw revisionConflict(id, expectedRevision, actual);
+      }
+      const row = await write(current);
+      if (!row) {
+        throw revisionConflict(id, expectedRevision ?? actual, actual);
+      }
+      return mapDocument(sqlRow(row));
+    });
+  }
+
   const store: DocumentStore = {
     async create(actor, input) {
       const scoped = assertActor(actor, 'create document');
@@ -139,59 +165,56 @@ export function createDocumentStore(tx: PgTx, clock: () => string): DocumentStor
       return result.rows.map((row) => mapDocument(sqlRow(row)));
     },
     async update(actor, id, patch) {
-      const scoped = assertActor(actor, 'update document');
-      const current = await load(scoped, id, 'update document', true);
-      if (current.revision !== patch.expectedRevision) {
-        throw new ConflictError(
-          `Document ${id} revision ${patch.expectedRevision} does not match ${current.revision}.`,
+      return lockedMutation(actor, id, 'update document', patch.expectedRevision, async (current) => {
+        const now = clock();
+        const result = await tx.query<DocumentRow>(
+          `UPDATE documents SET
+             title = $3,
+             status = $4,
+             conversation_id = $5,
+             originating_run_id = $6,
+             draft_content_hash = $7,
+             current_content_hash = $8,
+             current_artefact_id = $9,
+             draft_artefact_id = $10,
+             failure = $11::jsonb,
+             revision = revision + 1,
+             updated_at = $12
+           WHERE id = $1 AND tenant_id = $2 AND revision = $13 AND deleted_at IS NULL
+           RETURNING *`,
+          [
+            id,
+            current.tenant_id,
+            patch.title ?? current.title,
+            patch.status ?? current.status,
+            patch.conversationId === undefined ? current.conversation_id : patch.conversationId,
+            patch.originatingRunId === undefined ? current.originating_run_id : patch.originatingRunId,
+            patch.draftContentHash === undefined ? current.draft_content_hash : patch.draftContentHash,
+            patch.currentContentHash === undefined ? current.current_content_hash : patch.currentContentHash,
+            patch.currentArtefactId === undefined ? current.current_artefact_id : patch.currentArtefactId,
+            patch.draftArtefactId === undefined ? current.draft_artefact_id : patch.draftArtefactId,
+            JSON.stringify(patch.failure === undefined ? current.failure : patch.failure),
+            now,
+            patch.expectedRevision,
+          ],
         );
-      }
-      const now = clock();
-      const result = await tx.query<DocumentRow>(
-        `UPDATE documents SET
-           title = $3,
-           status = $4,
-           conversation_id = $5,
-           originating_run_id = $6,
-           draft_content_hash = $7,
-           current_content_hash = $8,
-           current_artefact_id = $9,
-           draft_artefact_id = $10,
-           failure = $11::jsonb,
-           revision = revision + 1,
-           updated_at = $12
-         WHERE id = $1 AND tenant_id = $2
-         RETURNING *`,
-        [
-          id,
-          scoped.tenantId,
-          patch.title ?? current.title,
-          patch.status ?? current.status,
-          patch.conversationId === undefined ? current.conversation_id : patch.conversationId,
-          patch.originatingRunId === undefined ? current.originating_run_id : patch.originatingRunId,
-          patch.draftContentHash === undefined ? current.draft_content_hash : patch.draftContentHash,
-          patch.currentContentHash === undefined ? current.current_content_hash : patch.currentContentHash,
-          patch.currentArtefactId === undefined ? current.current_artefact_id : patch.currentArtefactId,
-          patch.draftArtefactId === undefined ? current.draft_artefact_id : patch.draftArtefactId,
-          JSON.stringify(patch.failure === undefined ? current.failure : patch.failure),
-          now,
-        ],
-      );
-      return mapDocument(sqlRow(result.rows[0]!));
+        return result.rows[0];
+      });
     },
     async logicalDelete(actor, id, expectedRevision) {
-      const scoped = assertActor(actor, 'delete document');
-      const current = await load(scoped, id, 'delete document', true);
-      if (expectedRevision != null && current.revision !== expectedRevision) {
-        throw new ConflictError(`Document ${id} revision ${expectedRevision} does not match ${current.revision}.`);
-      }
-      const now = clock();
-      const result = await tx.query<DocumentRow>(
-        `UPDATE documents SET deleted_at = $3, revision = revision + 1, updated_at = $3
-         WHERE id = $1 AND tenant_id = $2 RETURNING *`,
-        [id, scoped.tenantId, now],
-      );
-      return mapDocument(sqlRow(result.rows[0]!));
+      return lockedMutation(actor, id, 'delete document', expectedRevision, async (current) => {
+        const now = clock();
+        const revisionClause = expectedRevision == null ? '' : ' AND revision = $4';
+        const params: unknown[] = [id, current.tenant_id, now];
+        if (expectedRevision != null) params.push(expectedRevision);
+        const result = await tx.query<DocumentRow>(
+          `UPDATE documents SET deleted_at = $3, revision = revision + 1, updated_at = $3
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL${revisionClause}
+           RETURNING *`,
+          params,
+        );
+        return result.rows[0];
+      });
     },
     async listInFlight() {
       const result = await tx.query<DocumentRow>(
@@ -201,64 +224,69 @@ export function createDocumentStore(tx: PgTx, clock: () => string): DocumentStor
       return result.rows.map((row) => mapDocument(sqlRow(row)));
     },
     async addVersion(actor, documentId, input) {
-      const scoped = assertActor(actor, 'version document');
-      const current = await load(scoped, documentId, 'version document', true);
-      if (current.revision !== input.expectedRevision) {
-        throw new ConflictError(
-          `Document ${documentId} revision ${input.expectedRevision} does not match ${current.revision}.`,
+      return tx.run(async () => {
+        const scoped = assertActor(actor, 'version document');
+        const current = await load(scoped, documentId, 'version document', true);
+        const actual = Number(current.revision);
+        if (actual !== input.expectedRevision) {
+          throw revisionConflict(documentId, input.expectedRevision, actual);
+        }
+        const now = clock();
+        const versionNumber = Number(current.current_version) + 1;
+        const versionId = `dver_${randomUUID()}`;
+        await tx.query(
+          `INSERT INTO document_versions (
+             id, document_id, tenant_id, workspace_id, version, content_hash, artefact_id,
+             title, operation, execution_id, created_by, created_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          [
+            versionId,
+            documentId,
+            scoped.tenantId,
+            current.workspace_id,
+            versionNumber,
+            input.contentHash,
+            input.artefactId,
+            input.title,
+            input.operation,
+            input.executionId ?? null,
+            scoped.principalId ?? current.created_by,
+            now,
+          ],
         );
-      }
-      const now = clock();
-      const versionNumber = Number(current.current_version) + 1;
-      const versionId = `dver_${randomUUID()}`;
-      await tx.query(
-        `INSERT INTO document_versions (
-           id, document_id, tenant_id, workspace_id, version, content_hash, artefact_id,
-           title, operation, execution_id, created_by, created_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [
-          versionId,
-          documentId,
-          scoped.tenantId,
-          current.workspace_id,
-          versionNumber,
-          input.contentHash,
-          input.artefactId,
-          input.title,
-          input.operation,
-          input.executionId ?? null,
-          scoped.principalId ?? current.created_by,
-          now,
-        ],
-      );
-      const result = await tx.query<DocumentRow>(
-        `UPDATE documents SET
-           title = $3,
-           status = 'committed',
-           current_version = $4,
-           current_content_hash = $5,
-           current_artefact_id = $6,
-           draft_content_hash = NULL,
-           originating_run_id = COALESCE($7, originating_run_id),
-           failure = NULL,
-           revision = revision + 1,
-           updated_at = $8
-         WHERE id = $1 AND tenant_id = $2
-         RETURNING *`,
-        [
-          documentId,
-          scoped.tenantId,
-          input.title,
-          versionNumber,
-          input.contentHash,
-          input.artefactId,
-          input.executionId ?? null,
-          now,
-        ],
-      );
-      const document = mapDocument(sqlRow(result.rows[0]!));
-      const versionRow = await tx.query<DocumentVersionRow>('SELECT * FROM document_versions WHERE id = $1', [versionId]);
-      return { document, version: mapVersion(sqlRow(versionRow.rows[0]!)) };
+        const result = await tx.query<DocumentRow>(
+          `UPDATE documents SET
+             title = $3,
+             status = 'committed',
+             current_version = $4,
+             current_content_hash = $5,
+             current_artefact_id = $6,
+             draft_content_hash = NULL,
+             originating_run_id = COALESCE($7, originating_run_id),
+             failure = NULL,
+             revision = revision + 1,
+             updated_at = $8
+           WHERE id = $1 AND tenant_id = $2 AND revision = $9 AND deleted_at IS NULL
+           RETURNING *`,
+          [
+            documentId,
+            scoped.tenantId,
+            input.title,
+            versionNumber,
+            input.contentHash,
+            input.artefactId,
+            input.executionId ?? null,
+            now,
+            input.expectedRevision,
+          ],
+        );
+        if (!result.rows[0]) {
+          throw revisionConflict(documentId, input.expectedRevision, actual);
+        }
+        const document = mapDocument(sqlRow(result.rows[0]));
+        const versionRow = await tx.query<DocumentVersionRow>('SELECT * FROM document_versions WHERE id = $1', [versionId]);
+        return { document, version: mapVersion(sqlRow(versionRow.rows[0]!)) };
+      });
     },
     async listVersions(actor, documentId) {
       await load(assertActor(actor, 'list document versions'), documentId, 'list document versions');

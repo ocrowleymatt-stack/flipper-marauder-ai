@@ -1,20 +1,28 @@
 # Production readiness and cutover gate
 
-Stacked on accepted Caspa head `cursor/vnext-caspa-writing-99e9` @ `46cd770`. Tools/auth and Workbench are included in that lineage and are **not merged to main**. This tranche does not flatten or cherry-pick onto stale main.
+Reconciled onto current main after Caspa PR #10 merged. Old Production Readiness head `d2497fb` carried a superseded Caspa/Workbench lineage (`0934024` / `46cd770`) and was **not** replayed. Only the Production Readiness-only commits were rebased onto `origin/main`.
 
-Cutover remains **human-gated**. CI green is not production.
+Cutover remains **human-gated**. CI green is not production. This PR must not be treated as a traffic switch.
 
 ## Stacking record
 
-| Lineage | Ref | CI | Merge |
-|---|---|---|---|
-| main | `26428d9` (PR #7) | SUCCESS | merged |
-| tools/auth | `cursor/vnext-tools-auth-platform-99e9` @ `49e6b15` | 34882773498 SUCCESS | unmerged |
-| Workbench | `cursor/vnext-workbench-ui-99e9` @ `7860c42` | 34902930457 SUCCESS | unmerged, stacked on tools |
-| Caspa | `cursor/vnext-caspa-writing-99e9` @ `46cd770` | 34907583904 SUCCESS | unmerged, stacked on Workbench |
-| **this tranche** | `cursor/vnext-production-readiness-99e9` | stacked on Caspa | draft PR, do not merge as cutover |
+| Lineage | Ref | Merge |
+|---|---|---|
+| main (this reconcile base) | `db61384edbf9f92f48efeaf4121d20f9554240ae` | current `origin/main` |
+| Caspa accepted head | `1379a1def5b99786ac0be41eccc9a92636fe0458` | merged via PR #10 (`db61384`) |
+| Workbench | PR #9 (`d34e651` / `c551111` fail-closed conversation auth) | merged |
+| tools/auth | PR #8 (`83d8f6b`) | merged |
+| old Production Readiness head | `d2497fba5ebf9fdce5fbcf36b1cca0444b4a6fbc` | superseded lineage; not resurrected |
+| **this tranche** | `cursor/vnext-production-readiness-99e9` rebased onto `db61384` | draft PR, do not merge as cutover |
 
-No open GitHub PRs existed for tools/Workbench/Caspa (they were branch-only). No duplicate production-readiness branch was found.
+Rebase method: `git rebase --onto origin/main 46cd770` (Production Readiness-only commits `dba2e3e` and `d2497fb`). Conflicts inspected, not auto-picked:
+
+- `http.ts`: overlay SSE origin CORS; keep main’s SSE frame contract.
+- `main.ts`: overlay `readProductionHostConfig` (production, origins, HSTS, timeouts, kill switches, rate limiter).
+- `server.ts`: **keep** main’s fail-closed Workbench conversation auth (`conversationSessionMissing` → 401, `isForeignHostSession` → 404). Overlay HSTS, classified errors, kill switches, rate limits, stream idle timeout, resource guards. CORS wildcard only when neither production nor auth is wired.
+- `migrate.test.ts`: keep **both** Caspa parallel DDL-lock bootstrap and Production Readiness interrupted-migration rollback.
+
+Auto-merged overlays that were kept: Caspa/Workbench `CasMissingError` → 503; compose flags/CAS root/concurrency; postgres bounded retry; tool uncertain-side-effect handling. Writing dungeon, Caspa UI, and sealed Caspa persistence remain main’s PR #10 code.
 
 ## Non-negotiable contracts (unchanged)
 
@@ -222,11 +230,12 @@ Statuses: PASS / FAIL / CONDITIONAL / N/A. GO for **cutover** requires no unreso
 | 46 | Runbooks | PASS | RUNBOOKS.md. |
 | 47 | This matrix | PASS | Honest CONDITIONAL rows, no hidden FAIL. |
 | 48 | Human cutover gate | N/A (always human) | Even all-PASS is not permission to switch DNS. |
-| — | Stack merged to main | FAIL (cutover) | tools/Workbench/Caspa/this PR are unmerged. Cutover cannot proceed until a human merges the stack. |
+| — | Platform stack on main | PASS | tools PR #8, Workbench PR #9, Caspa PR #10 (`1379a1d` / `db61384`) are on main. This Production Readiness PR remains unmerged. |
+| — | Production cutover | FAIL | Human DNS / secret / production-migration / traffic gates remain. CONDITIONALS (multi-instance SSE, in-process rate limits, no OTEL exporter, single RunPod scheduler) are not silently promoted. |
 
-**Tranche verdict:** operational production **candidate** is defensible for a single-instance PostgreSQL+CAS deploy of this stack.
+**Tranche verdict:** operational production **candidate** is defensible for a **documented single-instance** PostgreSQL+CAS deploy of this stack. Multi-instance SSE, shared rate limiting, distributed tracing, and dual RunPod schedulers are **not** claimed.
 
-**Cutover verdict: NO-GO** until a human merges the unmerged stack onto main and accepts the CONDITIONAL multi-instance/RunPod-scheduler rows.
+**Cutover verdict: NO-GO.** Do not switch production traffic. Remaining conditions: human merge of this PR after exact-head CI; human apply of production migrations; human DNS/secret/cutover; accept CONDITIONAL multi-instance/SSE/rate-limit/tracing/RunPod-scheduler rows as single-instance-only.
 
 ## 48. Human gate
 

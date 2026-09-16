@@ -145,6 +145,19 @@ describe('Privacy & Safety host', () => {
       body: JSON.stringify({ patch: { telemetry: 'off' } }),
     });
     expect(proposal.status).toBe(201);
+    const created = (await proposal.json()) as { id: string };
+    const implicitApprove = await fetch(`${url}/api/privacy/proposals/${created.id}/decide`, {
+      method: 'POST',
+      headers: auth(owner),
+      body: JSON.stringify({}),
+    });
+    expect(implicitApprove.status).toBe(400);
+    const denied = await fetch(`${url}/api/privacy/proposals/${created.id}/decide`, {
+      method: 'POST',
+      headers: auth(owner),
+      body: JSON.stringify({ status: 'denied' }),
+    });
+    expect(denied.status).toBe(200);
     const audit = await fetch(`${url}/api/privacy/audit`, { headers: { cookie: owner.cookie } });
     expect(audit.status).toBe(200);
   });

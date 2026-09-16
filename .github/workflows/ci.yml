@@ -50,6 +50,8 @@ jobs:
         run: npm run test:tools
       - name: Caspa writing dungeon
         run: npm run test:caspa
+      - name: Dungeon estate
+        run: npm run test:estate
       - name: Production readiness gates
         run: npm run test:production
       - name: Production config contract

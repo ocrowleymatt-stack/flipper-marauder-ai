@@ -65,7 +65,7 @@ describe('schema bootstrap and migrations', () => {
          VALUES ('tenant_keep', 'urn:atlas:tenant:keep', 'Keep', now(), now())`,
       );
       const result = await migrate(client, loadMigrations());
-      expect(result.applied).toEqual([2, 3, 4, 5, 6, 7]);
+      expect(result.applied).toEqual([2, 3, 4, 5, 6, 7, 8]);
       expect(result.skipped).toEqual([1]);
       const tenants = await client.query('SELECT id FROM tenants');
       expect(tenants.rows.map((row) => row.id)).toContain('tenant_keep');
@@ -127,11 +127,11 @@ describe('schema bootstrap and migrations', () => {
     for (const migration of loadMigrations(defaultMigrationsDir())) {
       writeFileSync(join(dir, migration.filename), readFileSync(join(defaultMigrationsDir(), migration.filename)));
     }
-    writeFileSync(join(dir, '008_bad.sql'), 'THIS IS NOT SQL;');
+    writeFileSync(join(dir, '009_bad.sql'), 'THIS IS NOT SQL;');
     const client = await handle.kernel.tx.pool.connect();
     try {
       await client.query(`SET search_path TO ${assertIdent(handle.schema)}`);
-      await expect(migrate(client, loadMigrations(dir))).rejects.toThrow(/Migration 8/);
+      await expect(migrate(client, loadMigrations(dir))).rejects.toThrow(/Migration 9/);
       const versions = await client.query('SELECT version FROM schema_migrations ORDER BY version');
       expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
       const tenant = await client.query('SELECT id FROM tenants WHERE id = $1', ['tenant_a']);
@@ -162,14 +162,14 @@ describe('schema bootstrap and migrations', () => {
       writeFileSync(join(dir, migration.filename), readFileSync(join(defaultMigrationsDir(), migration.filename)));
     }
     writeFileSync(
-      join(dir, '008_interrupt.sql'),
+      join(dir, '009_interrupt.sql'),
       `CREATE TABLE interrupted_probe (id TEXT PRIMARY KEY);
        SELECT 1/0;`,
     );
     const client = await handle.kernel.tx.pool.connect();
     try {
       await client.query(`SET search_path TO ${assertIdent(handle.schema)}`);
-      await expect(migrate(client, loadMigrations(dir))).rejects.toThrow(/Migration 8/);
+      await expect(migrate(client, loadMigrations(dir))).rejects.toThrow(/Migration 9/);
       const versions = await client.query('SELECT version FROM schema_migrations ORDER BY version');
       expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
       const probe = await client.query(

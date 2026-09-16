@@ -221,6 +221,71 @@ describe('model/tool loop', () => {
     expect(await stores.executions.listInFlight()).toEqual([]);
   });
 
+  it('accumulates token usage across two tool rounds rather than keeping only the last round', async () => {
+    const stores = memoryStores();
+    const orchestrator: ToolOrchestrator = {
+      async handleCall(input) {
+        return {
+          invocationId: `inv_${input.call.id}`,
+          toolId: input.call.toolId,
+          status: 'succeeded',
+          output: { ok: true },
+        };
+      },
+    };
+    const executor: ModelExecutor = {
+      async *execute(_decision, context, observer) {
+        const prior = context.priorToolResults ?? [];
+        observer?.onAttempt({
+          index: prior.length + 1,
+          provider: 'openai',
+          model: 'gpt-4o',
+          outcome: 'started',
+          error: null,
+          emittedVisibleOutput: false,
+        });
+        if (prior.length === 0) {
+          yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 } };
+          yield {
+            type: 'tool_call',
+            call: { id: 'call_1', toolId: 'retrieval.search', arguments: { query: 'one' } },
+          } satisfies StreamChunk;
+        } else {
+          yield { type: 'usage', usage: { inputTokens: 20, outputTokens: 6, totalTokens: 26 } };
+          yield { type: 'text', text: 'done' };
+        }
+        observer?.onAttempt({
+          index: prior.length + 1,
+          provider: 'openai',
+          model: 'gpt-4o',
+          outcome: 'succeeded',
+          error: null,
+          emittedVisibleOutput: prior.length > 0,
+        });
+        observer?.onSelected?.({ provider: 'openai', model: 'gpt-4o' });
+      },
+    };
+    const runtime = new ConversationRuntime({
+      ...stores,
+      events: new MemoryEventBus(),
+      router: { resolve: () => decision() } satisfies CapabilityRouter,
+      executor,
+      toolOrchestrator: orchestrator,
+      principalId: 'user_a',
+    });
+    const conversation = await runtime.createConversation();
+    Object.assign(conversation, { tenantId: 'tenant_a' });
+    await stores.conversations.save(conversation);
+    for await (const _event of runtime.sendMessage(conversation.id, { content: 'search then answer' })) {
+      // drain
+    }
+    const snapshot = await runtime.getSnapshot(conversation.id);
+    expect(snapshot?.executions[0]?.status).toBe('completed');
+    expect(snapshot?.executions[0]?.usage).toEqual({ inputTokens: 30, outputTokens: 10, totalTokens: 40 });
+    const provenance = await stores.provenance.forJob(snapshot!.executions[0]!.id);
+    expect(provenance[0]?.usage).toEqual({ inputTokens: 30, outputTokens: 10, totalTokens: 40 });
+  });
+
   it('fails closed when a later model pass requests tools after the round ceiling', async () => {
     const stores = memoryStores();
     const calls: string[] = [];

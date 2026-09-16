@@ -30,12 +30,14 @@ function approvalEngine(maxPendingApprovals: number, invocations = new MemoryToo
   for (const cap of ['filesystem.write', 'file.write', 'tool.invoke.external_write'] as const) {
     authority.grantTo({ principalId, tenantId, capability: cap });
   }
+  const approvals = new MemoryToolApprovalStore();
   return {
     invocations,
+    approvals,
     engine: new ToolEngine({
       registry,
       invocations,
-      approvals: new MemoryToolApprovalStore(),
+      approvals,
       authority,
       jailRoot: mkdtempSync(join(tmpdir(), 'atlas-jail-')),
       limits: { ...DEFAULT_OPERATIONAL_LIMITS, maxPendingApprovals },
@@ -112,5 +114,50 @@ describe('approval ceiling reservation', () => {
     expect(awaiting).toHaveLength(1);
     expect(awaiting[0]?.id).toBe(first.invocation.id);
     expect(await engine.reconcile()).toEqual([]);
+  });
+
+  it('expires stale awaiting_approval records before counting the ceiling', async () => {
+    const { engine, actor, invocations, approvals } = approvalEngine(1);
+    const first = await engine.invoke(actor, {
+      toolId: 'fs.write',
+      arguments: { path: 'stale.txt', content: 'old' },
+    });
+    expect(first.invocation.status).toBe('awaiting_approval');
+    const approval = await approvals.getByInvocation(actor.tenantId, first.invocation.id);
+    expect(approval).toBeTruthy();
+    await approvals.save({ ...approval!, expiresAt: new Date(Date.now() - 1).toISOString() });
+
+    const second = await engine.invoke(actor, {
+      toolId: 'fs.write',
+      arguments: { path: 'fresh.txt', content: 'new' },
+    });
+    expect(second.invocation.status).toBe('awaiting_approval');
+    expect((await engine.get(actor, first.invocation.id))?.status).toBe('denied');
+    expect((await engine.get(actor, first.invocation.id))?.failureReason?.code).toBe('approval_expired');
+    const awaiting = await invocations.listByStatus(actor.tenantId, ['awaiting_approval']);
+    expect(awaiting).toHaveLength(1);
+    expect(awaiting[0]?.id).toBe(second.invocation.id);
+  });
+
+  it('reconcile expires awaiting_approval past approvalTtlMs so the ceiling can recover', async () => {
+    const { engine, actor, invocations, approvals } = approvalEngine(1);
+    const first = await engine.invoke(actor, {
+      toolId: 'fs.write',
+      arguments: { path: 'stale.txt', content: 'old' },
+    });
+    expect(first.invocation.status).toBe('awaiting_approval');
+    const approval = await approvals.getByInvocation(actor.tenantId, first.invocation.id);
+    await approvals.save({ ...approval!, expiresAt: new Date(Date.now() - 5_000).toISOString() });
+
+    const recovered = await engine.reconcile();
+    expect(recovered.some((row) => row.id === first.invocation.id && row.status === 'denied')).toBe(true);
+    expect((await engine.get(actor, first.invocation.id))?.failureReason?.code).toBe('approval_expired');
+    expect(await invocations.listByStatus(actor.tenantId, ['awaiting_approval'])).toEqual([]);
+
+    const second = await engine.invoke(actor, {
+      toolId: 'fs.write',
+      arguments: { path: 'after-reconcile.txt', content: 'ok' },
+    });
+    expect(second.invocation.status).toBe('awaiting_approval');
   });
 });

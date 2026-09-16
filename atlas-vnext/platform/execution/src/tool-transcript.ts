@@ -1,6 +1,46 @@
+import type { StreamChunk } from '@atlas-vnext/contracts';
 import type { ExecutionContext } from './types.ts';
 
 export type PriorToolResult = NonNullable<ExecutionContext['priorToolResults']>[number];
+
+/** OpenAI/Anthropic function names: letters, digits, underscore, hyphen. */
+const PROVIDER_TOOL_NAME_RE = /^[a-zA-Z0-9_-]+$/;
+
+export function toProviderToolName(toolId: string): string {
+  if (PROVIDER_TOOL_NAME_RE.test(toolId)) return toolId;
+  const aliased = toolId.replaceAll('.', '__');
+  if (PROVIDER_TOOL_NAME_RE.test(aliased)) return aliased;
+  return aliased.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+export function fromProviderToolName(name: string, knownIds: Iterable<string> = []): string {
+  const ids = [...knownIds];
+  if (ids.includes(name)) return name;
+  const aliasedMatch = ids.find((id) => toProviderToolName(id) === name);
+  if (aliasedMatch) return aliasedMatch;
+  return name;
+}
+
+export function knownProviderToolIds(context: ExecutionContext): string[] {
+  const ids = new Set<string>();
+  for (const tool of context.tools ?? []) ids.add(tool.id);
+  for (const row of context.priorToolResults ?? []) ids.add(row.toolId);
+  return [...ids];
+}
+
+export function remapProviderToolChunks(chunks: Iterable<StreamChunk>, knownIds: Iterable<string>): StreamChunk[] {
+  const ids = [...knownIds];
+  return [...chunks].map((chunk) => {
+    if (chunk.type !== 'tool_call') return chunk;
+    return {
+      ...chunk,
+      call: {
+        ...chunk.call,
+        toolId: fromProviderToolName(chunk.call.toolId, ids),
+      },
+    };
+  });
+}
 
 export type ToolRound = PriorToolResult[];
 
@@ -34,7 +74,7 @@ export function openaiToolsFrom(context: ExecutionContext): Array<Record<string,
   return context.tools.map((tool) => ({
     type: 'function',
     function: {
-      name: tool.id,
+      name: toProviderToolName(tool.id),
       description: tool.description,
       parameters: tool.inputSchema,
     },
@@ -66,7 +106,7 @@ export function openaiMessagesFrom(context: ExecutionContext): OpenAIChatMessage
         id: row.callId,
         type: 'function',
         function: {
-          name: row.toolId,
+          name: toProviderToolName(row.toolId),
           arguments: JSON.stringify(row.arguments ?? {}),
         },
       })),
@@ -85,7 +125,7 @@ export function openaiMessagesFrom(context: ExecutionContext): OpenAIChatMessage
 export function anthropicToolsFrom(context: ExecutionContext): Array<Record<string, unknown>> | null {
   if (!context.tools?.length) return null;
   return context.tools.map((tool) => ({
-    name: tool.id,
+    name: toProviderToolName(tool.id),
     description: tool.description,
     input_schema: tool.inputSchema,
   }));
@@ -116,7 +156,7 @@ export function anthropicMessagesFrom(context: ExecutionContext): AnthropicMessa
       content: round.map((row) => ({
         type: 'tool_use',
         id: row.callId,
-        name: row.toolId,
+        name: toProviderToolName(row.toolId),
         input: row.arguments ?? {},
       })),
     });
@@ -137,7 +177,7 @@ export function geminiToolsFrom(context: ExecutionContext): Array<Record<string,
   return [
     {
       functionDeclarations: context.tools.map((tool) => ({
-        name: tool.id,
+        name: toProviderToolName(tool.id),
         description: tool.description,
         parameters: tool.inputSchema,
       })),
@@ -166,7 +206,7 @@ export function geminiContentsFrom(context: ExecutionContext): GeminiContent[] {
       role: 'model',
       parts: round.map((row) => ({
         functionCall: {
-          name: row.toolId,
+          name: toProviderToolName(row.toolId),
           args: row.arguments ?? {},
           id: row.callId,
         },
@@ -176,7 +216,7 @@ export function geminiContentsFrom(context: ExecutionContext): GeminiContent[] {
       role: 'user',
       parts: round.map((row) => ({
         functionResponse: {
-          name: row.toolId,
+          name: toProviderToolName(row.toolId),
           id: row.callId,
           response: {
             status: row.status,

@@ -198,8 +198,8 @@ export class ToolEngine {
   ): Promise<InvokeResult> {
     this.assertNotAborted(signal);
     if (needsApproval(definition)) {
-      const pending = await this.options.invocations.listByStatus(actor.tenantId, ['awaiting_approval']);
-      if (pending.length >= this.limits.maxPendingApprovals) {
+      const pending = await this.countActivePendingApprovals(actor.tenantId);
+      if (pending >= this.limits.maxPendingApprovals) {
         throw new ToolError('rate_limit', 'Fail-closed: pending approval ceiling reached.', true);
       }
     }
@@ -214,8 +214,8 @@ export class ToolEngine {
         return { invocation, provenance: this.provenance(invocation) };
       }
       if (needsApproval(definition) && invocation.status === 'authorised') {
-        const pending = await this.options.invocations.listByStatus(actor.tenantId, ['awaiting_approval']);
-        if (pending.length >= this.limits.maxPendingApprovals) {
+        const pending = await this.countActivePendingApprovals(actor.tenantId);
+        if (pending >= this.limits.maxPendingApprovals) {
           const failed = await this.transition(invocation, 'failed', {
             failureReason: failure('rate_limit', 'Fail-closed: pending approval ceiling reached.', true),
           });
@@ -365,6 +365,7 @@ export class ToolEngine {
   }
 
   async reconcile(): Promise<ToolInvocation[]> {
+    const out: ToolInvocation[] = await this.expireStaleApprovals(null);
     const pending = await this.options.invocations.listByStatus(null, [
       'proposed',
       'validated',
@@ -372,7 +373,6 @@ export class ToolEngine {
       'queued',
       'running',
     ]);
-    const out: ToolInvocation[] = [];
     for (const invocation of pending) {
       if (invocation.status === 'running') {
         if (invocation.sideEffectClass === 'uncertain_external') {
@@ -440,7 +440,7 @@ export class ToolEngine {
     this.inFlight += 1;
     const timeout = setTimeout(() => controller.abort(), definition.timeoutMs);
     try {
-      const result = await adapter.execute(current.arguments, {
+      const executePromise = adapter.execute(current.arguments, {
         actor,
         invocation: current,
         definition,
@@ -453,15 +453,14 @@ export class ToolEngine {
         recordEffect: (key, value) => this.recordEffect(actor.tenantId, key, value, current),
         lookupEffect: async () => null,
       });
-      if (controller.signal.aborted) {
+      const raced = await awaitOrAbort(executePromise, controller.signal);
+      if (raced.status === 'aborted' || controller.signal.aborted) {
         if (signal?.aborted) {
           return this.terminaliseAbort(current, definition);
         }
-        const timedOut = await this.transition(current, 'failed', {
-          failureReason: failure('timeout', 'Tool execution timed out.', false),
-        });
-        return { invocation: timedOut, provenance: this.provenance(timedOut) };
+        return this.terminaliseTimeout(current, definition);
       }
+      const result = raced.value;
       const succeeded = await this.transition(current, 'succeeded', {
         resultRef: result.resultRef ?? `toolres:${current.id}`,
         artefactIds: result.artefactIds ?? [],
@@ -484,11 +483,7 @@ export class ToolEngine {
         if (signal?.aborted) {
           return this.terminaliseAbort(current, definition);
         }
-        const message = err instanceof Error ? err.message : 'Tool execution timed out.';
-        const timedOut = await this.transition(current, 'failed', {
-          failureReason: failure('timeout', message, false),
-        });
-        return { invocation: timedOut, provenance: this.provenance(timedOut) };
+        return this.terminaliseTimeout(current, definition);
       }
       const message = err instanceof Error ? err.message : String(err);
       const failed = await this.transition(current, 'failed', {
@@ -510,8 +505,7 @@ export class ToolEngine {
     if (isTerminalToolStatus(invocation.status)) {
       return { invocation, provenance: this.provenance(invocation) };
     }
-    const mutating = definition.sideEffectClass !== 'none' && invocation.status === 'running';
-    if (mutating) {
+    if (isMutatingRunning(definition, invocation)) {
       const uncertain = await this.transition(invocation, 'uncertain', {
         cancelRequested: true,
         cancelConfirmed: false,
@@ -529,6 +523,54 @@ export class ToolEngine {
       failureReason: failure('cancelled', 'Invocation cancelled.', false),
     });
     return { invocation: cancelled, provenance: this.provenance(cancelled) };
+  }
+
+  private async terminaliseTimeout(
+    invocation: ToolInvocation,
+    definition: ToolDefinition,
+  ): Promise<InvokeResult> {
+    if (isTerminalToolStatus(invocation.status)) {
+      return { invocation, provenance: this.provenance(invocation) };
+    }
+    if (isMutatingRunning(definition, invocation)) {
+      const uncertain = await this.transition(invocation, 'uncertain', {
+        failureReason: failure(
+          'interrupted_uncertain',
+          'Tool execution timed out during a mutating side effect; completion is uncertain and requires reconciliation.',
+          false,
+        ),
+      });
+      return { invocation: uncertain, provenance: this.provenance(uncertain) };
+    }
+    const timedOut = await this.transition(invocation, 'failed', {
+      failureReason: failure('timeout', 'Tool execution timed out.', false),
+    });
+    return { invocation: timedOut, provenance: this.provenance(timedOut) };
+  }
+
+  private async countActivePendingApprovals(tenantId: string): Promise<number> {
+    await this.expireStaleApprovals(tenantId);
+    const pending = await this.options.invocations.listByStatus(tenantId, ['awaiting_approval']);
+    return pending.length;
+  }
+
+  private async expireStaleApprovals(tenantId: string | null): Promise<ToolInvocation[]> {
+    const pending = await this.options.invocations.listByStatus(tenantId, ['awaiting_approval']);
+    const expired: ToolInvocation[] = [];
+    const now = Date.now();
+    for (const invocation of pending) {
+      const approval = await this.options.approvals.getByInvocation(invocation.tenantId, invocation.id);
+      if (!approval?.expiresAt) continue;
+      const expiresAt = Date.parse(approval.expiresAt);
+      if (!Number.isFinite(expiresAt) || expiresAt > now) continue;
+      if (isTerminalToolStatus(invocation.status)) continue;
+      expired.push(
+        await this.transition(invocation, 'denied', {
+          failureReason: failure('approval_expired', 'Approval expired.', false),
+        }),
+      );
+    }
+    return expired;
   }
 
   private assertNotAborted(signal?: AbortSignal): void {
@@ -887,6 +929,10 @@ function resourceFromArguments(args: Record<string, unknown>): string | null {
   return null;
 }
 
+function isMutatingRunning(definition: ToolDefinition, invocation: ToolInvocation): boolean {
+  return definition.sideEffectClass !== 'none' && invocation.status === 'running';
+}
+
 function needsApproval(definition: ToolDefinition): boolean {
   if (definition.approvalPolicy === 'required') return true;
   if (definition.approvalPolicy === 'required_if_external') {
@@ -916,4 +962,40 @@ function linkAbort(parent: AbortSignal | undefined, child: AbortController): () 
   const onAbort = () => child.abort();
   parent.addEventListener('abort', onAbort, { once: true });
   return () => parent.removeEventListener('abort', onAbort);
+}
+
+/**
+ * Bound an adapter promise against AbortSignal so a non-settling execute()
+ * cannot strand ToolEngine.invoke. The adapter may keep running; callers must
+ * record a terminal invocation state before returning.
+ */
+function awaitOrAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<{ status: 'fulfilled'; value: T } | { status: 'aborted' }> {
+  void promise.then(
+    () => undefined,
+    () => undefined,
+  );
+  if (signal.aborted) return Promise.resolve({ status: 'aborted' });
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (result: { status: 'fulfilled'; value: T } | { status: 'aborted' }) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      resolve(result);
+    };
+    const onAbort = () => finish({ status: 'aborted' });
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => finish({ status: 'fulfilled', value }),
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
 }

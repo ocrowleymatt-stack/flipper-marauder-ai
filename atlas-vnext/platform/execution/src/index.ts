@@ -2,12 +2,16 @@ export type { ExecutionContext, ExecutionObserver, HealthObserver, ProviderAdapt
 export {
   anthropicMessagesFrom,
   anthropicToolsFrom,
+  fromProviderToolName,
   geminiContentsFrom,
   geminiToolsFrom,
   groupPriorToolRounds,
+  knownProviderToolIds,
   openaiMessagesFrom,
   openaiToolsFrom,
+  remapProviderToolChunks,
   serializeToolResult,
+  toProviderToolName,
 } from './tool-transcript.ts';
 export type {
   AnthropicMessage,

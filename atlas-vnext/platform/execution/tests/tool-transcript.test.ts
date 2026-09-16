@@ -5,7 +5,9 @@ import {
   GeminiAdapter,
   MapSecretStore,
   createOpenAIAdapter,
+  fromProviderToolName,
   responseFromText,
+  toProviderToolName,
   type ExecutionContext,
   type HttpRequest,
   type HttpTransport,
@@ -120,6 +122,20 @@ const secondResult = {
   round: 1,
 };
 
+const PROVIDER_SAFE = /^[a-zA-Z0-9_-]+$/;
+
+describe('provider-safe tool aliases', () => {
+  it('maps dotted catalogue ids to OpenAI/Anthropic-safe names and back', () => {
+    expect(toProviderToolName('retrieval.search')).toBe('retrieval__search');
+    expect(toProviderToolName('project.file_op')).toBe('project__file_op');
+    expect(toProviderToolName('job.run')).toBe('job__run');
+    expect(toProviderToolName('already_safe')).toBe('already_safe');
+    expect(PROVIDER_SAFE.test(toProviderToolName('retrieval.search'))).toBe(true);
+    expect(fromProviderToolName('retrieval__search', ['retrieval.search', 'fs.write'])).toBe('retrieval.search');
+    expect(fromProviderToolName('retrieval.search', ['retrieval.search'])).toBe('retrieval.search');
+  });
+});
+
 describe('live adapter tool advertisement', () => {
   it('OpenAI-compatible requests include authorised function declarations only', async () => {
     const captured = capturingTransport(() => ({
@@ -142,12 +158,14 @@ describe('live adapter tool advertisement', () => {
       {
         type: 'function',
         function: {
-          name: 'retrieval.search',
+          name: 'retrieval__search',
           description: SEARCH.description,
           parameters: SEARCH.inputSchema,
         },
       },
     ]);
+    expect(PROVIDER_SAFE.test('retrieval__search')).toBe(true);
+    expect(JSON.stringify(captured.bodies[0])).not.toContain('retrieval.search');
     expect(JSON.stringify(captured.bodies[0])).not.toContain('fs.write');
     expect(JSON.stringify(captured.bodies[0])).not.toContain('runpod');
   });
@@ -166,11 +184,12 @@ describe('live adapter tool advertisement', () => {
     await collect(adapter.stream('claude-sonnet', { prompt: 'search', tools: [SEARCH] }));
     expect(captured.bodies[0]?.tools).toEqual([
       {
-        name: 'retrieval.search',
+        name: 'retrieval__search',
         description: SEARCH.description,
         input_schema: SEARCH.inputSchema,
       },
     ]);
+    expect(JSON.stringify(captured.bodies[0])).not.toContain('retrieval.search');
     expect(JSON.stringify(captured.bodies[0])).not.toContain('fs.write');
   });
 
@@ -190,14 +209,85 @@ describe('live adapter tool advertisement', () => {
       {
         functionDeclarations: [
           {
-            name: 'retrieval.search',
+            name: 'retrieval__search',
             description: SEARCH.description,
             parameters: SEARCH.inputSchema,
           },
         ],
       },
     ]);
+    expect(JSON.stringify(captured.bodies[0])).not.toContain('retrieval.search');
     expect(JSON.stringify(captured.bodies[0])).not.toContain('admin.configure');
+  });
+});
+
+describe('provider tool name round-trip', () => {
+  it('OpenAI-compatible maps advertised aliases back to catalogue ids', async () => {
+    const captured = capturingTransport(() => ({
+      status: 200,
+      body: openaiToolCallSse('call_1', 'retrieval__search', { query: 'one' }),
+    }));
+    const adapter = createOpenAIAdapter({
+      secrets: new MapSecretStore({ OPENAI_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://api.openai.com/v1',
+      transport: captured.transport,
+    });
+    const chunks = await collect(adapter.stream('gpt-4o', { prompt: 'search', tools: [SEARCH] }));
+    const call = chunks.find((chunk) => chunk.type === 'tool_call');
+    expect(call).toMatchObject({ type: 'tool_call', call: { id: 'call_1', toolId: 'retrieval.search' } });
+    expect(JSON.stringify(captured.bodies[0]?.tools)).toContain('retrieval__search');
+    expect(JSON.stringify(captured.bodies[0]?.tools)).not.toContain('retrieval.search');
+  });
+
+  it('Anthropic maps advertised aliases back to catalogue ids', async () => {
+    const captured = capturingTransport(() => ({
+      status: 200,
+      body: anthropicToolUseSse('call_1', 'retrieval__search', { query: 'one' }),
+    }));
+    const adapter = new AnthropicAdapter({
+      secrets: new MapSecretStore({ ANTHROPIC_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://api.anthropic.com',
+      transport: captured.transport,
+    });
+    const chunks = await collect(adapter.stream('claude-sonnet', { prompt: 'search', tools: [SEARCH] }));
+    const call = chunks.find((chunk) => chunk.type === 'tool_call');
+    expect(call).toMatchObject({ type: 'tool_call', call: { id: 'call_1', toolId: 'retrieval.search' } });
+  });
+
+  it('Gemini round-trips both dotted provider names and aliases to catalogue ids', async () => {
+    const dotted = capturingTransport(() => ({
+      status: 200,
+      body: geminiFunctionCallSse('call_dot', 'retrieval.search', { query: 'one' }),
+    }));
+    const dottedAdapter = new GeminiAdapter({
+      secrets: new MapSecretStore({ GEMINI_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      transport: dotted.transport,
+    });
+    const dottedChunks = await collect(dottedAdapter.stream('flash', { prompt: 'search', tools: [SEARCH] }));
+    expect(dottedChunks.find((chunk) => chunk.type === 'tool_call')).toMatchObject({
+      type: 'tool_call',
+      call: { id: 'call_dot', toolId: 'retrieval.search' },
+    });
+
+    const aliased = capturingTransport(() => ({
+      status: 200,
+      body: geminiFunctionCallSse('call_alias', 'retrieval__search', { query: 'one' }),
+    }));
+    const aliasedAdapter = new GeminiAdapter({
+      secrets: new MapSecretStore({ GEMINI_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      transport: aliased.transport,
+    });
+    const aliasedChunks = await collect(aliasedAdapter.stream('flash', { prompt: 'search', tools: [SEARCH] }));
+    expect(aliasedChunks.find((chunk) => chunk.type === 'tool_call')).toMatchObject({
+      type: 'tool_call',
+      call: { id: 'call_alias', toolId: 'retrieval.search' },
+    });
   });
 });
 
@@ -207,10 +297,10 @@ describe('native multi-round tool transcripts', () => {
       const messages = body.messages as Array<{ role: string }>;
       const toolMessages = messages.filter((row) => row.role === 'tool');
       if (toolMessages.length === 0) {
-        return { status: 200, body: openaiToolCallSse('call_1', 'retrieval.search', { query: 'one' }) };
+        return { status: 200, body: openaiToolCallSse('call_1', 'retrieval__search', { query: 'one' }) };
       }
       if (toolMessages.length === 1) {
-        return { status: 200, body: openaiToolCallSse('call_2', 'retrieval.search', { query: 'two' }) };
+        return { status: 200, body: openaiToolCallSse('call_2', 'retrieval__search', { query: 'two' }) };
       }
       return {
         status: 200,
@@ -225,7 +315,7 @@ describe('native multi-round tool transcripts', () => {
     });
     const tools = [SEARCH];
     const first = await collect(adapter.stream('gpt-4o', { prompt: 'search twice', tools }));
-    expect(first.some((chunk) => chunk.type === 'tool_call' && chunk.call.id === 'call_1')).toBe(true);
+    expect(first.some((chunk) => chunk.type === 'tool_call' && chunk.call.toolId === 'retrieval.search')).toBe(true);
 
     const secondCtx: ExecutionContext = {
       prompt: 'search twice',
@@ -233,7 +323,7 @@ describe('native multi-round tool transcripts', () => {
       priorToolResults: [firstResult],
     };
     const second = await collect(adapter.stream('gpt-4o', secondCtx));
-    expect(second.some((chunk) => chunk.type === 'tool_call' && chunk.call.id === 'call_2')).toBe(true);
+    expect(second.some((chunk) => chunk.type === 'tool_call' && chunk.call.toolId === 'retrieval.search')).toBe(true);
     const secondMessages = captured.bodies[1]?.messages as Array<Record<string, unknown>>;
     expect(secondMessages.some((row) => row.role === 'assistant' && Array.isArray(row.tool_calls))).toBe(true);
     expect(
@@ -241,6 +331,8 @@ describe('native multi-round tool transcripts', () => {
         (row) => row.role === 'tool' && row.tool_call_id === 'call_1' && String(row.content).includes('doc_alpha'),
       ),
     ).toBe(true);
+    expect(JSON.stringify(secondMessages)).toContain('retrieval__search');
+    expect(JSON.stringify(secondMessages)).not.toContain('"name":"retrieval.search"');
 
     const third = await collect(
       adapter.stream('gpt-4o', {
@@ -264,10 +356,10 @@ describe('native multi-round tool transcripts', () => {
       const messages = body.messages as Array<{ role: string }>;
       const assistantTurns = messages.filter((row) => row.role === 'assistant');
       if (assistantTurns.length === 0) {
-        return { status: 200, body: anthropicToolUseSse('call_1', 'retrieval.search', { query: 'one' }) };
+        return { status: 200, body: anthropicToolUseSse('call_1', 'retrieval__search', { query: 'one' }) };
       }
       if (assistantTurns.length === 1) {
-        return { status: 200, body: anthropicToolUseSse('call_2', 'retrieval.search', { query: 'two' }) };
+        return { status: 200, body: anthropicToolUseSse('call_2', 'retrieval__search', { query: 'two' }) };
       }
       return {
         status: 200,

@@ -5,7 +5,7 @@ import { parseSse } from '../stream-parse.ts';
 import { OpenAIToolCallAssembler } from '../tool-call-buffer.ts';
 import { readAllText, type HttpTransport } from '../transport.ts';
 import type { SecretStore } from '../secrets.ts';
-import { openaiMessagesFrom, openaiToolsFrom } from '../tool-transcript.ts';
+import { knownProviderToolIds, openaiMessagesFrom, openaiToolsFrom, remapProviderToolChunks } from '../tool-transcript.ts';
 import type { ExecutionContext, ProviderAdapter } from '../types.ts';
 
 export interface OpenAICompatibleOptions {
@@ -84,7 +84,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     for await (const frame of parseSse(response.stream)) {
       if (context.signal?.aborted) throw new Error('Execution aborted.');
       if (frame.data === '[DONE]') {
-        yield* toolCalls.finish(this.providerId);
+        yield* remapProviderToolChunks(toolCalls.finish(this.providerId), knownProviderToolIds(context));
         return;
       }
       let parsed: OpenAIStreamPayload;
@@ -112,7 +112,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       const usage = usageFromOpenAI(parsed.usage);
       if (usage) yield { type: 'usage', usage };
     }
-    yield* toolCalls.finish(this.providerId);
+    yield* remapProviderToolChunks(toolCalls.finish(this.providerId), knownProviderToolIds(context));
   }
 }
 

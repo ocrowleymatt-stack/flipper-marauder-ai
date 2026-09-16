@@ -5,7 +5,7 @@ import { geminiApiKey, type SecretStore } from '../secrets.ts';
 import { parseSse } from '../stream-parse.ts';
 import { GeminiFunctionCallAssembler } from '../tool-call-buffer.ts';
 import { readAllText, type HttpTransport } from '../transport.ts';
-import { geminiContentsFrom, geminiToolsFrom } from '../tool-transcript.ts';
+import { geminiContentsFrom, geminiToolsFrom, knownProviderToolIds, remapProviderToolChunks } from '../tool-transcript.ts';
 import type { ExecutionContext, ProviderAdapter } from '../types.ts';
 
 export class GeminiAdapter implements ProviderAdapter {
@@ -86,7 +86,7 @@ export class GeminiAdapter implements ProviderAdapter {
       );
       if (usage) yield { type: 'usage', usage };
     }
-    yield* tools.finish(this.providerId);
+    yield* remapProviderToolChunks(tools.finish(this.providerId), knownProviderToolIds(context));
   }
 }
 

@@ -272,6 +272,12 @@ export class ConversationRuntime {
     let persistedGeneratedBytes = 0;
     let nextPersistAt = STREAM_PERSIST_CHECKPOINT_BYTES;
     let usage: TokenUsage | null = null;
+    let roundUsage: TokenUsage | null = null;
+    const commitRoundUsage = (): void => {
+      if (!roundUsage) return;
+      usage = addTokenUsage(usage, roundUsage);
+      roundUsage = null;
+    };
     let attempts: ExecutionAttempt[] = [];
     let startedMs = Date.now();
     let settled = false;
@@ -605,7 +611,7 @@ export class ConversationRuntime {
           )) {
             for (const event of pending.splice(0)) yield event;
             if (chunk.type === 'usage') {
-              usage = chunk.usage;
+              roundUsage = chunk.usage;
               yield { type: 'usage', executionId, usage: chunk.usage };
               continue;
             }
@@ -679,6 +685,7 @@ export class ConversationRuntime {
             for (const event of await applyText(chunk.text)) yield event;
           }
           for (const event of pending.splice(0)) yield event;
+          commitRoundUsage();
 
           if (controller.signal.aborted) {
             for (const event of await settleAbort()) yield event;
@@ -731,6 +738,7 @@ export class ConversationRuntime {
 
         for (const event of await completeSuccessfully()) yield event;
       } catch (err) {
+        commitRoundUsage();
         for (const event of pending.splice(0)) yield event;
         const limited = err instanceof GeneratedOutputLimitError;
         if (limited && !controller.signal.aborted) {
@@ -773,6 +781,7 @@ export class ConversationRuntime {
     } finally {
       if (deadlineTimer) clearTimeout(deadlineTimer);
       try {
+        commitRoundUsage();
         if (!settled) {
           const pendingAssistant = assistant;
           if (pendingAssistant !== null) {
@@ -923,6 +932,21 @@ function titleFromPrompt(text: string): string {
 function sanitiseTitle(title: string | undefined): string | null {
   const trimmed = title?.trim();
   return trimmed ? trimmed : null;
+}
+
+function addTokenUsage(acc: TokenUsage | null, next: TokenUsage): TokenUsage {
+  if (!acc) {
+    return {
+      inputTokens: next.inputTokens,
+      outputTokens: next.outputTokens,
+      totalTokens: next.totalTokens,
+    };
+  }
+  return {
+    inputTokens: acc.inputTokens + next.inputTokens,
+    outputTokens: acc.outputTokens + next.outputTokens,
+    totalTokens: acc.totalTokens + next.totalTokens,
+  };
 }
 
 function failure(code: string, message: string, retryable: boolean, at?: string): StructuredFailure {

@@ -147,3 +147,123 @@ describe('cancellation into running tools', () => {
     expect((await engine.get(actor, result.invocation.id))?.status).toBe('uncertain');
   });
 });
+
+function ignoringHangAdapter(id: string): ToolAdapter {
+  return {
+    id,
+    async execute() {
+      await new Promise(() => {
+        /* never settles, even after abort */
+      });
+      return { output: {} };
+    },
+  };
+}
+
+describe('bounded adapter execution', () => {
+  it('does not hang ToolEngine when a read-only adapter ignores abort, and records failed on timeoutMs', async () => {
+    const def = {
+      ...PLATFORM_TOOL_CATALOGUE.find((row) => row.id === 'retrieval.search')!,
+      id: 'retrieval.hang',
+      adapter: 'hang.ignore',
+      timeoutMs: 40,
+    };
+    const { engine, actor, authority, invocations } = makeEngine([ignoringHangAdapter('hang.ignore')], [def]);
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    const started = Date.now();
+    const result = await engine.invoke(actor, { toolId: 'retrieval.hang', arguments: { query: 'Alpha' } });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(result.invocation.status).toBe('failed');
+    expect(result.invocation.failureReason?.code).toBe('timeout');
+    expect(await invocations.listByStatus(actor.tenantId, ['running', 'authorised', 'queued'])).toEqual([]);
+    expect((await engine.get(actor, result.invocation.id))?.status).toBe('failed');
+  });
+
+  it('completes conversation cancel against a non-settling read-only adapter without waiting for timeoutMs', async () => {
+    const def = {
+      ...PLATFORM_TOOL_CATALOGUE.find((row) => row.id === 'retrieval.search')!,
+      id: 'retrieval.hang',
+      adapter: 'hang.ignore',
+      timeoutMs: 5_000,
+    };
+    const { engine, actor, authority, invocations } = makeEngine([ignoringHangAdapter('hang.ignore')], [def]);
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    const controller = new AbortController();
+    const pending = engine.invoke(
+      actor,
+      { toolId: 'retrieval.hang', arguments: { query: 'Alpha' } },
+      { signal: controller.signal },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const started = Date.now();
+    controller.abort();
+    const result = await pending;
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(result.invocation.status).toBe('cancelled');
+    expect(await invocations.listByStatus(actor.tenantId, ['running'])).toEqual([]);
+  });
+
+  it('marks a non-settling mutating timeout uncertain rather than failed', async () => {
+    const def = {
+      ...PLATFORM_TOOL_CATALOGUE.find((row) => row.id === 'api.mutate')!,
+      id: 'test.mutate.hang',
+      adapter: 'hang.ignore',
+      approvalPolicy: 'none' as const,
+      timeoutMs: 40,
+    };
+    const { engine, actor, authority, invocations } = makeEngine([ignoringHangAdapter('hang.ignore')], [def]);
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
+    authority.grantTo({
+      principalId: actor.principalId,
+      tenantId: actor.tenantId,
+      capability: 'tool.invoke.external_write',
+    });
+    const result = await engine.invoke(actor, {
+      toolId: 'test.mutate.hang',
+      arguments: { url: 'https://example.test/hang' },
+    });
+    expect(result.invocation.status).toBe('uncertain');
+    expect(result.invocation.failureReason?.code).toBe('interrupted_uncertain');
+    expect(await invocations.listByStatus(actor.tenantId, ['failed', 'cancelled', 'running'])).toEqual([]);
+    expect((await engine.get(actor, result.invocation.id))?.status).toBe('uncertain');
+  });
+
+  it('keeps a cooperative read-only timeout as failed, not cancelled', async () => {
+    const def = {
+      ...PLATFORM_TOOL_CATALOGUE.find((row) => row.id === 'retrieval.search')!,
+      id: 'retrieval.slow',
+      adapter: 'retrieval.readonly',
+      timeoutMs: 40,
+    };
+    const { engine, actor, authority } = makeEngine([hangingReadAdapter()], [def]);
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    const result = await engine.invoke(actor, { toolId: 'retrieval.slow', arguments: { query: 'Alpha' } });
+    expect(result.invocation.status).toBe('failed');
+    expect(result.invocation.failureReason?.code).toBe('timeout');
+  });
+
+  it('classifies a cooperative uncertain_external timeout as uncertain, not failed', async () => {
+    const started = { value: false };
+    const def = {
+      ...PLATFORM_TOOL_CATALOGUE.find((row) => row.id === 'api.mutate')!,
+      id: 'test.mutate',
+      adapter: 'test.mutate',
+      approvalPolicy: 'none' as const,
+      timeoutMs: 40,
+    };
+    const { engine, actor, authority } = makeEngine([hangingMutateAdapter(started)], [def]);
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
+    authority.grantTo({
+      principalId: actor.principalId,
+      tenantId: actor.tenantId,
+      capability: 'tool.invoke.external_write',
+    });
+    const result = await engine.invoke(actor, {
+      toolId: 'test.mutate',
+      arguments: { url: 'https://example.test/timeout' },
+    });
+    expect(started.value).toBe(true);
+    expect(result.invocation.status).toBe('uncertain');
+    expect(result.invocation.failureReason?.code).toBe('interrupted_uncertain');
+  });
+});

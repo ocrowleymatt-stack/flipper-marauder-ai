@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Server } from 'node:http';
 import type { PersistenceConfig } from '@atlas-vnext/persistence';
-import { composeSpine, createHost, grantSideEffects, listen, type Spine } from '../src/index.ts';
+import { composeSpine, createHost, grantSideEffects, listen, normalizeContextFileIds, type Spine } from '../src/index.ts';
 
 const servers: Server[] = [];
 const spines: Spine[] = [];
@@ -35,13 +35,14 @@ function memoryConfig(tenantId: string): PersistenceConfig {
   };
 }
 
-async function startCaspa() {
+async function startCaspa(env: Record<string, string | undefined> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'atlas-caspa-'));
   const spine = await composeSpine({
     dataPath: join(dir, 'state.json'),
     mode: 'mock',
     persistence: memoryConfig('tenant_a'),
     casRoot: join(dir, 'cas'),
+    env,
   });
   grantSideEffects(spine.authority, spine.principalId, spine.tenantId);
   spines.push(spine);
@@ -514,5 +515,94 @@ describe('Caspa writing dungeon host', () => {
     expect(created.status).toBe(201);
     const anonymous = await fetch(`${bound.url}/api/conversations`);
     expect(anonymous.status).toBe(401);
+  });
+
+  it('normalizes, deduplicates, and rejects over-limit context files before generate work', async () => {
+    expect(normalizeContextFileIds([' a ', 'a', '', 'b', 1, null, 'b', '  '])).toEqual(['a', 'b']);
+    const { url, spine } = await startCaspa({ ATLAS_MAX_CONTEXT_FILES: '2' });
+    const session = await bootstrap(url);
+    const project = (await (
+      await fetch(`${url}/api/projects`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({ name: 'Ceiling' }),
+      })
+    ).json()) as { id: string };
+    const document = (await (
+      await fetch(`${url}/api/projects/${project.id}/documents`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({ title: 'Guard' }),
+      })
+    ).json()) as { id: string; revision: number };
+
+    let generateCalls = 0;
+    const writing = spine.writing!;
+    const original = writing.generate.bind(writing);
+    writing.generate = ((...args: Parameters<typeof original>) => {
+      generateCalls += 1;
+      return original(...args);
+    }) as typeof writing.generate;
+
+    const over = await fetch(`${url}/api/documents/${document.id}/generate`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({
+        operation: 'create',
+        instruction: 'Too many files.',
+        expectedRevision: document.revision,
+        fileIds: ['fil_a', 'fil_b', 'fil_c', 'fil_a', '', '  '],
+      }),
+    });
+    expect(over.status).toBe(400);
+    expect(over.headers.get('content-type')).not.toMatch(/text\/event-stream/);
+    const overBody = (await over.json()) as { code?: string; error?: string };
+    expect(overBody.code).toBe('validation');
+    expect(generateCalls).toBe(0);
+
+    generateCalls = 0;
+    const atLimit = await fetch(`${url}/api/documents/${document.id}/generate`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({
+        operation: 'create',
+        instruction: 'At the ceiling.',
+        expectedRevision: document.revision,
+        fileIds: ['fil_1', 'fil_2'],
+      }),
+    });
+    expect(atLimit.status).toBe(200);
+    expect(generateCalls).toBe(1);
+    await readSse(atLimit);
+
+    generateCalls = 0;
+    const duplicates = await fetch(`${url}/api/documents/${document.id}/generate`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({
+        operation: 'create',
+        instruction: 'Duplicates collapse to the ceiling.',
+        expectedRevision: document.revision,
+        fileIds: ['fil_a', 'fil_a', ' fil_a ', '', 'fil_b', 'fil_b'],
+      }),
+    });
+    expect(duplicates.status).toBe(200);
+    expect(generateCalls).toBe(1);
+    await readSse(duplicates);
+
+    generateCalls = 0;
+    const empty = await fetch(`${url}/api/documents/${document.id}/generate`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({
+        operation: 'create',
+        instruction: 'No files.',
+        expectedRevision: document.revision,
+        fileIds: [],
+      }),
+    });
+    expect(empty.status).toBe(200);
+    expect(generateCalls).toBe(1);
+    await readSse(empty);
   });
 });

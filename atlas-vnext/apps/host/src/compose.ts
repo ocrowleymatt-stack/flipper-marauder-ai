@@ -306,6 +306,8 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       principalId,
       maxConcurrentExecutions: limits.maxConcurrentRuns,
       maxGeneratedBytes: limits.maxGeneratedBytes,
+      maxToolRounds: limits.maxToolRounds,
+      executionDeadlineMs: limits.maxExecutionMs,
     });
     await raceStartup(signal, persistence.recoverOnStart(), budgetMs);
     await raceStartup(signal, tools.reconcile(), budgetMs);
@@ -346,6 +348,8 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       principalId,
       maxConcurrentExecutions: limits.maxConcurrentRuns,
       maxGeneratedBytes: limits.maxGeneratedBytes,
+      maxToolRounds: limits.maxToolRounds,
+      executionDeadlineMs: limits.maxExecutionMs,
     });
     await raceStartup(signal, runtime.recoverInFlight(), budgetMs);
     await raceStartup(signal, tools.reconcile(), budgetMs);

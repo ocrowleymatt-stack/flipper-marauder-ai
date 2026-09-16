@@ -316,22 +316,30 @@ export class WritingService {
         yield { type: 'execution', event };
         if (event.type === 'execution') executionId = event.execution.id;
         if (event.type === 'assistant.delta') {
-          draft += event.text;
-          if (!visible && draft.trim()) {
-            visible = true;
+          if (event.text) draft += event.text;
+          const firstVisible = !visible && Boolean(draft.trim());
+          if (firstVisible) visible = true;
+          if (event.text) {
+            yield { type: 'draft.delta', documentId: record.id, text: event.text };
+          }
+          if (firstVisible) {
             await persistAccumulatedDraft();
             yield { type: 'document', document: await this.present(actor, record, { content: currentText, draft }) };
           }
-          yield { type: 'draft.delta', documentId: record.id, text: draft };
         }
         if (event.type === 'assistant.completed') {
-          draft = event.text;
-          if (!visible && draft.trim()) {
-            visible = true;
+          const previous = draft;
+          if (event.text) draft = event.text;
+          const extra = incrementalCompletedDelta(previous, event.text);
+          const firstVisible = !visible && Boolean(draft.trim());
+          if (firstVisible) visible = true;
+          if (extra) {
+            yield { type: 'draft.delta', documentId: record.id, text: extra };
+          }
+          if (firstVisible) {
             await persistAccumulatedDraft();
             yield { type: 'document', document: await this.present(actor, record, { content: currentText, draft }) };
           }
-          yield { type: 'draft.delta', documentId: record.id, text: draft };
         }
         const cancelled = event.type === 'execution' && event.execution.status === 'cancelled';
         if (cancelled || event.type === 'execution.failed' || event.type === 'error') {
@@ -716,7 +724,22 @@ function titleFromInstruction(instruction?: string): string | null {
 }
 
 function unique(values: string[]): string[] {
-  return [...new Set(values.filter(Boolean))];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const id = value.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function incrementalCompletedDelta(assembled: string, completed: string): string {
+  if (!completed || completed === assembled) return '';
+  if (assembled && completed.startsWith(assembled)) return completed.slice(assembled.length);
+  if (!assembled) return completed;
+  return '';
 }
 
 function failure(code: string, message: string, retryable: boolean): StructuredFailure {

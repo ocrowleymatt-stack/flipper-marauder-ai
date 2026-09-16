@@ -233,6 +233,20 @@ export class PlatformRateLimiter {
   }
 }
 
+export function normalizeContextFileIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const id = item.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 export class ResourceGuard {
   private readonly streams = new Map<string, number>();
   private readonly runs = new Map<string, number>();

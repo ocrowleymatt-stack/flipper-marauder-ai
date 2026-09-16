@@ -268,6 +268,8 @@ export const operationalLimitsSchema = z.object({
   maxConcurrentStreams: z.number().int().positive(),
   maxPendingApprovals: z.number().int().positive(),
   maxConcurrentRuns: z.number().int().positive(),
+  maxToolRounds: z.number().int().positive(),
+  maxExecutionMs: z.number().int().positive(),
 });
 export type OperationalLimits = z.infer<typeof operationalLimitsSchema>;
 
@@ -293,6 +295,8 @@ export const DEFAULT_OPERATIONAL_LIMITS: OperationalLimits = {
   maxConcurrentStreams: 32,
   maxPendingApprovals: 50,
   maxConcurrentRuns: 16,
+  maxToolRounds: 8,
+  maxExecutionMs: 180_000,
 };
 
 export const toolProvenanceSchema = z.object({

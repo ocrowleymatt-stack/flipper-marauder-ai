@@ -99,6 +99,7 @@ export class ToolEngine {
   private accepting = true;
   private inFlight = 0;
   private readonly quotaHits = new Map<string, number[]>();
+  private readonly approvalMutex = new Map<string, Promise<void>>();
 
   constructor(private readonly options: ToolEngineOptions) {
     this.limits = options.limits ?? DEFAULT_OPERATIONAL_LIMITS;
@@ -132,6 +133,28 @@ export class ToolEngine {
       if (existing) return this.reuse(existing);
     }
 
+    if (needsApproval(definition)) {
+      return this.withApprovalMutex(actor.tenantId, () =>
+        this.invokeNew(actor, request, definition, argumentHash, idempotencyKey),
+      );
+    }
+    return this.invokeNew(actor, request, definition, argumentHash, idempotencyKey);
+  }
+
+  private async invokeNew(
+    actor: ToolActor,
+    request: InvokeRequest,
+    definition: ToolDefinition,
+    argumentHash: string,
+    idempotencyKey: string | null,
+  ): Promise<InvokeResult> {
+    if (needsApproval(definition)) {
+      const pending = await this.options.invocations.listByStatus(actor.tenantId, ['awaiting_approval']);
+      if (pending.length >= this.limits.maxPendingApprovals) {
+        throw new ToolError('rate_limit', 'Fail-closed: pending approval ceiling reached.', true);
+      }
+    }
+
     let invocation = await this.createProposed(actor, request, definition, argumentHash, idempotencyKey);
     invocation = await this.validate(invocation, definition);
     invocation = await this.authorise(actor, invocation, definition);
@@ -141,6 +164,9 @@ export class ToolEngine {
     if (needsApproval(definition) && invocation.status === 'authorised') {
       const pending = await this.options.invocations.listByStatus(actor.tenantId, ['awaiting_approval']);
       if (pending.length >= this.limits.maxPendingApprovals) {
+        await this.transition(invocation, 'failed', {
+          failureReason: failure('rate_limit', 'Fail-closed: pending approval ceiling reached.', true),
+        });
         throw new ToolError('rate_limit', 'Fail-closed: pending approval ceiling reached.', true);
       }
       invocation = await this.suspendForApproval(invocation);
@@ -648,6 +674,30 @@ export class ToolEngine {
     }
     hits.push(now);
     this.quotaHits.set(tenantId, hits);
+  }
+
+  private async withApprovalMutex<T>(tenantId: string, fn: () => Promise<T>): Promise<T> {
+    const prior = this.approvalMutex.get(tenantId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.approvalMutex.set(
+      tenantId,
+      prior.then(
+        () => gate,
+        () => gate,
+      ),
+    );
+    await prior.then(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   }
 }
 

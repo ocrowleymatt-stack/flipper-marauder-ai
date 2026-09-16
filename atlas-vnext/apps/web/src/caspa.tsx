@@ -111,10 +111,14 @@ export function CaspaPanel({
       })) {
         if (event.type === 'document' && event.document) {
           latest = event.document as WritingDocument;
-          setActive(latest);
+          setActive((current) => mergeStreamingDocument(current, latest));
         }
         if (event.type === 'draft.delta' && typeof event.text === 'string') {
-          setActive((current) => (current ? { ...current, draft: event.text as string, status: 'streaming' } : current));
+          setActive((current) =>
+            current
+              ? { ...current, draft: `${current.draft ?? ''}${event.text as string}`, status: 'streaming' }
+              : current,
+          );
         }
         if (event.type === 'error') {
           const failure = event.failure as { message?: string } | undefined;
@@ -277,4 +281,14 @@ export function CaspaPanel({
       </div>
     </main>
   );
+}
+
+function mergeStreamingDocument(current: WritingDocument | null, next: WritingDocument): WritingDocument {
+  if (!current?.draft || next.status !== 'streaming') return next;
+  const snapshot = next.draft ?? '';
+  const assembled = current.draft;
+  if (!snapshot || snapshot === assembled || assembled.startsWith(snapshot) || snapshot.startsWith(assembled)) {
+    return { ...next, draft: assembled.length >= snapshot.length ? assembled : snapshot };
+  }
+  return next;
 }

@@ -21,6 +21,7 @@ export {
   GeneratedOutputLimitError,
   nextStreamPersistCheckpoint,
   STREAM_PERSIST_CHECKPOINT_BYTES,
+  DEFAULT_MAX_TOOL_ROUNDS,
 } from './runtime.ts';
 export type { ConversationRuntimeDeps } from './runtime.ts';
 export {

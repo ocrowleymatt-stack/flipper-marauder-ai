@@ -32,6 +32,8 @@ import { assertExecutionTransition } from './transitions.ts';
 
 /** Base UTF-8 size for the first stream persist checkpoint. Later checkpoints double. */
 export const STREAM_PERSIST_CHECKPOINT_BYTES = 8 * 1024;
+/** Hard ceiling on tool-using model rounds per `sendMessage` when callers omit `maxToolRounds`. */
+export const DEFAULT_MAX_TOOL_ROUNDS = 8;
 
 /**
  * Next persist threshold after `persistedBytes`. Thresholds grow geometrically
@@ -75,6 +77,10 @@ export interface ConversationRuntimeDeps {
   maxConcurrentExecutions?: number;
   /** UTF-8 byte ceiling for provider-generated user-visible output. */
   maxGeneratedBytes?: number;
+  /** Hard ceiling on tool-using model rounds per sendMessage. */
+  maxToolRounds?: number;
+  /** Overall execution deadline; abort is propagated to iterators and in-flight tool waits. */
+  executionDeadlineMs?: number;
 }
 
 export class GeneratedOutputLimitError extends Error {
@@ -250,6 +256,15 @@ export class ConversationRuntime {
 
     const controller = new AbortController();
     this.inflight.set(executionId, controller);
+    let abortKind: 'deadline' | null = null;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const deadlineMs = this.deps.executionDeadlineMs;
+    if (deadlineMs && Number.isFinite(deadlineMs) && deadlineMs > 0) {
+      deadlineTimer = setTimeout(() => {
+        abortKind = 'deadline';
+        controller.abort();
+      }, deadlineMs);
+    }
 
     let assistant: Message | null = null;
     let assembled = '';
@@ -375,7 +390,7 @@ export class ConversationRuntime {
 
       startedMs = Date.now();
       const pending: ConversationStreamEvent[] = [];
-      const toolResults: Array<{
+      const accumulatedToolResults: Array<{
         callId: string;
         toolId: string;
         status: string;
@@ -383,6 +398,8 @@ export class ConversationRuntime {
         output?: unknown;
       }> = [];
       const collectedToolCalls: ToolCallRequest[] = [];
+      const maxToolRounds = this.deps.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
+      let toolRounds = 0;
 
       const observer = {
         onAttempt: (
@@ -445,47 +462,178 @@ export class ConversationRuntime {
       };
 
       try {
-        for await (const chunk of iterateUntilAborted(
-          this.deps.executor.execute(
-            decision,
-            { prompt: content, systemPrompt: input.systemPrompt, signal: controller.signal, traceId: decision.traceId },
-            observer,
-          ),
-          controller.signal,
-        )) {
-          for (const event of pending.splice(0)) yield event;
-          if (chunk.type === 'usage') {
-            usage = chunk.usage;
-            yield { type: 'usage', executionId, usage: chunk.usage };
-            continue;
+        const hasVisibleOutput = (): boolean =>
+          assembled.length > 0 || attempts.some((attempt) => attempt.emittedVisibleOutput);
+
+        const pinnedDecision = (): RouteDecision => {
+          if (!hasVisibleOutput() || !execution.selectedProvider || !execution.selectedModel) {
+            return decision;
           }
-          if (chunk.type === 'warning') {
-            yield {
-              type: 'provider.warning',
+          const pinned = `${execution.selectedProvider}/${execution.selectedModel}`;
+          return {
+            ...decision,
+            provider: execution.selectedProvider,
+            model: execution.selectedModel,
+            resolvedRouteId: pinned,
+            candidateChain: [pinned],
+          };
+        };
+
+        const settleAbort = async (): Promise<ConversationStreamEvent[]> => {
+          await persistAssembled(true);
+          if (abortKind === 'deadline') {
+            const structured = failure('timeout', 'Execution deadline exceeded.', false);
+            execution = await this.transition(
+              { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
+              'failed',
+              { failureReason: structured },
+            );
+            await this.publish(
+              conversationId,
+              'execution.failed',
+              { executionId, code: 'timeout', visibleOutput: hasVisibleOutput() },
+              `execution:${executionId}:failed`,
+            );
+            settled = true;
+            return [
+              { type: 'execution', execution },
+              { type: 'execution.failed', executionId, failure: structured },
+              { type: 'error', failure: structured },
+              { type: 'done' },
+            ];
+          }
+          execution = await this.finishCancelled(execution, attempts, usage, Date.now() - startedMs);
+          settled = true;
+          return [
+            { type: 'execution', execution },
+            { type: 'done' },
+          ];
+        };
+
+        const failStructured = async (
+          code: string,
+          message: string,
+          retryable: boolean,
+        ): Promise<ConversationStreamEvent[]> => {
+          await persistAssembled(true);
+          const structured = failure(code, message, retryable);
+          execution = await this.transition(
+            { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
+            'failed',
+            { failureReason: structured },
+          );
+          await this.publish(
+            conversationId,
+            'execution.failed',
+            { executionId, code, visibleOutput: hasVisibleOutput() },
+            `execution:${executionId}:failed`,
+          );
+          settled = true;
+          return [
+            { type: 'execution', execution },
+            { type: 'execution.failed', executionId, failure: structured },
+            { type: 'error', failure: structured },
+            { type: 'done' },
+          ];
+        };
+
+        const completeSuccessfully = async (): Promise<ConversationStreamEvent[]> => {
+          await persistAssembled(true);
+          execution = await this.transition(
+            { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
+            'completed',
+          );
+          const events: ConversationStreamEvent[] = [];
+          if (assembled.length > 0) {
+            events.push({ type: 'assistant.completed', executionId, text: assembled });
+          }
+          if (assistant && execution.selectedProvider && execution.selectedModel) {
+            await this.recordProvenance(conversation, userMessage, assistant, execution, decision, collectedToolCalls);
+          }
+          await this.publish(
+            conversationId,
+            'execution.completed',
+            {
               executionId,
-              provider: chunk.provider ?? execution.selectedProvider ?? decision.provider,
-              message: chunk.message,
-            };
-            continue;
-          }
-          if (chunk.type === 'reasoning') {
-            acceptGenerated(chunk.text);
-            yield { type: 'reasoning.delta', executionId, text: chunk.text };
-            continue;
-          }
-          if (chunk.type === 'tool_call') {
-            yield { type: 'tool.requested', executionId, call: chunk.call };
-            if (this.deps.toolOrchestrator && conversation.tenantId) {
-              const handled = await this.deps.toolOrchestrator.handleCall({
-                tenantId: conversation.tenantId,
-                principalId: this.deps.principalId ?? conversation.tenantId,
-                workspaceId: conversation.workspaceId ?? conversation.projectId ?? null,
-                conversationId,
+              provider: execution.selectedProvider,
+              model: execution.selectedModel,
+            },
+            `execution:${executionId}:completed`,
+          );
+          settled = true;
+          events.push({
+            type: 'execution.completed',
+            executionId,
+            provider: execution.selectedProvider,
+            model: execution.selectedModel,
+          });
+          events.push({ type: 'execution', execution });
+          events.push({ type: 'done' });
+          return events;
+        };
+
+        for (;;) {
+          const prior = accumulatedToolResults.length > 0 ? accumulatedToolResults : undefined;
+          const routed = prior ? pinnedDecision() : decision;
+          const roundTools: typeof accumulatedToolResults = [];
+          let roundLimitHit = false;
+
+          for await (const chunk of iterateUntilAborted(
+            this.deps.executor.execute(
+              routed,
+              {
+                prompt: content,
+                systemPrompt: input.systemPrompt,
+                signal: controller.signal,
+                traceId: decision.traceId,
+                priorToolResults: prior,
+              },
+              observer,
+            ),
+            controller.signal,
+          )) {
+            for (const event of pending.splice(0)) yield event;
+            if (chunk.type === 'usage') {
+              usage = chunk.usage;
+              yield { type: 'usage', executionId, usage: chunk.usage };
+              continue;
+            }
+            if (chunk.type === 'warning') {
+              yield {
+                type: 'provider.warning',
                 executionId,
-                provider: execution.selectedProvider,
-                model: execution.selectedModel,
-                call: chunk.call,
-              });
+                provider: chunk.provider ?? execution.selectedProvider ?? decision.provider,
+                message: chunk.message,
+              };
+              continue;
+            }
+            if (chunk.type === 'reasoning') {
+              acceptGenerated(chunk.text);
+              yield { type: 'reasoning.delta', executionId, text: chunk.text };
+              continue;
+            }
+            if (chunk.type === 'tool_call') {
+              yield { type: 'tool.requested', executionId, call: chunk.call };
+              if (!this.deps.toolOrchestrator || !conversation.tenantId) {
+                continue;
+              }
+              if (toolRounds >= maxToolRounds) {
+                roundLimitHit = true;
+                continue;
+              }
+              const handled = await awaitUnlessAborted(
+                this.deps.toolOrchestrator.handleCall({
+                  tenantId: conversation.tenantId,
+                  principalId: this.deps.principalId ?? conversation.tenantId,
+                  workspaceId: conversation.workspaceId ?? conversation.projectId ?? null,
+                  conversationId,
+                  executionId,
+                  provider: execution.selectedProvider,
+                  model: execution.selectedModel,
+                  call: chunk.call,
+                }),
+                controller.signal,
+              );
               yield {
                 type: 'tool.lifecycle',
                 executionId,
@@ -504,7 +652,7 @@ export class ConversationRuntime {
                   output: handled.output,
                 };
               }
-              toolResults.push({
+              roundTools.push({
                 callId: chunk.call.id,
                 toolId: handled.toolId,
                 status: handled.status,
@@ -512,89 +660,65 @@ export class ConversationRuntime {
                 output: handled.output,
               });
               collectedToolCalls.push(chunk.call);
-            }
-            continue;
-          }
-          if (chunk.type !== 'text' || chunk.text.length === 0) {
-            continue;
-          }
-          for (const event of await applyText(chunk.text)) yield event;
-        }
-        for (const event of pending.splice(0)) yield event;
-
-        if (controller.signal.aborted) {
-          await persistAssembled(true);
-          execution = await this.finishCancelled(execution, attempts, usage, Date.now() - startedMs);
-          settled = true;
-          yield { type: 'execution', execution };
-          yield { type: 'done' };
-          return;
-        }
-
-        const canContinue =
-          toolResults.length > 0 && toolResults.every((row) => row.status === 'succeeded');
-        if (canContinue && !controller.signal.aborted) {
-          for await (const chunk of iterateUntilAborted(
-            this.deps.executor.execute(
-              decision,
-              {
-                prompt: content,
-                systemPrompt: input.systemPrompt,
-                signal: controller.signal,
-                traceId: decision.traceId,
-                priorToolResults: toolResults,
-              },
-              observer,
-            ),
-            controller.signal,
-          )) {
-            for (const event of pending.splice(0)) yield event;
-            if (chunk.type === 'usage') {
-              usage = chunk.usage;
-              yield { type: 'usage', executionId, usage: chunk.usage };
               continue;
             }
-            if (chunk.type === 'text' && chunk.text.length > 0) {
-              for (const event of await applyText(chunk.text)) yield event;
+            if (chunk.type !== 'text' || chunk.text.length === 0) {
+              continue;
             }
+            for (const event of await applyText(chunk.text)) yield event;
           }
           for (const event of pending.splice(0)) yield event;
+
+          if (controller.signal.aborted) {
+            for (const event of await settleAbort()) yield event;
+            return;
+          }
+
+          if (roundLimitHit) {
+            for (const event of await failStructured(
+              'tool_round_limit',
+              'Tool-round limit reached before a final model response.',
+              false,
+            )) {
+              yield event;
+            }
+            return;
+          }
+
+          if (roundTools.length === 0) {
+            break;
+          }
+
+          const blocking = roundTools.filter(
+            (row) => row.status !== 'succeeded' && row.status !== 'awaiting_approval',
+          );
+          if (blocking.length > 0) {
+            const first = blocking[0]!;
+            for (const event of await failStructured(
+              toolFailureCode(first.status),
+              `Tool ${first.toolId} ended in ${first.status}.`,
+              false,
+            )) {
+              yield event;
+            }
+            return;
+          }
+
+          if (roundTools.some((row) => row.status === 'awaiting_approval')) {
+            for (const event of await completeSuccessfully()) yield event;
+            return;
+          }
+
+          toolRounds += 1;
+          accumulatedToolResults.push(...roundTools);
         }
 
         if (controller.signal.aborted) {
-          await persistAssembled(true);
-          execution = await this.finishCancelled(execution, attempts, usage, Date.now() - startedMs);
-          settled = true;
-          yield { type: 'execution', execution };
-          yield { type: 'done' };
+          for (const event of await settleAbort()) yield event;
           return;
         }
 
-        await persistAssembled(true);
-        execution = await this.transition(
-          { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
-          'completed',
-        );
-        if (assembled.length > 0) {
-          yield { type: 'assistant.completed', executionId, text: assembled };
-        }
-        if (assistant && execution.selectedProvider && execution.selectedModel) {
-          await this.recordProvenance(conversation, userMessage, assistant, execution, decision, collectedToolCalls);
-        }
-        await this.publish(conversationId, 'execution.completed', {
-          executionId,
-          provider: execution.selectedProvider,
-          model: execution.selectedModel,
-        }, `execution:${executionId}:completed`);
-        settled = true;
-        yield {
-          type: 'execution.completed',
-          executionId,
-          provider: execution.selectedProvider,
-          model: execution.selectedModel,
-        };
-        yield { type: 'execution', execution };
-        yield { type: 'done' };
+        for (const event of await completeSuccessfully()) yield event;
       } catch (err) {
         for (const event of pending.splice(0)) yield event;
         const limited = err instanceof GeneratedOutputLimitError;
@@ -602,18 +726,21 @@ export class ConversationRuntime {
           controller.abort();
         }
         await persistAssembled(true);
-        const aborted = controller.signal.aborted && !limited;
+        const deadlineHit = abortKind === 'deadline';
+        const aborted = controller.signal.aborted && !limited && !deadlineHit;
         const message = err instanceof Error ? err.message : String(err);
         const visible = attempts.some((attempt) => attempt.emittedVisibleOutput) || assembled.length > 0;
         const status: ExecutionStatus = aborted ? 'cancelled' : 'failed';
-        const code = aborted
-          ? 'cancelled'
-          : limited
-            ? 'payload_too_large'
-            : visible
-              ? 'partial_stream_failure'
-              : 'provider_error';
-        const structured = failure(code, message, !limited && !visible && !aborted);
+        const code = deadlineHit
+          ? 'timeout'
+          : aborted
+            ? 'cancelled'
+            : limited
+              ? 'payload_too_large'
+              : visible
+                ? 'partial_stream_failure'
+                : 'provider_error';
+        const structured = failure(code, message, !limited && !visible && !aborted && !deadlineHit);
         execution = await this.transition(
           { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
           status,
@@ -633,6 +760,7 @@ export class ConversationRuntime {
         yield { type: 'done' };
       }
     } finally {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
       try {
         if (!settled) {
           const pendingAssistant = assistant;
@@ -788,4 +916,33 @@ function sanitiseTitle(title: string | undefined): string | null {
 
 function failure(code: string, message: string, retryable: boolean, at?: string): StructuredFailure {
   return { code, message, retryable, at: at ?? new Date().toISOString() };
+}
+
+function toolFailureCode(status: string): string {
+  if (status === 'denied') return 'tool_denied';
+  if (status === 'uncertain') return 'tool_uncertain';
+  if (status === 'cancelled') return 'cancelled';
+  return 'tool_failed';
+}
+
+async function awaitUnlessAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
 }

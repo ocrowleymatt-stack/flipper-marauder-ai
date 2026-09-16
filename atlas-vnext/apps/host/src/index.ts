@@ -18,6 +18,7 @@ export {
   ANONYMOUS_RATE_TENANT,
   PlatformRateLimiter,
   ResourceGuard,
+  normalizeContextFileIds,
   normalizeObservedAddress,
   resolveRateLimitIdentity,
 } from './limits.ts';

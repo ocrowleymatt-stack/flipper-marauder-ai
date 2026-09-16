@@ -43,6 +43,8 @@ export const PRODUCTION_CONFIG_CATALOGUE: ConfigVarSpec[] = [
   { name: 'ATLAS_STARTUP_TIMEOUT_MS', classification: 'optional', production: 'optional', description: 'Fail startup if deps are not ready in time.' },
   { name: 'ATLAS_SHUTDOWN_TIMEOUT_MS', classification: 'optional', production: 'optional', description: 'Force-exit after graceful drain.' },
   { name: 'ATLAS_HTTP_TIMEOUT_MS', classification: 'optional', production: 'optional', description: 'Inbound HTTP timeout.' },
+  { name: 'ATLAS_MAX_TOOL_ROUNDS', classification: 'optional', production: 'optional', description: 'Hard ceiling on tool-using model rounds per conversation turn.' },
+  { name: 'ATLAS_MAX_EXECUTION_MS', classification: 'optional', production: 'optional', description: 'Overall conversation execution deadline propagated to iterators and tool waits.' },
   { name: 'ATLAS_FLAG_TOOLS', classification: 'optional', production: 'optional', description: 'Kill switch for tools. Not Authority.' },
   { name: 'ATLAS_FLAG_GENERATION', classification: 'optional', production: 'optional', description: 'Kill switch for generation/runs.' },
   { name: 'ATLAS_FLAG_DUNGEON_WRITING', classification: 'optional', production: 'optional', description: 'Kill switch for Caspa writing.' },

@@ -5,8 +5,9 @@ import { DEFAULT_OPERATIONAL_LIMITS, writingOperationSchema } from '@atlas-vnext
 import { CasMissingError, FilesAccessError } from '@atlas-vnext/files';
 import { ConflictError, OwnershipError, PersistenceClosedError, PersistenceUnavailableError, isPersistenceConnectionLoss } from '@atlas-vnext/persistence';
 import { AuthorityDeniedError } from '@atlas-vnext/permissions';
+import { PlatformHttpError } from './errors.ts';
 import { header, isMutating, json, matchingOrigin, readJson, sseHeaders, urlPath, writeSse } from './http.ts';
-import type { ResourceGuard } from './limits.ts';
+import { normalizeContextFileIds, type ResourceGuard } from './limits.ts';
 import type { TimeoutContract } from './production-config.ts';
 import { acquireRunAndStreamPermits, pipeSse } from './sse.ts';
 import { resolveActor, type WorkbenchHostOptions } from './workbench.ts';
@@ -124,6 +125,8 @@ export async function handleCaspa(
         json(res, 400, { error: 'Malformed writing operation.', code: 'malformed' });
         return true;
       }
+      const fileIds = normalizeContextFileIds(body.fileIds);
+      options.resources?.assertContextFiles(fileIds.length);
       const origin = matchingOrigin(req, options.allowedOrigins);
       const releaseAdmission = acquireRunAndStreamPermits(options.resources, writingActor.tenantId);
       sseHeaders(res, origin);
@@ -133,7 +136,7 @@ export async function handleCaspa(
           writing.generate(writingActor, decodeURIComponent(generateMatch[1]!), {
             operation: parsed.data,
             instruction: typeof body.instruction === 'string' ? body.instruction : '',
-            fileIds: Array.isArray(body.fileIds) ? body.fileIds.filter((item): item is string => typeof item === 'string') : [],
+            fileIds,
             expectedRevision: Number(body.expectedRevision),
             privacy: body.privacy === 'local_only' ? 'local_only' : 'any',
             tools: body.tools === true,
@@ -192,6 +195,10 @@ function handleCaspaError(res: ServerResponse, err: unknown): true {
       });
       res.end();
     }
+    return true;
+  }
+  if (err instanceof PlatformHttpError) {
+    json(res, err.httpStatus, { error: err.message, code: err.code });
     return true;
   }
   if (err instanceof CaspaUnavailableError) {

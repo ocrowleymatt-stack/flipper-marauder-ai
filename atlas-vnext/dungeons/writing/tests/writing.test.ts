@@ -39,6 +39,7 @@ function decision(): RouteDecision {
 async function makeWriting(
   stream: (prompt: string, signal?: AbortSignal) => AsyncGenerator<StreamChunk>,
   capture?: { target?: string; systemPrompt?: string },
+  opts?: { maxGeneratedBytes?: number },
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'caspa-unit-'));
   dirs.push(dir);
@@ -63,6 +64,7 @@ async function makeWriting(
         return decision();
       },
     },
+    maxGeneratedBytes: opts?.maxGeneratedBytes,
     executor: {
       async *execute(_routed, execContext, observer) {
         if (capture) capture.systemPrompt = execContext.systemPrompt ?? '';
@@ -546,5 +548,36 @@ describe('Caspa writing service', () => {
     expect(events.some((event) => event.type === 'document' && event.document.status === 'committed')).toBe(false);
     const provenance = await writing.provenance(base.actor, created.id);
     expect(provenance.some((entry) => entry.capability === 'writing')).toBe(false);
+  });
+
+  it('emits incremental draft.delta text with O(n) payload growth across many tiny chunks', async () => {
+    const chunks = Array.from({ length: 400 }, (_, i) => String.fromCharCode(97 + (i % 26)));
+    const { writing, actor, project } = await makeWriting(
+      async function* () {
+        for (const chunk of chunks) yield { type: 'text', text: chunk };
+      },
+      undefined,
+      { maxGeneratedBytes: 512 },
+    );
+    const created = await writing.create(actor, { projectId: project.id, title: 'Linear draft' });
+    const deltas: string[] = [];
+    for await (const event of writing.generate(actor, created.id, {
+      operation: 'create',
+      instruction: 'Write many tiny chunks.',
+      expectedRevision: created.revision,
+      commit: false,
+    })) {
+      if (event.type === 'draft.delta') deltas.push(event.text);
+    }
+    const assembled = chunks.join('');
+    expect(deltas).toEqual(chunks);
+    expect(deltas.join('')).toBe(assembled);
+    const emittedBytes = deltas.reduce((sum, text) => sum + Buffer.byteLength(text, 'utf8'), 0);
+    expect(emittedBytes).toBe(Buffer.byteLength(assembled, 'utf8'));
+    const quadratic = (assembled.length * (assembled.length + 1)) / 2;
+    expect(emittedBytes).toBeLessThan(quadratic / 4);
+    const after = await writing.get(actor, created.id);
+    expect(after.draft).toBe(assembled);
+    expect(after.status).toBe('candidate');
   });
 });

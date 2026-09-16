@@ -31,6 +31,8 @@ export function readOperationalLimits(env: Record<string, string | undefined> = 
     maxConcurrentStreams: num(env.ATLAS_MAX_CONCURRENT_STREAMS, DEFAULT_OPERATIONAL_LIMITS.maxConcurrentStreams),
     maxPendingApprovals: num(env.ATLAS_MAX_PENDING_APPROVALS, DEFAULT_OPERATIONAL_LIMITS.maxPendingApprovals),
     maxConcurrentRuns: num(env.ATLAS_MAX_CONCURRENT_RUNS, DEFAULT_OPERATIONAL_LIMITS.maxConcurrentRuns),
+    maxToolRounds: num(env.ATLAS_MAX_TOOL_ROUNDS, DEFAULT_OPERATIONAL_LIMITS.maxToolRounds),
+    maxExecutionMs: num(env.ATLAS_MAX_EXECUTION_MS, DEFAULT_OPERATIONAL_LIMITS.maxExecutionMs),
   };
 }
 

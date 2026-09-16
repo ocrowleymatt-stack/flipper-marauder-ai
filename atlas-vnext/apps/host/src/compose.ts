@@ -368,7 +368,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     });
     investigation = new InvestigationService({ persistence, projects, files, runtime, authority });
     research = new ResearchService({ persistence, projects, files, context, runtime, authority });
-    websiteStudio = new WebsiteStudioService({ persistence, projects, files, runtime, authority });
+    websiteStudio = new WebsiteStudioService({ persistence, projects, files, runtime, authority, policy });
     music = new MusicService({ persistence, projects, files, runtime, authority });
     privacy = new PrivacyService({ persistence, authority, policy, ownerPrincipalId: principalId });
   } else {

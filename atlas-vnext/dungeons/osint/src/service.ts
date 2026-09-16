@@ -53,7 +53,7 @@ export class OsintService {
     input: { projectId: string; kind: OsintTargetKind; value: string; synthesize?: boolean },
   ): Promise<{ target: DungeonRecordRow; findings: DungeonRecordRow[]; dossier?: DungeonRecordRow }> {
     const project = await this.requireProject(actor, input.projectId, 'artifact.write');
-    const policy = this.deps.policy.parse(actor.tenantId, 'osint', {});
+    const policy = await this.effectivePolicy(actor);
     const network = this.deps.policy.authorize({
       principal: { principalId: actor.principalId, kind: 'user', tenantId: actor.tenantId, workspaceId: project.id },
       capability: 'network.public',
@@ -205,6 +205,15 @@ export class OsintService {
 
   private records(actor: OsintActor) {
     return this.deps.persistence.forActor(actor).dungeonRecords;
+  }
+
+  private async effectivePolicy(actor: OsintActor) {
+    const bound = this.deps.persistence.forActor(actor).privacy;
+    const tenantRow = await bound.getPolicy(actor, null);
+    const dungeonRow = await bound.getPolicy(actor, 'osint');
+    const tenant = this.deps.policy.parse(actor.tenantId, null, tenantRow?.payload ?? {});
+    const dungeon = dungeonRow ? this.deps.policy.parse(actor.tenantId, 'osint', dungeonRow.payload) : null;
+    return this.deps.policy.overlay(tenant, dungeon);
   }
 
   private async requireProject(actor: OsintActor, projectId: string, capability: 'artifact.read' | 'artifact.write') {

@@ -31,6 +31,14 @@ export class FetchTransport implements HttpTransport {
     if (request.signal?.aborted) {
       controller.abort(request.signal.reason);
     }
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      clearTimeout(timer);
+      request.signal?.removeEventListener('abort', onOuterAbort);
+    };
+    controller.signal.addEventListener('abort', release, { once: true });
     try {
       const response = await fetch(request.url, {
         method: request.method,
@@ -43,17 +51,19 @@ export class FetchTransport implements HttpTransport {
         headers[key.toLowerCase()] = value;
       });
       const body = response.body;
+      if (!body) {
+        release();
+        return { status: response.status, headers, stream: emptyStream() };
+      }
       return {
         status: response.status,
         headers,
-        stream: body ? iterableFromReadable(body) : emptyStream(),
+        stream: iterableFromReadable(body, { signal: controller.signal, onComplete: release }),
       };
     } catch (err) {
+      release();
       const message = sanitizeText(err instanceof Error ? err.message : String(err));
       throw new Error(message);
-    } finally {
-      clearTimeout(timer);
-      request.signal?.removeEventListener('abort', onOuterAbort);
     }
   }
 }
@@ -94,8 +104,16 @@ export async function readAllText(stream: AsyncIterable<Uint8Array>): Promise<st
   return out;
 }
 
-export async function* iterableFromReadable(body: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+export async function* iterableFromReadable(
+  body: ReadableStream<Uint8Array>,
+  options: { signal?: AbortSignal; onComplete?: () => void } = {},
+): AsyncGenerator<Uint8Array> {
   const reader = body.getReader();
+  const onAbort = () => {
+    void reader.cancel(options.signal?.reason).catch(() => undefined);
+  };
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  if (options.signal?.aborted) onAbort();
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -103,7 +121,13 @@ export async function* iterableFromReadable(body: ReadableStream<Uint8Array>): A
       if (value) yield value;
     }
   } finally {
-    reader.releaseLock();
+    options.signal?.removeEventListener('abort', onAbort);
+    try {
+      await reader.cancel();
+    } catch {
+      // Already closed, cancelled, or the lock was released.
+    }
+    options.onComplete?.();
   }
 }
 

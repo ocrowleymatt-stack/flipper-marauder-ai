@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { ProviderHealth } from '@atlas-vnext/contracts';
+import type { OperationalLimits, ProviderHealth } from '@atlas-vnext/contracts';
 import { ConversationRuntime, type ToolOrchestrator } from '@atlas-vnext/conversation';
 import {
   AuthService,
@@ -79,6 +79,7 @@ export interface Spine {
   killSwitches: KillSwitchState;
   rateLimiter: PlatformRateLimiter;
   resources: ResourceGuard;
+  limits: OperationalLimits;
   timeouts: TimeoutContract;
   close: () => Promise<void>;
 }
@@ -423,6 +424,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     killSwitches,
     rateLimiter,
     resources,
+    limits,
     timeouts,
     close: async () => {
       shutdown.begin();

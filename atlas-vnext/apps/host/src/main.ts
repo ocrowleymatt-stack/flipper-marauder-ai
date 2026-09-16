@@ -46,6 +46,8 @@ const server = createHost({
   killSwitches: spine.killSwitches,
   rateLimiter: spine.rateLimiter,
   resources: spine.resources,
+  maxRequestBytes: spine.limits.maxRequestBytes,
+  maxUploadBytes: spine.limits.maxUploadBytes,
   hsts: hostConfig.hsts,
   timeouts: spine.timeouts,
 });

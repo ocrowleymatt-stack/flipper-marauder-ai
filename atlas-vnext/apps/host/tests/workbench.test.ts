@@ -56,6 +56,8 @@ async function startWorkbench() {
     writing: spine.writing,
     tenantId: spine.tenantId,
     principalId: spine.principalId,
+    maxRequestBytes: spine.limits.maxRequestBytes,
+    maxUploadBytes: spine.limits.maxUploadBytes,
   });
   servers.push(server);
   const bound = await listen(server, 0, '127.0.0.1');

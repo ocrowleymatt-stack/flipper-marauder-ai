@@ -67,6 +67,8 @@ export async function startProductionHost(input: {
     killSwitches: spine.killSwitches,
     rateLimiter: input.rateLimiter ?? spine.rateLimiter,
     resources: spine.resources,
+    maxRequestBytes: spine.limits.maxRequestBytes,
+    maxUploadBytes: spine.limits.maxUploadBytes,
     timeouts: spine.timeouts,
     probe: spine.healthProbe,
     shutdown: spine.shutdown,

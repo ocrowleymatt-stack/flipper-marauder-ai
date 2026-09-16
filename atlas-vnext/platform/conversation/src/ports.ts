@@ -86,6 +86,8 @@ export interface ModelExecutor {
         description: string;
         inputSchema: Record<string, unknown>;
       }>;
+      attemptIndexBase?: number;
+      visibleOutputAlready?: boolean;
     },
     observer?: {
       onAttempt(attempt: Pick<ExecutionAttempt, 'index' | 'provider' | 'model' | 'outcome' | 'error' | 'emittedVisibleOutput'>): void;

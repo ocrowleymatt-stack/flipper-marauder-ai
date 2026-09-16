@@ -124,6 +124,11 @@ export class ToolEngine {
     this.accepting = false;
   }
 
+  /** Occupied concurrency slots, including children that have not yet exited. */
+  inFlightCount(): number {
+    return this.inFlight;
+  }
+
   async invoke(actor: ToolActor, request: InvokeRequest, options: InvokeOptions = {}): Promise<InvokeResult> {
     this.assertAccepting();
     this.assertActor(actor);
@@ -438,7 +443,15 @@ export class ToolEngine {
     const unlinkParent = linkAbort(signal, controller);
     this.controllers.set(current.id, controller);
     this.inFlight += 1;
-    const timeout = setTimeout(() => controller.abort(), definition.timeoutMs);
+    const timeoutMs = effectiveToolTimeoutMs(definition, this.limits);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    let childOwnsOccupancy = false;
+    let occupancyReleased = false;
+    const releaseOccupancy = (): void => {
+      if (occupancyReleased) return;
+      occupancyReleased = true;
+      this.inFlight -= 1;
+    };
     try {
       const executePromise = adapter.execute(current.arguments, {
         actor,
@@ -453,6 +466,8 @@ export class ToolEngine {
         recordEffect: (key, value) => this.recordEffect(actor.tenantId, key, value, current),
         lookupEffect: async () => null,
       });
+      childOwnsOccupancy = true;
+      void executePromise.finally(releaseOccupancy);
       const raced = await awaitOrAbort(executePromise, controller.signal);
       if (raced.status === 'aborted' || controller.signal.aborted) {
         if (signal?.aborted) {
@@ -494,7 +509,7 @@ export class ToolEngine {
       unlinkParent();
       clearTimeout(timeout);
       this.controllers.delete(current.id);
-      this.inFlight -= 1;
+      if (!childOwnsOccupancy) releaseOccupancy();
     }
   }
 
@@ -931,6 +946,14 @@ function resourceFromArguments(args: Record<string, unknown>): string | null {
 
 function isMutatingRunning(definition: ToolDefinition, invocation: ToolInvocation): boolean {
   return definition.sideEffectClass !== 'none' && invocation.status === 'running';
+}
+
+/**
+ * Catalogue timeouts are an upper bound per tool. ATLAS_TOOL_TIMEOUT_MS is a
+ * process ceiling: it may shorten a definition, never lengthen one.
+ */
+export function effectiveToolTimeoutMs(definition: Pick<ToolDefinition, 'timeoutMs'>, limits: Pick<OperationalLimits, 'defaultToolTimeoutMs'>): number {
+  return Math.min(definition.timeoutMs, limits.defaultToolTimeoutMs);
 }
 
 function needsApproval(definition: ToolDefinition): boolean {

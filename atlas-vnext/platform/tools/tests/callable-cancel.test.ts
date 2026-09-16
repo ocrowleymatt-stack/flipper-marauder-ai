@@ -2,15 +2,20 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_OPERATIONAL_LIMITS } from '@atlas-vnext/contracts';
 import { AuthorityEngine } from '@atlas-vnext/permissions';
 import {
+  COMMAND_SIGTERM_GRACE_MS,
   MemoryToolApprovalStore,
   MemoryToolInvocationStore,
   PLATFORM_TOOL_CATALOGUE,
   ToolEngine,
+  ToolError,
   ToolRegistry,
   createAbortError,
   defaultAdapters,
+  defaultCommandRunner,
+  effectiveToolTimeoutMs,
   type ToolAdapter,
 } from '../src/index.ts';
 
@@ -49,7 +54,11 @@ function hangingMutateAdapter(started: { value: boolean }): ToolAdapter {
   };
 }
 
-function makeEngine(adapters: ToolAdapter[], extraDefs: typeof PLATFORM_TOOL_CATALOGUE = []) {
+function makeEngine(
+  adapters: ToolAdapter[],
+  extraDefs: typeof PLATFORM_TOOL_CATALOGUE = [],
+  limits: Partial<typeof DEFAULT_OPERATIONAL_LIMITS> = {},
+) {
   const registry = new ToolRegistry();
   for (const def of PLATFORM_TOOL_CATALOGUE) registry.register(def);
   for (const def of extraDefs) registry.register(def);
@@ -70,6 +79,7 @@ function makeEngine(adapters: ToolAdapter[], extraDefs: typeof PLATFORM_TOOL_CAT
       authority,
       jailRoot: mkdtempSync(join(tmpdir(), 'atlas-jail-')),
       adapters: [...defaultAdapters(), ...adapters],
+      limits: { ...DEFAULT_OPERATIONAL_LIMITS, ...limits },
     }),
   };
 }
@@ -265,5 +275,84 @@ describe('bounded adapter execution', () => {
     expect(started.value).toBe(true);
     expect(result.invocation.status).toBe('uncertain');
     expect(result.invocation.failureReason?.code).toBe('interrupted_uncertain');
+  });
+
+  it('applies ATLAS_TOOL_TIMEOUT_MS as a ceiling without lengthening catalogue timeouts', async () => {
+    expect(effectiveToolTimeoutMs({ timeoutMs: 10_000 }, { defaultToolTimeoutMs: 50 })).toBe(50);
+    expect(effectiveToolTimeoutMs({ timeoutMs: 40 }, { defaultToolTimeoutMs: 30_000 })).toBe(40);
+
+    const def = {
+      ...PLATFORM_TOOL_CATALOGUE.find((row) => row.id === 'retrieval.search')!,
+      id: 'retrieval.hang.ceiling',
+      adapter: 'hang.ignore',
+      timeoutMs: 10_000,
+    };
+    const { engine, actor, authority } = makeEngine([ignoringHangAdapter('hang.ignore')], [def], {
+      defaultToolTimeoutMs: 50,
+    });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    const started = Date.now();
+    const result = await engine.invoke(actor, { toolId: 'retrieval.hang.ceiling', arguments: { query: 'Alpha' } });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(result.invocation.status).toBe('failed');
+    expect(result.invocation.failureReason?.code).toBe('timeout');
+  });
+});
+
+describe('command runner occupancy and SIGKILL', () => {
+  it('SIGKILLs a child that ignores SIGTERM after a short grace', async () => {
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = defaultCommandRunner.run({
+      argv: [process.execPath, '-e', 'process.on("SIGTERM",()=>{}); setInterval(()=>{}, 1000)'],
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH ?? '' },
+      timeoutMs: 30_000,
+      maxBytes: 1_024,
+      signal: controller.signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    controller.abort();
+    const result = await pending;
+    expect(Date.now() - started).toBeLessThan(1_500);
+    expect(result.code).not.toBe(0);
+  });
+
+  it('keeps concurrency occupied until a non-cooperative child exits', async () => {
+    const def = {
+      ...PLATFORM_TOOL_CATALOGUE.find((row) => row.id === 'shell.exec')!,
+      id: 'shell.hang',
+      approvalPolicy: 'none' as const,
+      sideEffectClass: 'none' as const,
+      timeoutMs: 80,
+    };
+    const { engine, actor, authority } = makeEngine([], [def], { maxToolConcurrency: 1 });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'shell.execute' });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+
+    const first = engine.invoke(actor, {
+      toolId: 'shell.hang',
+      arguments: {
+        argv: [process.execPath, '-e', 'process.on("SIGTERM",()=>{}); setInterval(()=>{}, 1000)'],
+      },
+    });
+    const result = await first;
+    expect(result.invocation.status).toBe('failed');
+    expect(result.invocation.failureReason?.code).toBe('timeout');
+    expect(engine.inFlightCount()).toBe(1);
+
+    await expect(
+      engine.invoke(actor, { toolId: 'retrieval.search', arguments: { query: 'Alpha' } }),
+    ).rejects.toBeInstanceOf(ToolError);
+
+    const released = Date.now();
+    while (engine.inFlightCount() > 0) {
+      if (Date.now() - released > 2_000) throw new Error('child occupancy was never released');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(Date.now() - released).toBeGreaterThanOrEqual(COMMAND_SIGTERM_GRACE_MS - 20);
+
+    const search = await engine.invoke(actor, { toolId: 'retrieval.search', arguments: { query: 'Alpha' } });
+    expect(search.invocation.status).toBe('succeeded');
   });
 });

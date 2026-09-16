@@ -281,6 +281,7 @@ export class ConversationRuntime {
       roundUsage = null;
     };
     let attempts: ExecutionAttempt[] = [];
+    let visibleOutputEver = false;
     let startedMs = Date.now();
     let settled = false;
 
@@ -426,6 +427,9 @@ export class ConversationRuntime {
         ) => {
           const at = this.clock.now();
           const existing = attempts.findIndex((item) => item.index === attempt.index);
+          const priorVisible = existing === -1 ? false : attempts[existing]!.emittedVisibleOutput;
+          const visible = priorVisible || attempt.emittedVisibleOutput;
+          if (visible) visibleOutputEver = true;
           const record: ExecutionAttempt = {
             index: attempt.index,
             provider: attempt.provider,
@@ -434,7 +438,7 @@ export class ConversationRuntime {
             endedAt: attempt.outcome === 'started' ? null : at,
             outcome: attempt.outcome,
             error: attempt.error,
-            emittedVisibleOutput: attempt.emittedVisibleOutput,
+            emittedVisibleOutput: visible,
           };
           if (existing === -1) attempts.push(record);
           else attempts[existing] = record;
@@ -454,7 +458,7 @@ export class ConversationRuntime {
               provider: attempt.provider,
               model: attempt.model,
               failure: attempt.error,
-              emittedVisibleOutput: attempt.emittedVisibleOutput,
+              emittedVisibleOutput: visible,
             });
             pending.push({
               type: 'provider.failed',
@@ -482,7 +486,7 @@ export class ConversationRuntime {
 
       try {
         const hasVisibleOutput = (): boolean =>
-          assembled.length > 0 || attempts.some((attempt) => attempt.emittedVisibleOutput);
+          visibleOutputEver || assembled.length > 0 || attempts.some((attempt) => attempt.emittedVisibleOutput);
 
         const pinnedDecision = (): RouteDecision => {
           if (!hasVisibleOutput() || !execution.selectedProvider || !execution.selectedModel) {
@@ -607,6 +611,8 @@ export class ConversationRuntime {
                 traceId: decision.traceId,
                 priorToolResults: prior,
                 tools: callableTools,
+                attemptIndexBase: attempts.reduce((max, item) => Math.max(max, item.index), 0),
+                visibleOutputAlready: hasVisibleOutput(),
               },
               observer,
             ),
@@ -628,6 +634,7 @@ export class ConversationRuntime {
               continue;
             }
             if (chunk.type === 'reasoning') {
+              if (chunk.text.length > 0) visibleOutputEver = true;
               acceptGenerated(chunk.text);
               yield { type: 'reasoning.delta', executionId, text: chunk.text };
               continue;
@@ -688,6 +695,7 @@ export class ConversationRuntime {
             if (chunk.type !== 'text' || chunk.text.length === 0) {
               continue;
             }
+            visibleOutputEver = true;
             for (const event of await applyText(chunk.text)) yield event;
           }
           for (const event of pending.splice(0)) yield event;
@@ -754,7 +762,7 @@ export class ConversationRuntime {
         const deadlineHit = abortKind === 'deadline';
         const aborted = controller.signal.aborted && !limited && !deadlineHit;
         const message = err instanceof Error ? err.message : String(err);
-        const visible = attempts.some((attempt) => attempt.emittedVisibleOutput) || assembled.length > 0;
+        const visible = visibleOutputEver || attempts.some((attempt) => attempt.emittedVisibleOutput) || assembled.length > 0;
         const status: ExecutionStatus = aborted ? 'cancelled' : 'failed';
         const code = deadlineHit
           ? 'timeout'

@@ -58,7 +58,8 @@ export class ExecutionBroker {
     observer?: ExecutionObserver,
   ): AsyncGenerator<StreamChunk> {
     let lastError: Error | null = null;
-    let attemptIndex = 0;
+    let attemptIndex = Math.max(0, context.attemptIndexBase ?? 0);
+    let visibleOutputEver = context.visibleOutputAlready === true;
 
     for (const candidate of decision.candidateChain) {
       const slash = candidate.indexOf('/');
@@ -97,7 +98,7 @@ export class ExecutionBroker {
 
       for (let attempt = 1; attempt <= this.attemptsPerCandidate; attempt += 1) {
         const bufferedTools: StreamChunk[] = [];
-        let visibleOutput = false;
+        let visibleOutput = visibleOutputEver;
         attemptIndex += 1;
         observer?.onAttempt({
           index: attemptIndex,
@@ -123,6 +124,7 @@ export class ExecutionBroker {
             }
             if (isVisibleAssistantOutput(chunk)) {
               visibleOutput = true;
+              visibleOutputEver = true;
             }
             yield chunk;
           }

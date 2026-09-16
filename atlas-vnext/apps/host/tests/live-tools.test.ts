@@ -265,6 +265,8 @@ describe('live provider tool orchestration', () => {
       flags: spine.flags,
       killSwitches: spine.killSwitches,
       resources: spine.resources,
+      maxRequestBytes: spine.limits.maxRequestBytes,
+      maxUploadBytes: spine.limits.maxUploadBytes,
       timeouts: spine.timeouts,
     });
     servers.push(server);

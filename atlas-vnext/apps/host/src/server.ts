@@ -52,7 +52,14 @@ import {
 import { handleCaspa } from './caspa.ts';
 import type { WritingService } from '@atlas-vnext/dungeon-writing';
 import { PlatformHttpError, GENERIC_DENIED, httpStatusFor, type PlatformErrorCode } from './errors.ts';
-import { PlatformRateLimiter, ResourceGuard, rateClassForPath, resolveRateLimitIdentity } from './limits.ts';
+import {
+  PlatformRateLimiter,
+  ResourceGuard,
+  rateClassForPath,
+  resolveAdmissionIdentity,
+  resolveRateLimitIdentity,
+  sameRateLimitIdentity,
+} from './limits.ts';
 import { SINGLE_INSTANCE_TOPOLOGY, type TimeoutContract } from './production-config.ts';
 
 export interface HostOptions {
@@ -199,8 +206,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
       return;
     }
 
+    await enforceAdmissionRateLimit(req, options);
     await enforceCsrfIfNeeded(req, options);
-    await enforceRateLimit(req, options);
+    await enforceAuthenticatedRateLimit(req, options);
     enforceKillSwitch(req, options);
 
     if (await handleWorkbench(req, res, options)) return;
@@ -397,6 +405,29 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
   }
 }
 
+function cookiePresent(req: IncomingMessage, options: HostOptions): boolean {
+  if (!options.auth) return false;
+  return Boolean(options.auth.parseCookie(header(req, 'cookie')));
+}
+
+/**
+ * Consume a cheap IP/cookie-presence bucket before any session lookup so
+ * forged `atlas_session` cookies cannot flood PostgreSQL. Authenticated
+ * identity is charged later, after CSRF/session resolution.
+ */
+async function enforceAdmissionRateLimit(req: IncomingMessage, options: HostOptions): Promise<void> {
+  if (!options.rateLimiter) return;
+  const pathname = urlPath(req);
+  const rateClass = rateClassForPath(pathname, req.method ?? 'GET');
+  if (!rateClass) return;
+  const identity = resolveAdmissionIdentity({
+    pathname,
+    remoteAddress: req.socket?.remoteAddress,
+    cookiePresent: cookiePresent(req, options),
+  });
+  options.rateLimiter.hit(rateClass, identity.tenantId, identity.actorId);
+}
+
 async function enforceCsrfIfNeeded(req: IncomingMessage, options: HostOptions): Promise<void> {
   if (!options.auth || !isMutating(req.method)) return;
   const pathname = urlPath(req);
@@ -411,7 +442,7 @@ async function enforceCsrfIfNeeded(req: IncomingMessage, options: HostOptions): 
   });
 }
 
-async function enforceRateLimit(req: IncomingMessage, options: HostOptions): Promise<void> {
+async function enforceAuthenticatedRateLimit(req: IncomingMessage, options: HostOptions): Promise<void> {
   if (!options.rateLimiter) return;
   const pathname = urlPath(req);
   const rateClass = rateClassForPath(pathname, req.method ?? 'GET');
@@ -423,6 +454,12 @@ async function enforceRateLimit(req: IncomingMessage, options: HostOptions): Pro
     pathname,
     remoteAddress: req.socket?.remoteAddress,
   });
+  const admission = resolveAdmissionIdentity({
+    pathname,
+    remoteAddress: req.socket?.remoteAddress,
+    cookiePresent: cookiePresent(req, options),
+  });
+  if (sameRateLimitIdentity(identity, admission)) return;
   options.rateLimiter.hit(rateClass, identity.tenantId, identity.actorId);
 }
 

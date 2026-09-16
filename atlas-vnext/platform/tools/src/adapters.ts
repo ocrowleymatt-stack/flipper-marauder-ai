@@ -151,6 +151,8 @@ export interface CommandRunner {
   }): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
+export const COMMAND_SIGTERM_GRACE_MS = 200;
+
 export const defaultCommandRunner: CommandRunner = {
   async run(input) {
     return new Promise((resolvePromise, reject) => {
@@ -161,10 +163,30 @@ export const defaultCommandRunner: CommandRunner = {
       });
       let stdout = '';
       let stderr = '';
-      const onAbort = () => {
-        child.kill('SIGTERM');
+      let settled = false;
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        input.signal.removeEventListener('abort', onAbort);
+        if (killTimer) clearTimeout(killTimer);
+        fn();
       };
-      input.signal.addEventListener('abort', onAbort);
+      const armKill = (): void => {
+        if (child.pid) child.kill('SIGTERM');
+        if (killTimer) clearTimeout(killTimer);
+        killTimer = setTimeout(() => {
+          if (child.pid) child.kill('SIGKILL');
+        }, COMMAND_SIGTERM_GRACE_MS);
+      };
+      const onAbort = (): void => {
+        armKill();
+      };
+      if (input.signal.aborted) onAbort();
+      else input.signal.addEventListener('abort', onAbort);
+      child.once('spawn', () => {
+        if (input.signal.aborted) armKill();
+      });
       child.stdout?.on('data', (chunk: Buffer) => {
         stdout = boundText(stdout + chunk.toString('utf8'), input.maxBytes);
       });
@@ -172,12 +194,10 @@ export const defaultCommandRunner: CommandRunner = {
         stderr = boundText(stderr + chunk.toString('utf8'), input.maxBytes);
       });
       child.on('error', (err) => {
-        input.signal.removeEventListener('abort', onAbort);
-        reject(err);
+        finish(() => reject(err));
       });
       child.on('close', (code) => {
-        input.signal.removeEventListener('abort', onAbort);
-        resolvePromise({ code: code ?? 1, stdout, stderr });
+        finish(() => resolvePromise({ code: code ?? 1, stdout, stderr }));
       });
     });
   },

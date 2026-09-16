@@ -4,6 +4,7 @@ import {
   ANONYMOUS_RATE_TENANT,
   PlatformRateLimiter,
   normalizeObservedAddress,
+  resolveAdmissionIdentity,
   resolveRateLimitIdentity,
 } from '../../apps/host/src/limits.ts';
 import { PlatformHttpError } from '../../apps/host/src/errors.ts';
@@ -339,5 +340,91 @@ describe('rate-limit bucket cardinality is bounded', () => {
     }
     const allowed = await fetch(`${started.url}/api/conversations`, { headers: authHeaders(session) });
     expect(allowed.status).toBe(200);
+  });
+});
+
+describe('admission rate limit before session resolution', () => {
+  it('keys cookie-bearing admission separately from cookieless anonymous traffic on the same IP', () => {
+    const cookieless = resolveAdmissionIdentity({
+      pathname: '/api/conversations',
+      remoteAddress: '127.0.0.1',
+      cookiePresent: false,
+    });
+    const cookie = resolveAdmissionIdentity({
+      pathname: '/api/conversations',
+      remoteAddress: '127.0.0.1',
+      cookiePresent: true,
+    });
+    expect(cookieless.tenantId).toBe(ANONYMOUS_RATE_TENANT);
+    expect(cookieless.actorId).toBe('anon:ip:127.0.0.1');
+    expect(cookie.actorId).toBe('anon:ip:127.0.0.1:cookie');
+    expect(cookie.actorId).not.toBe(cookieless.actorId);
+  });
+
+  it('does not consult forwarding headers for admission identity', () => {
+    const identity = resolveAdmissionIdentity({
+      pathname: '/api/conversations',
+      remoteAddress: '192.0.2.10',
+      cookiePresent: true,
+    });
+    expect(identity.actorId).toBe('anon:ip:192.0.2.10:cookie');
+    expect(identity.actorId).not.toContain('203.0.113');
+  });
+
+  it('rate-limits mutating forged cookies before CSRF session lookup', async () => {
+    const limiter = tightLimiter(3, 8);
+    const started = await startProductionHost({ rateLimiter: limiter });
+    servers.push(started.server);
+    spines.push(started.spine);
+
+    let lookups = 0;
+    const original = started.spine.auth.resolve.bind(started.spine.auth);
+    started.spine.auth.resolve = (async (input) => {
+      lookups += 1;
+      return original(input);
+    }) as typeof started.spine.auth.resolve;
+
+    const statuses: number[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      const response = await fetch(`${started.url}/api/conversations`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          cookie: `atlas_session=forged_${i}`,
+          'x-forwarded-for': `203.0.113.${i}`,
+        },
+        body: JSON.stringify({ title: 'flood' }),
+      });
+      statuses.push(response.status);
+      await response.text();
+    }
+    expect(statuses.filter((status) => status === 429).length).toBeGreaterThan(0);
+    expect(lookups).toBeLessThanOrEqual(3);
+    expect(lookups).toBeGreaterThan(0);
+
+    const cookieless = await fetch(`${started.url}/api/conversations`);
+    expect(cookieless.status).toBe(401);
+  });
+
+  it('still requires CSRF for a valid mutating cookie session under the admission ceiling', async () => {
+    const started = await startProductionHost({ rateLimiter: tightLimiter(8, 8) });
+    servers.push(started.server);
+    spines.push(started.spine);
+    const session = await bootstrap(started.url);
+    const forged = await fetch(`${started.url}/api/conversations`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie: session.cookie,
+      },
+      body: JSON.stringify({ title: 'no csrf' }),
+    });
+    expect(forged.status).toBe(403);
+    const ok = await fetch(`${started.url}/api/conversations`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({ title: 'with csrf' }),
+    });
+    expect(ok.status).toBe(201);
   });
 });

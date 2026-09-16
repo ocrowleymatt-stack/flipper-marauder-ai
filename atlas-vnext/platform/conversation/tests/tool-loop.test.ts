@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RouteDecision, StreamChunk, ToolCallRequest } from '@atlas-vnext/contracts';
+import { ExecutionBroker } from '@atlas-vnext/execution';
 import { MemoryEventBus } from '@atlas-vnext/events';
 import {
   ConversationRuntime,
@@ -992,5 +993,83 @@ describe('model/tool loop', () => {
       // drain
     }
     expect(routes).toEqual(['openai/gpt-4o', 'openai/gpt-4o']);
+  });
+
+  it('does not failover after visible reasoning even when later rounds have empty assembled text', async () => {
+    const stores = memoryStores();
+    const broker = new ExecutionBroker(1);
+    const providers: string[] = [];
+    broker.register({
+      providerId: 'openai',
+      async *stream(_model, context) {
+        providers.push('openai');
+        const round = context.priorToolResults?.length ?? 0;
+        if (round === 0) {
+          yield { type: 'reasoning', text: 'planning the search' };
+          yield {
+            type: 'tool_call',
+            call: { id: 'c1', toolId: 'retrieval.search', arguments: { query: 'one' } },
+          } satisfies StreamChunk;
+          return;
+        }
+        if (round === 1) {
+          yield {
+            type: 'tool_call',
+            call: { id: 'c2', toolId: 'retrieval.search', arguments: { query: 'two' } },
+          } satisfies StreamChunk;
+          return;
+        }
+        throw new Error('third round provider died');
+      },
+    });
+    broker.register({
+      providerId: 'anthropic',
+      async *stream() {
+        providers.push('anthropic');
+        yield { type: 'text', text: 'FAILOVER AFTER REASONING' };
+      },
+    });
+    const orchestrator: ToolOrchestrator = {
+      async handleCall(input) {
+        return {
+          invocationId: `inv_${input.call.id}`,
+          toolId: input.call.toolId,
+          status: 'succeeded',
+          output: { ok: true },
+        };
+      },
+    };
+    const runtime = new ConversationRuntime({
+      ...stores,
+      events: new MemoryEventBus(),
+      router: {
+        resolve: () => ({
+          ...decision(),
+          candidateChain: ['openai/gpt-4o', 'anthropic/claude-sonnet'],
+        }),
+      } satisfies CapabilityRouter,
+      executor: broker,
+      toolOrchestrator: orchestrator,
+      principalId: 'user_a',
+    });
+    const conversation = await runtime.createConversation();
+    Object.assign(conversation, { tenantId: 'tenant_a' });
+    await stores.conversations.save(conversation);
+    const events = [];
+    for await (const event of runtime.sendMessage(conversation.id, { content: 'stay after reasoning', allowTools: true })) {
+      events.push(event);
+    }
+    expect(providers).toEqual(['openai', 'openai', 'openai']);
+    expect(
+      events.some((event) => event.type === 'assistant.delta' && event.text.includes('FAILOVER AFTER REASONING')),
+    ).toBe(false);
+    const snapshot = await runtime.getSnapshot(conversation.id);
+    const attemptRecords = snapshot?.executions[0]?.attempts ?? [];
+    const indices = attemptRecords.map((attempt) => attempt.index);
+    expect(indices.length).toBeGreaterThan(1);
+    expect(new Set(indices).size).toBe(indices.length);
+    expect(attemptRecords.some((attempt) => attempt.emittedVisibleOutput)).toBe(true);
+    expect(snapshot?.executions[0]?.status).toBe('failed');
+    expect(snapshot?.messages.at(-1)?.role).toBe('user');
   });
 });

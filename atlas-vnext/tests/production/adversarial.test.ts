@@ -258,6 +258,9 @@ describe.skipIf(!hasPostgres)('postgres interruption and restart', () => {
       production: false,
       probe: spine.healthProbe,
       shutdown: spine.shutdown,
+      resources: spine.resources,
+      maxRequestBytes: spine.limits.maxRequestBytes,
+      maxUploadBytes: spine.limits.maxUploadBytes,
       health: { mode: spine.mode, providers: spine.health, runtime: () => spine.runtimeSnapshot() },
     });
     servers.push(server);

@@ -260,4 +260,37 @@ describe('Execution broker (transport, retry, streaming)', () => {
     expect(chunks.filter((chunk) => chunk.type === 'text')).toEqual([{ type: 'text', text: 'ok' }]);
     expect(chunks.some((chunk) => chunk.type === 'warning')).toBe(true);
   });
+
+  it('continues attempt indices across execute() calls and refuses failover after prior visible output', async () => {
+    const broker = new ExecutionBroker(1);
+    broker.register({
+      providerId: 'openai',
+      async *stream() {
+        throw new Error('later round died');
+      },
+    });
+    broker.register({
+      providerId: 'ollama',
+      async *stream() {
+        yield { type: 'text', text: 'contradiction' };
+      },
+    });
+    const attempts: Array<{ index: number; provider: string; outcome: string }> = [];
+    const chunks: StreamChunk[] = [];
+    await expect(async () => {
+      for await (const chunk of broker.execute(
+        decision(['openai/gpt-4o', 'ollama/llama3.2']),
+        { prompt: 'hi', attemptIndexBase: 2, visibleOutputAlready: true },
+        {
+          onAttempt: (attempt) =>
+            attempts.push({ index: attempt.index, provider: attempt.provider, outcome: attempt.outcome }),
+        },
+      )) {
+        chunks.push(chunk);
+      }
+    }).rejects.toThrow('later round died');
+    expect(chunks).toEqual([]);
+    expect(attempts.some((attempt) => attempt.provider === 'ollama')).toBe(false);
+    expect(attempts.map((attempt) => attempt.index)).toEqual([3, 3]);
+  });
 });

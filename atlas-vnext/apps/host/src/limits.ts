@@ -113,6 +113,40 @@ export function resolveRateLimitIdentity(input: {
 }
 
 /**
+ * Cheap admission identity used BEFORE session resolution.
+ *
+ * Cookie presence is a local parse of the Cookie header — the session is not
+ * loaded. Unique forged cookies from one socket still share one `*:cookie`
+ * bucket so they cannot flood session storage. Forwarding headers are never
+ * consulted.
+ */
+export function resolveAdmissionIdentity(input: {
+  pathname: string;
+  remoteAddress?: string;
+  cookiePresent: boolean;
+}): RateLimitIdentity {
+  const ip = normalizeObservedAddress(input.remoteAddress);
+  const host = ip ? `ip:${ip}` : 'unknown';
+  const bootstrap = input.pathname === '/api/session' || input.pathname.startsWith('/api/session/');
+  if (bootstrap) {
+    return {
+      kind: 'bootstrap',
+      tenantId: ANONYMOUS_RATE_TENANT,
+      actorId: `bootstrap:${host}`,
+    };
+  }
+  return {
+    kind: 'anonymous',
+    tenantId: ANONYMOUS_RATE_TENANT,
+    actorId: input.cookiePresent ? `anon:${host}:cookie` : `anon:${host}`,
+  };
+}
+
+export function sameRateLimitIdentity(a: RateLimitIdentity, b: RateLimitIdentity): boolean {
+  return a.kind === b.kind && a.tenantId === b.tenantId && a.actorId === b.actorId;
+}
+
+/**
  * Platform-owned limiter. Keys are server-derived tenant + actor ids, never a
  * client-supplied tenant header. Unauthenticated callers use a reserved
  * anonymous tenant plus the observed socket address. Per-process:

@@ -20,6 +20,8 @@ export {
   ResourceGuard,
   normalizeContextFileIds,
   normalizeObservedAddress,
+  resolveAdmissionIdentity,
   resolveRateLimitIdentity,
+  sameRateLimitIdentity,
 } from './limits.ts';
 export type { RateLimitIdentity, RateLimitIdentityKind } from './limits.ts';

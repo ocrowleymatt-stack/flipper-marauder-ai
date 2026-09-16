@@ -129,4 +129,53 @@ describe('production host security, health, and limits', () => {
     const frames = await readSse(stream);
     expect(frames.some((frame) => frame.event === 'done')).toBe(true);
   });
+
+  it('applies a lowered ATLAS_MAX_REQUEST_BYTES ceiling to JSON bodies', async () => {
+    const started = await startProductionHost({ env: { ATLAS_MAX_REQUEST_BYTES: '48' } });
+    servers.push(started.server);
+    spines.push(started.spine);
+    expect(started.spine.limits.maxRequestBytes).toBe(48);
+    const session = await bootstrap(started.url);
+    const oversized = await fetch(`${started.url}/api/conversations`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({ title: 'x'.repeat(80) }),
+    });
+    expect(oversized.status).toBe(413);
+    const body = (await oversized.json()) as { code: string };
+    expect(body.code).toBe('payload_too_large');
+    const ok = await fetch(`${started.url}/api/conversations`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({ title: 'ok' }),
+    });
+    expect(ok.status).toBe(201);
+  });
+
+  it('applies a lowered ATLAS_MAX_UPLOAD_BYTES ceiling to file uploads', async () => {
+    const started = await startProductionHost({ env: { ATLAS_MAX_UPLOAD_BYTES: '64' } });
+    servers.push(started.server);
+    spines.push(started.spine);
+    expect(started.spine.limits.maxUploadBytes).toBe(64);
+    const session = await bootstrap(started.url);
+    const projectRes = await fetch(`${started.url}/api/projects`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({ name: 'Bytes' }),
+    });
+    expect(projectRes.status).toBe(201);
+    const project = (await projectRes.json()) as { id: string };
+    const oversized = await fetch(`${started.url}/api/projects/${project.id}/files`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({ path: 'brief.md', text: 'this upload is well over the sixty four byte ceiling' }),
+    });
+    expect(oversized.status).toBe(413);
+    const tiny = await fetch(`${started.url}/api/projects/${project.id}/files`, {
+      method: 'POST',
+      headers: authHeaders(session),
+      body: JSON.stringify({ path: 'a.md', text: 'ok' }),
+    });
+    expect(tiny.status).toBe(201);
+  });
 });

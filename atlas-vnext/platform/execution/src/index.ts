@@ -45,7 +45,7 @@ export {
 export type { SecretStore } from './secrets.ts';
 export { readExecutionConfig } from './config.ts';
 export type { ExecutionConfig } from './config.ts';
-export { FetchTransport, ScriptedTransport, responseFromText, bytesFromString, readAllText } from './transport.ts';
+export { FetchTransport, ScriptedTransport, responseFromText, bytesFromString, readAllText, iterableFromReadable } from './transport.ts';
 export type { HttpRequest, HttpResponse, HttpTransport } from './transport.ts';
 export { parseSse, parseNdjson } from './stream-parse.ts';
 export {

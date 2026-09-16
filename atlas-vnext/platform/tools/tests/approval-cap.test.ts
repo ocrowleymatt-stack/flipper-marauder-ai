@@ -91,4 +91,26 @@ describe('approval ceiling reservation', () => {
     expect(await invocations.listByStatus(actor.tenantId, ['awaiting_approval'])).toHaveLength(2);
     expect(await invocations.listByStatus(actor.tenantId, ['failed'])).toEqual([]);
   });
+
+  it('repeated over-cap calls do not accumulate non-terminal authorised invocations', async () => {
+    const { engine, actor, invocations } = approvalEngine(1);
+    const first = await engine.invoke(actor, {
+      toolId: 'fs.write',
+      arguments: { path: 'kept.txt', content: 'ok' },
+    });
+    expect(first.invocation.status).toBe('awaiting_approval');
+
+    for (let i = 0; i < 12; i += 1) {
+      await expect(
+        engine.invoke(actor, { toolId: 'fs.write', arguments: { path: `extra-${i}.txt`, content: 'nope' } }),
+      ).rejects.toMatchObject({ code: 'rate_limit' } satisfies Partial<ToolError>);
+    }
+
+    expect(await invocations.listByStatus(actor.tenantId, ['authorised'])).toEqual([]);
+    expect(await invocations.listByStatus(actor.tenantId, ['proposed', 'validated', 'queued', 'running'])).toEqual([]);
+    const awaiting = await invocations.listByStatus(actor.tenantId, ['awaiting_approval']);
+    expect(awaiting).toHaveLength(1);
+    expect(awaiting[0]?.id).toBe(first.invocation.id);
+    expect(await engine.reconcile()).toEqual([]);
+  });
 });

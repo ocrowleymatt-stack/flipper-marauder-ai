@@ -5,6 +5,7 @@ import type { SecretStore } from '../secrets.ts';
 import { parseSse } from '../stream-parse.ts';
 import { AnthropicToolCallAssembler } from '../tool-call-buffer.ts';
 import { readAllText, type HttpTransport } from '../transport.ts';
+import { anthropicMessagesFrom, anthropicToolsFrom } from '../tool-transcript.ts';
 import type { ExecutionContext, ProviderAdapter } from '../types.ts';
 
 export class AnthropicAdapter implements ProviderAdapter {
@@ -31,15 +32,10 @@ export class AnthropicAdapter implements ProviderAdapter {
       max_tokens: 4096,
       stream: true,
       system: context.systemPrompt,
-      messages: [{ role: 'user', content: context.prompt }],
+      messages: anthropicMessagesFrom(context),
     };
-    if (context.tools?.length) {
-      body.tools = context.tools.map((tool) => ({
-        name: tool.id,
-        description: tool.description,
-        input_schema: tool.inputSchema,
-      }));
-    }
+    const toolDeclarations = anthropicToolsFrom(context);
+    if (toolDeclarations) body.tools = toolDeclarations;
     let response;
     try {
       response = await this.options.transport.send({

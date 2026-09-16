@@ -5,6 +5,7 @@ import { geminiApiKey, type SecretStore } from '../secrets.ts';
 import { parseSse } from '../stream-parse.ts';
 import { GeminiFunctionCallAssembler } from '../tool-call-buffer.ts';
 import { readAllText, type HttpTransport } from '../transport.ts';
+import { geminiContentsFrom, geminiToolsFrom } from '../tool-transcript.ts';
 import type { ExecutionContext, ProviderAdapter } from '../types.ts';
 
 export class GeminiAdapter implements ProviderAdapter {
@@ -26,23 +27,11 @@ export class GeminiAdapter implements ProviderAdapter {
       throw new Error('gemini is unavailable: missing credentials.');
     }
     const upstream = this.options.modelMap?.[model] ?? model;
-    const parts: Array<{ text: string }> = [];
-    if (context.systemPrompt) parts.push({ text: context.systemPrompt });
-    parts.push({ text: context.prompt });
     const body: Record<string, unknown> = {
-      contents: [{ role: 'user', parts }],
+      contents: geminiContentsFrom(context),
     };
-    if (context.tools?.length) {
-      body.tools = [
-        {
-          functionDeclarations: context.tools.map((tool) => ({
-            name: tool.id,
-            description: tool.description,
-            parameters: tool.inputSchema,
-          })),
-        },
-      ];
-    }
+    const toolDeclarations = geminiToolsFrom(context);
+    if (toolDeclarations) body.tools = toolDeclarations;
     let response;
     try {
       response = await this.options.transport.send({

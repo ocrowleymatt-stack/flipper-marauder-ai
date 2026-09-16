@@ -393,13 +393,23 @@ export class ConversationRuntime {
       const accumulatedToolResults: Array<{
         callId: string;
         toolId: string;
+        arguments: Record<string, unknown>;
         status: string;
         resultRef?: string | null;
         output?: unknown;
+        round: number;
       }> = [];
       const collectedToolCalls: ToolCallRequest[] = [];
       const maxToolRounds = this.deps.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
       let toolRounds = 0;
+      const callableTools =
+        this.deps.toolOrchestrator?.listCallable && conversation.tenantId
+          ? await this.deps.toolOrchestrator.listCallable({
+              tenantId: conversation.tenantId,
+              principalId: this.deps.principalId ?? conversation.tenantId,
+              workspaceId: conversation.workspaceId ?? conversation.projectId ?? null,
+            })
+          : undefined;
 
       const observer = {
         onAttempt: (
@@ -587,6 +597,7 @@ export class ConversationRuntime {
                 signal: controller.signal,
                 traceId: decision.traceId,
                 priorToolResults: prior,
+                tools: callableTools,
               },
               observer,
             ),
@@ -621,8 +632,7 @@ export class ConversationRuntime {
                 roundLimitHit = true;
                 continue;
               }
-              const handled = await awaitUnlessAborted(
-                this.deps.toolOrchestrator.handleCall({
+              const handled = await this.deps.toolOrchestrator.handleCall({
                   tenantId: conversation.tenantId,
                   principalId: this.deps.principalId ?? conversation.tenantId,
                   workspaceId: conversation.workspaceId ?? conversation.projectId ?? null,
@@ -631,9 +641,8 @@ export class ConversationRuntime {
                   provider: execution.selectedProvider,
                   model: execution.selectedModel,
                   call: chunk.call,
-                }),
-                controller.signal,
-              );
+                  signal: controller.signal,
+                });
               yield {
                 type: 'tool.lifecycle',
                 executionId,
@@ -655,9 +664,11 @@ export class ConversationRuntime {
               roundTools.push({
                 callId: chunk.call.id,
                 toolId: handled.toolId,
+                arguments: chunk.call.arguments,
                 status: handled.status,
                 resultRef: handled.resultRef ?? null,
                 output: handled.output,
+                round: toolRounds,
               });
               collectedToolCalls.push(chunk.call);
               continue;
@@ -923,26 +934,4 @@ function toolFailureCode(status: string): string {
   if (status === 'uncertain') return 'tool_uncertain';
   if (status === 'cancelled') return 'cancelled';
   return 'tool_failed';
-}
-
-async function awaitUnlessAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) {
-    throw Object.assign(new Error('aborted'), { name: 'AbortError' });
-  }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    work.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      (err) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(err);
-      },
-    );
-  });
 }

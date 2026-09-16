@@ -15,7 +15,7 @@ import type { DurableJobEngine } from '@atlas-vnext/jobs';
 import { logPlatform } from '@atlas-vnext/observability';
 import { AuthorityDeniedError, AuthorityEngine } from '@atlas-vnext/permissions';
 import { defaultAdapters, type CommandRunner, type ToolAdapter, type ToolAdapterResult } from './adapters.ts';
-import { DuplicateSideEffectError, IncompleteToolCallError, ToolCancelUnconfirmedError, ToolError, UnknownToolError } from './errors.ts';
+import { DuplicateSideEffectError, IncompleteToolCallError, ToolCancelUnconfirmedError, ToolError, UnknownToolError, createAbortError, isAbortError } from './errors.ts';
 import { sha256Stable } from './hash.ts';
 import { ToolRegistry } from './registry.ts';
 import { assertObjectSchema, validateAgainstSchema, type JsonSchema } from './schema.ts';
@@ -49,6 +49,16 @@ export interface InvokeRequest {
   pluginId?: string | null;
   provider?: string | null;
   model?: string | null;
+}
+
+export interface InvokeOptions {
+  signal?: AbortSignal;
+}
+
+export interface CallableToolDefinition {
+  id: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
 }
 
 export interface InvokeResult {
@@ -114,7 +124,7 @@ export class ToolEngine {
     this.accepting = false;
   }
 
-  async invoke(actor: ToolActor, request: InvokeRequest): Promise<InvokeResult> {
+  async invoke(actor: ToolActor, request: InvokeRequest, options: InvokeOptions = {}): Promise<InvokeResult> {
     this.assertAccepting();
     this.assertActor(actor);
     if (!isPlainObject(request.arguments) || !request.toolId?.trim()) {
@@ -135,10 +145,47 @@ export class ToolEngine {
 
     if (needsApproval(definition)) {
       return this.withApprovalMutex(actor.tenantId, () =>
-        this.invokeNew(actor, request, definition, argumentHash, idempotencyKey),
+        this.invokeNew(actor, request, definition, argumentHash, idempotencyKey, options.signal),
       );
     }
-    return this.invokeNew(actor, request, definition, argumentHash, idempotencyKey);
+    return this.invokeNew(actor, request, definition, argumentHash, idempotencyKey, options.signal);
+  }
+
+  listCallable(actor: ToolActor): CallableToolDefinition[] {
+    this.assertActor(actor);
+    const out: CallableToolDefinition[] = [];
+    for (const definition of this.options.registry.list()) {
+      if (definition.pluginId) {
+        const enabled = this.options.pluginEnabled?.(definition.pluginId) ?? true;
+        if (!enabled) continue;
+      }
+      const allowed = definition.requiredCapabilities.every((capability) => {
+        const verdict = this.options.authority.decide({
+          principal: {
+            principalId: actor.principalId,
+            kind: 'user',
+            tenantId: actor.tenantId,
+            workspaceId: actor.workspaceId ?? null,
+          },
+          capability,
+          resource: {
+            type: 'tool',
+            id: definition.id,
+            tenantId: actor.tenantId,
+            workspaceId: actor.workspaceId ?? null,
+          },
+          fromPlugin: Boolean(definition.pluginId),
+        });
+        return verdict.decision === 'ALLOW';
+      });
+      if (!allowed) continue;
+      out.push({
+        id: definition.id,
+        description: definition.description,
+        inputSchema: definition.inputSchema,
+      });
+    }
+    return out;
   }
 
   private async invokeNew(
@@ -147,7 +194,9 @@ export class ToolEngine {
     definition: ToolDefinition,
     argumentHash: string,
     idempotencyKey: string | null,
+    signal?: AbortSignal,
   ): Promise<InvokeResult> {
+    this.assertNotAborted(signal);
     if (needsApproval(definition)) {
       const pending = await this.options.invocations.listByStatus(actor.tenantId, ['awaiting_approval']);
       if (pending.length >= this.limits.maxPendingApprovals) {
@@ -156,23 +205,33 @@ export class ToolEngine {
     }
 
     let invocation = await this.createProposed(actor, request, definition, argumentHash, idempotencyKey);
-    invocation = await this.validate(invocation, definition);
-    invocation = await this.authorise(actor, invocation, definition);
-    if (invocation.status === 'failed' || invocation.status === 'denied' || invocation.status === 'cancelled') {
-      return { invocation, provenance: this.provenance(invocation) };
-    }
-    if (needsApproval(definition) && invocation.status === 'authorised') {
-      const pending = await this.options.invocations.listByStatus(actor.tenantId, ['awaiting_approval']);
-      if (pending.length >= this.limits.maxPendingApprovals) {
-        await this.transition(invocation, 'failed', {
-          failureReason: failure('rate_limit', 'Fail-closed: pending approval ceiling reached.', true),
-        });
-        throw new ToolError('rate_limit', 'Fail-closed: pending approval ceiling reached.', true);
+    try {
+      this.assertNotAborted(signal);
+      invocation = await this.validate(invocation, definition);
+      this.assertNotAborted(signal);
+      invocation = await this.authorise(actor, invocation, definition);
+      if (invocation.status === 'failed' || invocation.status === 'denied' || invocation.status === 'cancelled') {
+        return { invocation, provenance: this.provenance(invocation) };
       }
-      invocation = await this.suspendForApproval(invocation);
-      return { invocation, provenance: this.provenance(invocation) };
+      if (needsApproval(definition) && invocation.status === 'authorised') {
+        const pending = await this.options.invocations.listByStatus(actor.tenantId, ['awaiting_approval']);
+        if (pending.length >= this.limits.maxPendingApprovals) {
+          const failed = await this.transition(invocation, 'failed', {
+            failureReason: failure('rate_limit', 'Fail-closed: pending approval ceiling reached.', true),
+          });
+          invocation = failed;
+          throw new ToolError('rate_limit', 'Fail-closed: pending approval ceiling reached.', true);
+        }
+        invocation = await this.suspendForApproval(invocation);
+        return { invocation, provenance: this.provenance(invocation) };
+      }
+      return this.executeAuthorised(actor, invocation, definition, signal);
+    } catch (err) {
+      if (isAbortError(err) && !isTerminalToolStatus(invocation.status)) {
+        return this.terminaliseAbort(invocation, definition);
+      }
+      throw err;
     }
-    return this.executeAuthorised(actor, invocation, definition);
   }
 
   async approve(actor: ToolActor, invocationId: string, decision: 'approved' | 'denied', reason?: string): Promise<InvokeResult> {
@@ -350,6 +409,7 @@ export class ToolEngine {
     actor: ToolActor,
     invocation: ToolInvocation,
     definition: ToolDefinition,
+    signal?: AbortSignal,
   ): Promise<InvokeResult> {
     if (this.inFlight >= this.limits.maxToolConcurrency) {
       throw new ToolError('tool_concurrency', 'Fail-closed: tool concurrency ceiling reached.', true);
@@ -362,13 +422,20 @@ export class ToolEngine {
       });
       return { invocation: failed, provenance: this.provenance(failed) };
     }
+    if (signal?.aborted) {
+      return this.terminaliseAbort(invocation, definition);
+    }
     let current = invocation.status === 'queued' ? invocation : await this.transition(invocation, 'queued');
+    if (signal?.aborted) {
+      return this.terminaliseAbort(current, definition);
+    }
     const attemptId = `tat_${randomUUID()}`;
     current = await this.transition(
       { ...current, attemptId, attemptCount: current.attemptCount + 1 },
       'running',
     );
     const controller = new AbortController();
+    const unlinkParent = linkAbort(signal, controller);
     this.controllers.set(current.id, controller);
     this.inFlight += 1;
     const timeout = setTimeout(() => controller.abort(), definition.timeoutMs);
@@ -386,8 +453,8 @@ export class ToolEngine {
         recordEffect: (key, value) => this.recordEffect(actor.tenantId, key, value, current),
         lookupEffect: async () => null,
       });
-      if (controller.signal.aborted && !current.cancelConfirmed) {
-        throw new ToolCancelUnconfirmedError();
+      if (controller.signal.aborted) {
+        return this.terminaliseAbort(current, definition);
       }
       const succeeded = await this.transition(current, 'succeeded', {
         resultRef: result.resultRef ?? `toolres:${current.id}`,
@@ -407,12 +474,8 @@ export class ToolEngine {
         });
         return { invocation: uncertain, provenance: this.provenance(uncertain) };
       }
-      if (err instanceof ToolCancelUnconfirmedError) {
-        const running = await this.options.invocations.save(
-          { ...current, cancelRequested: true, cancelConfirmed: false, updatedAt: this.clock() },
-          ['running'],
-        );
-        return { invocation: running, provenance: this.provenance(running) };
+      if (err instanceof ToolCancelUnconfirmedError || isAbortError(err) || controller.signal.aborted) {
+        return this.terminaliseAbort(current, definition);
       }
       const message = err instanceof Error ? err.message : String(err);
       const failed = await this.transition(current, 'failed', {
@@ -420,10 +483,43 @@ export class ToolEngine {
       });
       return { invocation: failed, provenance: this.provenance(failed) };
     } finally {
+      unlinkParent();
       clearTimeout(timeout);
       this.controllers.delete(current.id);
       this.inFlight -= 1;
     }
+  }
+
+  private async terminaliseAbort(
+    invocation: ToolInvocation,
+    definition: ToolDefinition,
+  ): Promise<InvokeResult> {
+    if (isTerminalToolStatus(invocation.status)) {
+      return { invocation, provenance: this.provenance(invocation) };
+    }
+    const mutating = definition.sideEffectClass !== 'none' && invocation.status === 'running';
+    if (mutating) {
+      const uncertain = await this.transition(invocation, 'uncertain', {
+        cancelRequested: true,
+        cancelConfirmed: false,
+        failureReason: failure(
+          'interrupted_uncertain',
+          'Cancellation interrupted a mutating tool; completion is uncertain and requires reconciliation.',
+          false,
+        ),
+      });
+      return { invocation: uncertain, provenance: this.provenance(uncertain) };
+    }
+    const cancelled = await this.transition(invocation, 'cancelled', {
+      cancelRequested: true,
+      cancelConfirmed: true,
+      failureReason: failure('cancelled', 'Invocation cancelled.', false),
+    });
+    return { invocation: cancelled, provenance: this.provenance(cancelled) };
+  }
+
+  private assertNotAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) throw createAbortError();
   }
 
   private async recordEffect(
@@ -796,4 +892,15 @@ function failure(code: string, message: string, retryable: boolean) {
 
 export function hashOpaque(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function linkAbort(parent: AbortSignal | undefined, child: AbortController): () => void {
+  if (!parent) return () => undefined;
+  if (parent.aborted) {
+    child.abort();
+    return () => undefined;
+  }
+  const onAbort = () => child.abort();
+  parent.addEventListener('abort', onAbort, { once: true });
+  return () => parent.removeEventListener('abort', onAbort);
 }

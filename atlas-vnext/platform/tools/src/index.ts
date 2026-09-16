@@ -1,6 +1,6 @@
 export { ToolRegistry } from './registry.ts';
 export { ToolEngine, presentTool } from './engine.ts';
-export type { InvokeRequest, InvokeResult, ToolEngineOptions, ToolPresentation, ToolRisk } from './engine.ts';
+export type { CallableToolDefinition, InvokeOptions, InvokeRequest, InvokeResult, ToolEngineOptions, ToolPresentation, ToolRisk } from './engine.ts';
 export {
   MemoryToolApprovalStore,
   MemoryToolInvocationStore,
@@ -25,4 +25,6 @@ export {
   IncompleteToolCallError,
   DuplicateSideEffectError,
   ToolCancelUnconfirmedError,
+  createAbortError,
+  isAbortError,
 } from './errors.ts';

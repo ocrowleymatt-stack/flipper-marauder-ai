@@ -51,3 +51,14 @@ export class ToolCancelUnconfirmedError extends ToolError {
     this.name = 'ToolCancelUnconfirmedError';
   }
 }
+
+export function createAbortError(message = 'aborted'): Error {
+  return Object.assign(new Error(message), { name: 'AbortError' });
+}
+
+export function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const name = (err as { name?: string }).name;
+  const message = err instanceof Error ? err.message : String(err);
+  return name === 'AbortError' || message === 'aborted' || message === 'Execution aborted.';
+}

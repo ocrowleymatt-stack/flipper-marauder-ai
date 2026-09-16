@@ -1,4 +1,21 @@
 export type { ExecutionContext, ExecutionObserver, HealthObserver, ProviderAdapter, ProviderHealthSnapshot } from './types.ts';
+export {
+  anthropicMessagesFrom,
+  anthropicToolsFrom,
+  geminiContentsFrom,
+  geminiToolsFrom,
+  groupPriorToolRounds,
+  openaiMessagesFrom,
+  openaiToolsFrom,
+  serializeToolResult,
+} from './tool-transcript.ts';
+export type {
+  AnthropicMessage,
+  GeminiContent,
+  OpenAIChatMessage,
+  PriorToolResult,
+  ToolRound,
+} from './tool-transcript.ts';
 export { CircuitBreaker } from './circuit-breaker.ts';
 export { ExecutionBroker } from './broker.ts';
 export { MockAdapter, estimateTokens } from './adapters/mock.ts';

@@ -170,12 +170,16 @@ describe('model/tool loop', () => {
           } satisfies StreamChunk;
         } else if (prior.length === 1) {
           expect(prior[0]?.toolId).toBe('retrieval.search');
+          expect(prior[0]?.arguments).toEqual({ query: 'one' });
+          expect(prior[0]?.round).toBe(0);
           yield {
             type: 'tool_call',
             call: { id: 'call_2', toolId: 'retrieval.search', arguments: { query: 'two' } },
           } satisfies StreamChunk;
         } else {
           expect(prior.map((row) => row.callId)).toEqual(['call_1', 'call_2']);
+          expect(prior.map((row) => row.arguments)).toEqual([{ query: 'one' }, { query: 'two' }]);
+          expect(prior.map((row) => row.round)).toEqual([0, 1]);
           yield { type: 'text', text: 'used both searches' };
         }
         observer?.onAttempt({
@@ -293,7 +297,17 @@ describe('model/tool loop', () => {
     const orchestrator: ToolOrchestrator = {
       async handleCall(input) {
         if (input.call.id === 'call_2') {
-          await new Promise(() => undefined);
+          await new Promise<void>((_resolve, reject) => {
+            if (input.signal?.aborted) {
+              reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+              return;
+            }
+            input.signal?.addEventListener(
+              'abort',
+              () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+              { once: true },
+            );
+          });
         }
         return {
           invocationId: `inv_${input.call.id}`,
@@ -450,7 +464,17 @@ describe('model/tool loop', () => {
     const orchestrator: ToolOrchestrator = {
       async handleCall(input) {
         if (input.call.id === 'call_2') {
-          await new Promise(() => undefined);
+          await new Promise<void>((_resolve, reject) => {
+            if (input.signal?.aborted) {
+              reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+              return;
+            }
+            input.signal?.addEventListener(
+              'abort',
+              () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+              { once: true },
+            );
+          });
         }
         return {
           invocationId: `inv_${input.call.id}`,
@@ -513,5 +537,316 @@ describe('model/tool loop', () => {
     expect(events.at(-1)?.type).toBe('done');
     expect((await runtime.getSnapshot(conversation.id))?.executions[0]?.status).toBe('failed');
     expect(await stores.executions.listInFlight()).toEqual([]);
+  });
+
+  it('supplies only authorised callable tool definitions to every model round', async () => {
+    const stores = memoryStores();
+    const seen: Array<{ tools?: Array<{ id: string }>; prior?: number }> = [];
+    const orchestrator: ToolOrchestrator = {
+      async listCallable(input) {
+        if (input.tenantId !== 'tenant_a' || input.principalId !== 'user_a') return [];
+        return [
+          {
+            id: 'retrieval.search',
+            description: 'Read-only lexical retrieval over mock knowledge.',
+            inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+          },
+        ];
+      },
+      async handleCall(input) {
+        return {
+          invocationId: `inv_${input.call.id}`,
+          toolId: input.call.toolId,
+          status: 'succeeded',
+          output: { ok: true, tenantId: input.tenantId },
+        };
+      },
+    };
+    const executor: ModelExecutor = {
+      async *execute(_decision, context, observer) {
+        seen.push({ tools: context.tools?.map((tool) => ({ id: tool.id })), prior: context.priorToolResults?.length ?? 0 });
+        observer?.onAttempt({
+          index: (context.priorToolResults?.length ?? 0) + 1,
+          provider: 'openai',
+          model: 'gpt-4o',
+          outcome: 'started',
+          error: null,
+          emittedVisibleOutput: false,
+        });
+        if (!context.priorToolResults?.length) {
+          yield {
+            type: 'tool_call',
+            call: { id: 'call_1', toolId: 'retrieval.search', arguments: { query: 'one' } },
+          } satisfies StreamChunk;
+        } else {
+          expect(context.tools?.map((tool) => tool.id)).toEqual(['retrieval.search']);
+          yield { type: 'text', text: 'done' };
+        }
+        observer?.onAttempt({
+          index: 1,
+          provider: 'openai',
+          model: 'gpt-4o',
+          outcome: 'succeeded',
+          error: null,
+          emittedVisibleOutput: Boolean(context.priorToolResults?.length),
+        });
+        observer?.onSelected?.({ provider: 'openai', model: 'gpt-4o' });
+      },
+    };
+    const runtime = new ConversationRuntime({
+      ...stores,
+      events: new MemoryEventBus(),
+      router: { resolve: () => decision() } satisfies CapabilityRouter,
+      executor,
+      toolOrchestrator: orchestrator,
+      principalId: 'user_a',
+    });
+    const conversation = await runtime.createConversation();
+    Object.assign(conversation, { tenantId: 'tenant_a' });
+    await stores.conversations.save(conversation);
+    for await (const _event of runtime.sendMessage(conversation.id, { content: 'search', requireTools: true })) {
+      // drain
+    }
+    expect(seen).toHaveLength(2);
+    expect(seen[0]?.tools).toEqual([{ id: 'retrieval.search' }]);
+    expect(seen[1]?.tools).toEqual([{ id: 'retrieval.search' }]);
+  });
+
+  it('does not advertise another tenant\'s tools or leak their results', async () => {
+    const stores = memoryStores();
+    const seenTools: string[][] = [];
+    const orchestrator: ToolOrchestrator = {
+      async listCallable(input) {
+        if (input.tenantId !== 'tenant_a') {
+          return [{ id: 'admin.configure', description: 'secret', inputSchema: { type: 'object' } }];
+        }
+        return [{ id: 'retrieval.search', description: 'search', inputSchema: { type: 'object' } }];
+      },
+      async handleCall(input) {
+        expect(input.tenantId).toBe('tenant_a');
+        return {
+          invocationId: 'inv_1',
+          toolId: input.call.toolId,
+          status: 'succeeded',
+          output: { secret: 'tenant-a-only' },
+        };
+      },
+    };
+    const executor: ModelExecutor = {
+      async *execute(_decision, context) {
+        seenTools.push((context.tools ?? []).map((tool) => tool.id));
+        expect(context.tools?.some((tool) => tool.id === 'admin.configure')).toBe(false);
+        yield { type: 'text', text: 'ok' };
+      },
+    };
+    const runtime = new ConversationRuntime({
+      ...stores,
+      events: new MemoryEventBus(),
+      router: { resolve: () => decision() } satisfies CapabilityRouter,
+      executor,
+      toolOrchestrator: orchestrator,
+      principalId: 'user_a',
+    });
+    const conversation = await runtime.createConversation();
+    Object.assign(conversation, { tenantId: 'tenant_a' });
+    await stores.conversations.save(conversation);
+    for await (const _event of runtime.sendMessage(conversation.id, { content: 'hi', requireTools: true })) {
+      // drain
+    }
+    expect(seenTools).toEqual([['retrieval.search']]);
+  });
+
+  it('propagates cancellation into an active tool handleCall via the execution signal', async () => {
+    const stores = memoryStores();
+    let sawAbort = false;
+    const orchestrator: ToolOrchestrator = {
+      async handleCall(input) {
+        await new Promise<void>((resolve, reject) => {
+          if (input.signal?.aborted) {
+            sawAbort = true;
+            resolve();
+            return;
+          }
+          input.signal?.addEventListener(
+            'abort',
+            () => {
+              sawAbort = true;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        return {
+          invocationId: 'inv_hang',
+          toolId: input.call.toolId,
+          status: 'cancelled',
+          reason: 'cancelled while running',
+        };
+      },
+    };
+    const executor: ModelExecutor = {
+      async *execute() {
+        yield {
+          type: 'tool_call',
+          call: { id: 'call_hang', toolId: 'retrieval.search', arguments: { query: 'hang' } },
+        } satisfies StreamChunk;
+      },
+    };
+    const runtime = new ConversationRuntime({
+      ...stores,
+      events: new MemoryEventBus(),
+      router: { resolve: () => decision() } satisfies CapabilityRouter,
+      executor,
+      toolOrchestrator: orchestrator,
+      principalId: 'user_a',
+    });
+    const conversation = await runtime.createConversation();
+    Object.assign(conversation, { tenantId: 'tenant_a' });
+    await stores.conversations.save(conversation);
+    const gen = runtime.sendMessage(conversation.id, { content: 'hang' });
+    let executionId: string | undefined;
+    const events = [];
+    for (;;) {
+      const { value, done } = await gen.next();
+      if (done || !value) break;
+      events.push(value);
+      if (value.type === 'execution' && value.execution.id) executionId = value.execution.id;
+      if (value.type === 'tool.requested') {
+        await runtime.cancel(executionId!);
+      }
+    }
+    expect(sawAbort).toBe(true);
+    expect(events.some((event) => event.type === 'tool.lifecycle' && event.status === 'cancelled')).toBe(true);
+    expect((await runtime.getSnapshot(conversation.id))?.executions[0]?.status).toBe('cancelled');
+  });
+
+  it('surfaces uncertain completion when a mutating tool is cancelled mid-flight', async () => {
+    const stores = memoryStores();
+    let sawAbort = false;
+    const orchestrator: ToolOrchestrator = {
+      async handleCall(input) {
+        await new Promise<void>((resolve) => {
+          if (input.signal?.aborted) {
+            sawAbort = true;
+            resolve();
+            return;
+          }
+          input.signal?.addEventListener(
+            'abort',
+            () => {
+              sawAbort = true;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        return {
+          invocationId: 'inv_mutate',
+          toolId: input.call.toolId,
+          status: 'uncertain',
+          reason: 'Cancellation interrupted a mutating tool; completion is uncertain and requires reconciliation.',
+        };
+      },
+    };
+    const executor: ModelExecutor = {
+      async *execute() {
+        yield {
+          type: 'tool_call',
+          call: { id: 'call_mutate', toolId: 'api.mutate', arguments: { url: 'https://example.test' } },
+        } satisfies StreamChunk;
+      },
+    };
+    const runtime = new ConversationRuntime({
+      ...stores,
+      events: new MemoryEventBus(),
+      router: { resolve: () => decision() } satisfies CapabilityRouter,
+      executor,
+      toolOrchestrator: orchestrator,
+      principalId: 'user_a',
+    });
+    const conversation = await runtime.createConversation();
+    Object.assign(conversation, { tenantId: 'tenant_a' });
+    await stores.conversations.save(conversation);
+    const gen = runtime.sendMessage(conversation.id, { content: 'mutate' });
+    let executionId: string | undefined;
+    const events = [];
+    for (;;) {
+      const { value, done } = await gen.next();
+      if (done || !value) break;
+      events.push(value);
+      if (value.type === 'execution' && value.execution.id) executionId = value.execution.id;
+      if (value.type === 'tool.requested') {
+        await runtime.cancel(executionId!);
+      }
+    }
+    expect(sawAbort).toBe(true);
+    expect(events.some((event) => event.type === 'tool.lifecycle' && event.status === 'uncertain')).toBe(true);
+    expect((await runtime.getSnapshot(conversation.id))?.executions[0]?.status).toBe('cancelled');
+  });
+
+  it('does not switch provider after visible output on a later tool round', async () => {
+    const stores = memoryStores();
+    const routes: string[] = [];
+    const orchestrator: ToolOrchestrator = {
+      async handleCall(input) {
+        return {
+          invocationId: `inv_${input.call.id}`,
+          toolId: input.call.toolId,
+          status: 'succeeded',
+          output: { ok: true },
+        };
+      },
+    };
+    const executor: ModelExecutor = {
+      async *execute(routed, context, observer) {
+        routes.push(`${routed.provider}/${routed.model}`);
+        observer?.onAttempt({
+          index: routes.length,
+          provider: routed.provider,
+          model: routed.model,
+          outcome: 'started',
+          error: null,
+          emittedVisibleOutput: false,
+        });
+        observer?.onSelected?.({ provider: routed.provider, model: routed.model });
+        if (!context.priorToolResults?.length) {
+          yield { type: 'text', text: 'visible ' };
+          yield {
+            type: 'tool_call',
+            call: { id: 'call_1', toolId: 'retrieval.search', arguments: { query: 'one' } },
+          } satisfies StreamChunk;
+        } else {
+          yield { type: 'text', text: 'again' };
+        }
+        observer?.onAttempt({
+          index: routes.length,
+          provider: routed.provider,
+          model: routed.model,
+          outcome: 'succeeded',
+          error: null,
+          emittedVisibleOutput: true,
+        });
+      },
+    };
+    const runtime = new ConversationRuntime({
+      ...stores,
+      events: new MemoryEventBus(),
+      router: {
+        resolve: () => ({
+          ...decision(),
+          candidateChain: ['openai/gpt-4o', 'anthropic/claude-sonnet'],
+        }),
+      } satisfies CapabilityRouter,
+      executor,
+      toolOrchestrator: orchestrator,
+      principalId: 'user_a',
+    });
+    const conversation = await runtime.createConversation();
+    Object.assign(conversation, { tenantId: 'tenant_a' });
+    await stores.conversations.save(conversation);
+    for await (const _event of runtime.sendMessage(conversation.id, { content: 'stay' })) {
+      // drain
+    }
+    expect(routes).toEqual(['openai/gpt-4o', 'openai/gpt-4o']);
   });
 });

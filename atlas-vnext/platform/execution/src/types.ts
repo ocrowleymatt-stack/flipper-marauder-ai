@@ -11,9 +11,11 @@ export interface ExecutionContext {
   priorToolResults?: Array<{
     callId: string;
     toolId: string;
+    arguments?: Record<string, unknown>;
     status: string;
     resultRef?: string | null;
     output?: unknown;
+    round?: number;
   }>;
   signal?: AbortSignal;
   traceId?: string;

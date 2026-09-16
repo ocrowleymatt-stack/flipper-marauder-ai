@@ -5,6 +5,7 @@ import { parseSse } from '../stream-parse.ts';
 import { OpenAIToolCallAssembler } from '../tool-call-buffer.ts';
 import { readAllText, type HttpTransport } from '../transport.ts';
 import type { SecretStore } from '../secrets.ts';
+import { openaiMessagesFrom, openaiToolsFrom } from '../tool-transcript.ts';
 import type { ExecutionContext, ProviderAdapter } from '../types.ts';
 
 export interface OpenAICompatibleOptions {
@@ -43,13 +44,13 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     const body: Record<string, unknown> = {
       model: upstream,
       stream: true,
-      messages: messagesFrom(context),
+      messages: openaiMessagesFrom(context),
       ...this.options.extraBody,
     };
     if (this.options.includeStreamUsage !== false) {
       body.stream_options = { include_usage: true };
     }
-    const tools = toolsFrom(context);
+    const tools = openaiToolsFrom(context);
     if (tools) body.tools = tools;
 
     const headers: Record<string, string> = {
@@ -143,21 +144,3 @@ function usageFromOpenAI(usage: OpenAIStreamPayload['usage']): TokenUsage | null
   };
 }
 
-function messagesFrom(context: ExecutionContext): Array<{ role: string; content: string }> {
-  const messages: Array<{ role: string; content: string }> = [];
-  if (context.systemPrompt) messages.push({ role: 'system', content: context.systemPrompt });
-  messages.push({ role: 'user', content: context.prompt });
-  return messages;
-}
-
-function toolsFrom(context: ExecutionContext): Array<Record<string, unknown>> | null {
-  if (!context.tools?.length) return null;
-  return context.tools.map((tool) => ({
-    type: 'function',
-    function: {
-      name: tool.id,
-      description: tool.description,
-      parameters: tool.inputSchema,
-    },
-  }));
-}

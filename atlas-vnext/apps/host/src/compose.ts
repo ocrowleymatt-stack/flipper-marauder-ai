@@ -232,6 +232,13 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   let tools: ToolEngine;
 
   const makeOrchestrator = (engine: ToolEngine): ToolOrchestrator => ({
+    async listCallable(input) {
+      return engine.listCallable({
+        tenantId: input.tenantId,
+        principalId: input.principalId,
+        workspaceId: input.workspaceId,
+      });
+    },
     async handleCall(input) {
       const result = await engine.invoke(
         { tenantId: input.tenantId, principalId: input.principalId, workspaceId: input.workspaceId },
@@ -244,6 +251,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
           provider: input.provider,
           model: input.model,
         },
+        { signal: input.signal },
       );
       return {
         invocationId: result.invocation.id,

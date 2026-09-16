@@ -2,7 +2,7 @@ import type { DungeonId, DungeonRegistration } from '@atlas-vnext/contracts';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { FilesService } from '@atlas-vnext/files';
 import type { DungeonRecordRow, PersistenceActor, PlatformPersistence } from '@atlas-vnext/persistence';
-import { AuthorityEngine } from '@atlas-vnext/permissions';
+import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import type { ProjectService } from '@atlas-vnext/projects';
 
 export const dungeonId: DungeonId = 'investigation';
@@ -56,6 +56,7 @@ export class InvestigationService {
       files: FilesService;
       runtime: ConversationRuntime;
       authority: AuthorityEngine;
+      policy: EffectivePolicyEngine;
     },
   ) {}
 
@@ -96,6 +97,8 @@ export class InvestigationService {
     this.authorize(actor, 'artifact.write', record.workspaceId ?? record.id, record.tenantId);
     const projectId = record.workspaceId;
     if (!projectId) throw new InvestigationError('malformed', 'Case is missing a project.');
+    const policy = await this.boundPolicy(actor);
+    this.assertPolicy(actor, 'artifact.write', policy, projectId, record.tenantId);
     const findingIds = Array.isArray(record.payload.findingIds) ? (record.payload.findingIds as string[]) : [];
     const findings = await this.loadForeignFindings(actor, projectId, findingIds);
     const conversation = await this.deps.runtime.createConversation({ title: record.title, projectId });
@@ -103,12 +106,14 @@ export class InvestigationService {
     let executionId: string | null = null;
     for await (const event of this.deps.runtime.sendMessage(conversation.id, {
       content: [
+        this.deps.policy.scopedModelInstructions(policy),
         `You are the ${stance} in an evidential challenge loop. Do not invent evidence.`,
         `Case question: ${String(record.payload.question ?? '')}`,
         'Findings:',
         ...findings.map((item) => `- ${item.id}: ${JSON.stringify(item.payload)}`),
       ].join('\n'),
       capability: 'nexus/reason',
+      privacy: this.deps.policy.runtimePrivacy(policy),
     })) {
       if (event.type === 'execution') executionId = event.execution.id;
       if (event.type === 'assistant.delta' && event.text) text += event.text;
@@ -177,5 +182,28 @@ export class InvestigationService {
       resource: { type: 'artifact', id: workspaceId, tenantId, workspaceId },
     });
     if (verdict.decision !== 'ALLOW') throw new InvestigationError('permission_denied', GENERIC_DENY, 404);
+  }
+
+  private async boundPolicy(actor: InvestigationActor) {
+    return this.deps.policy.loadForDungeon(actor.tenantId, 'investigation', (dungeonId) =>
+      this.deps.persistence.forActor(actor).privacy.getPolicy(actor, dungeonId),
+    );
+  }
+
+  private assertPolicy(
+    actor: InvestigationActor,
+    capability: string,
+    policy: Awaited<ReturnType<InvestigationService['boundPolicy']>>,
+    workspaceId: string,
+    tenantId: string,
+  ) {
+    const decision = this.deps.policy.authorize({
+      principal: { principalId: actor.principalId, kind: 'user', tenantId: actor.tenantId, workspaceId },
+      capability,
+      dungeonId: 'investigation',
+      policy,
+      resource: { type: 'artifact', id: workspaceId, tenantId, workspaceId },
+    });
+    if (!decision.allowed) throw new InvestigationError('permission_denied', GENERIC_DENY, 404);
   }
 }

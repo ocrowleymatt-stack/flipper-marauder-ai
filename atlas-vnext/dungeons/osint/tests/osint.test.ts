@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { OsintService } from '../src/index.ts';
 import type { PublicLookupPort } from '../src/collector.ts';
-import { closePersistence, openDungeonStack } from '../../../tests/helpers/dungeon-stack.ts';
+import { closePersistence, openDungeonStack, storeTenantPolicy } from '../../../tests/helpers/dungeon-stack.ts';
 import type { PlatformPersistence } from '@atlas-vnext/persistence';
 
 const persistences: PlatformPersistence[] = [];
@@ -75,5 +75,23 @@ describe('OSINT dungeon', () => {
       collector: collector(),
     });
     await expect(osint.get(stack.actor, 'rec_missing')).rejects.toMatchObject({ httpStatus: 404, message: 'Permission denied.' });
+  });
+
+  it('refuses public scans when stored networkAccess is none', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    await storeTenantPolicy(stack, { networkAccess: 'none' });
+    const osint = new OsintService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      runtime: stack.runtime,
+      authority: stack.authority,
+      policy: stack.policy,
+      collector: collector(),
+    });
+    await expect(
+      osint.scan(stack.actor, { projectId: stack.project.id, kind: 'domain', value: 'example.test', synthesize: false }),
+    ).rejects.toMatchObject({ httpStatus: 404 });
   });
 });

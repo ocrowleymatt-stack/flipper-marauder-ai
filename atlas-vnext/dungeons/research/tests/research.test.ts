@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { ResearchService } from '../src/index.ts';
-import { closePersistence, openDungeonStack } from '../../../tests/helpers/dungeon-stack.ts';
+import { closePersistence, openDungeonStack, storeTenantPolicy } from '../../../tests/helpers/dungeon-stack.ts';
 import type { PlatformPersistence } from '@atlas-vnext/persistence';
 
 const persistences: PlatformPersistence[] = [];
@@ -31,6 +31,7 @@ describe('Research dungeon', () => {
       context: stack.context,
       runtime: stack.runtime,
       authority: stack.authority,
+      policy: stack.policy,
     });
     const brief = await research.create(stack.actor, {
       projectId: stack.project.id,
@@ -41,5 +42,55 @@ describe('Research dungeon', () => {
     expect(result.synthesis.kind).toBe('synthesis');
     expect(result.context.slices.length).toBeGreaterThan(0);
     expect(result.synthesis.payload.citations).toBeDefined();
+  });
+
+  it('does not retrieve files when stored retrievalScope is none', async () => {
+    const stack = await openDungeonStack('Should not appear in synthesis context.');
+    persistences.push(stack.persistence);
+    const file = await stack.files.ingest(stack.actor, {
+      projectId: stack.project.id,
+      path: 'secret.md',
+      bytes: new TextEncoder().encode('classified kettle notes'),
+    });
+    for (let i = 0; i < 16; i += 1) {
+      if (!(await stack.files.processNextJob(stack.actor, 'research-none'))) break;
+    }
+    await storeTenantPolicy(stack, { retrievalScope: 'none' });
+    const research = new ResearchService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      context: stack.context,
+      runtime: stack.runtime,
+      authority: stack.authority,
+      policy: stack.policy,
+    });
+    const brief = await research.create(stack.actor, {
+      projectId: stack.project.id,
+      question: 'What is classified?',
+      fileIds: [file.id],
+    });
+    const result = await research.run(stack.actor, brief.id);
+    expect(result.context.slices).toEqual([]);
+  });
+
+  it('refuses run when stored autonomyCeiling is suggest', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    await storeTenantPolicy(stack, { autonomyCeiling: 'suggest' });
+    const research = new ResearchService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      context: stack.context,
+      runtime: stack.runtime,
+      authority: stack.authority,
+      policy: stack.policy,
+    });
+    const brief = await research.create(stack.actor, {
+      projectId: stack.project.id,
+      question: 'Should not run',
+    });
+    await expect(research.run(stack.actor, brief.id)).rejects.toMatchObject({ httpStatus: 404 });
   });
 });

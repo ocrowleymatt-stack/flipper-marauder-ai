@@ -355,8 +355,8 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     files = new FilesService(persistence, cas);
     projects = new ProjectService(persistence);
     context = new ContextService(persistence);
-    writing = new WritingService({ persistence, projects, files, context, runtime, authority });
     const policy = new EffectivePolicyEngine(authority);
+    writing = new WritingService({ persistence, projects, files, context, runtime, authority, policy });
     osint = new OsintService({
       persistence,
       projects,
@@ -366,10 +366,10 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       policy,
       collector: new NodePublicLookup(),
     });
-    investigation = new InvestigationService({ persistence, projects, files, runtime, authority });
-    research = new ResearchService({ persistence, projects, files, context, runtime, authority });
+    investigation = new InvestigationService({ persistence, projects, files, runtime, authority, policy });
+    research = new ResearchService({ persistence, projects, files, context, runtime, authority, policy });
     websiteStudio = new WebsiteStudioService({ persistence, projects, files, runtime, authority, policy });
-    music = new MusicService({ persistence, projects, files, runtime, authority });
+    music = new MusicService({ persistence, projects, files, runtime, authority, policy });
     privacy = new PrivacyService({ persistence, authority, policy, ownerPrincipalId: principalId });
   } else {
     store = openDurableStore(options.dataPath);

@@ -12,7 +12,7 @@ import type { ContextService } from '@atlas-vnext/context';
 import type { FilesService } from '@atlas-vnext/files';
 import type { PersistenceActor, PlatformPersistence } from '@atlas-vnext/persistence';
 import { ConflictError, OwnershipError } from '@atlas-vnext/persistence';
-import { AuthorityDeniedError, AuthorityEngine } from '@atlas-vnext/permissions';
+import { AuthorityDeniedError, AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import type { ProjectService } from '@atlas-vnext/projects';
 import { FilesAccessError } from '@atlas-vnext/files';
 import { composeWritingPrompt, writingRouteRequirements } from './behaviour.ts';
@@ -49,6 +49,7 @@ export class WritingService {
       context: ContextService;
       runtime: ConversationRuntime;
       authority: AuthorityEngine;
+      policy: EffectivePolicyEngine;
     },
   ) {}
 
@@ -301,6 +302,32 @@ export class WritingService {
       return;
     }
 
+    let policy;
+    try {
+      policy = await this.boundPolicy(actor);
+    } catch (err) {
+      yield { type: 'error', failure: this.failureFrom(err) };
+      yield { type: 'done' };
+      return;
+    }
+    const policyDecision = this.deps.policy.authorize({
+      principal: {
+        principalId: actor.principalId,
+        kind: 'user',
+        tenantId: actor.tenantId,
+        workspaceId: record.workspaceId,
+      },
+      capability: 'artifact.write',
+      dungeonId: 'writing',
+      policy,
+      resource: { type: 'artifact', id: record.id, tenantId: record.tenantId, workspaceId: record.workspaceId },
+    });
+    if (!policyDecision.allowed) {
+      yield { type: 'error', failure: failure('permission_denied', GENERIC_DENY, false) };
+      yield { type: 'done' };
+      return;
+    }
+
     const fileIds = unique(input.fileIds ?? []);
     try {
       await this.assertFiles(actor, record.workspaceId, fileIds);
@@ -312,24 +339,26 @@ export class WritingService {
 
     let assembledContext = '';
     const sourceInputs: string[] = [];
-    try {
-      const context = await this.deps.context.assemble(actor, {
-        projectId: record.workspaceId,
-        query: instruction,
-        tokenBudget: 4000,
-        restrictFileIds: fileIds,
-        attachmentFileIds: fileIds,
-      });
-      assembledContext = context.slices
-        .map((slice) => `File ${slice.path} (hash ${slice.contentHash.slice(0, 12)}):\n${slice.text}`)
-        .join('\n\n');
-      for (const slice of context.slices) {
-        sourceInputs.push(slice.fileId, slice.contentHash, slice.chunkId);
+    if (policy.retrievalScope !== 'none') {
+      try {
+        const context = await this.deps.context.assemble(actor, {
+          projectId: record.workspaceId,
+          query: instruction,
+          tokenBudget: 4000,
+          restrictFileIds: fileIds,
+          attachmentFileIds: fileIds,
+        });
+        assembledContext = context.slices
+          .map((slice) => `File ${slice.path} (hash ${slice.contentHash.slice(0, 12)}):\n${slice.text}`)
+          .join('\n\n');
+        for (const slice of context.slices) {
+          sourceInputs.push(slice.fileId, slice.contentHash, slice.chunkId);
+        }
+      } catch (err) {
+        yield { type: 'error', failure: failure('retrieval_failed', err instanceof Error ? err.message : String(err), true) };
+        yield { type: 'done' };
+        return;
       }
-    } catch (err) {
-      yield { type: 'error', failure: failure('retrieval_failed', err instanceof Error ? err.message : String(err), true) };
-      yield { type: 'done' };
-      return;
     }
 
     const currentText = await this.readContent(actor, record);
@@ -345,8 +374,8 @@ export class WritingService {
       operation,
       contentChars: currentText.length + instruction.length,
       selectedFileCount: fileIds.length,
-      privacy: input.privacy,
-      tools: input.tools,
+      privacy: this.deps.policy.runtimePrivacy(policy, input.privacy),
+      tools: this.deps.policy.toolsAllowed(policy, Boolean(input.tools)),
     });
 
     let conversationId = record.conversationId;
@@ -372,11 +401,13 @@ export class WritingService {
     }
     yield { type: 'document', document: await this.present(actor, record, { content: currentText }) };
 
-    for (const fileId of fileIds) {
-      try {
-        await this.deps.files.attachToConversation(actor, { conversationId, fileId });
-      } catch {
-        // Attachments are convenience for the run spine; selected files already fed context.
+    if (policy.retrievalScope !== 'none') {
+      for (const fileId of fileIds) {
+        try {
+          await this.deps.files.attachToConversation(actor, { conversationId, fileId });
+        } catch {
+          // Attachments are convenience for the run spine; selected files already fed context.
+        }
       }
     }
 
@@ -418,15 +449,20 @@ export class WritingService {
     try {
       for await (const event of this.deps.runtime.sendMessage(conversationId, {
         content: composed.layers.requestInstructions,
-        systemPrompt: composed.precedence
-          .filter((layer) => layer !== 'requestInstructions')
-          .map((layer) => composed.layers[layer])
+        systemPrompt: [
+          this.deps.policy.scopedModelInstructions(policy),
+          composed.precedence
+            .filter((layer) => layer !== 'requestInstructions')
+            .map((layer) => composed.layers[layer])
+            .join('\n\n'),
+        ]
+          .filter(Boolean)
           .join('\n\n'),
         capability: requirements.target,
         privacy: requirements.privacy,
         contextTokens: requirements.contextTokens,
         requireTools: requirements.requireTools,
-        allowTools: Boolean(input.tools),
+        allowTools: this.deps.policy.toolsAllowed(policy, Boolean(input.tools)),
         requireReasoning: requirements.requireReasoning,
         requireCode: requirements.requireCode,
         requireVision: requirements.requireVision,
@@ -629,6 +665,12 @@ export class WritingService {
     if (verdict.decision !== 'ALLOW') {
       throw new WritingError('permission_denied', GENERIC_DENY, 404);
     }
+  }
+
+  private async boundPolicy(actor: WritingActor) {
+    return this.deps.policy.loadForDungeon(actor.tenantId, 'writing', (dungeonId) =>
+      this.deps.persistence.forActor(actor).privacy.getPolicy(actor, dungeonId),
+    );
   }
 
   private assertActor(actor: WritingActor): void {

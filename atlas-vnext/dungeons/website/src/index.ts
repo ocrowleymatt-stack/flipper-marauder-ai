@@ -89,12 +89,22 @@ export class WebsiteStudioService {
   async generate(actor: WebsiteActor, id: string, brief: string) {
     const site = await this.get(actor, id);
     this.authorize(actor, 'artifact.write', site.workspaceId, site.tenantId);
+    const policy = await this.effectivePolicy(actor);
+    const write = this.deps.policy.authorize({
+      principal: { principalId: actor.principalId, kind: 'user', tenantId: actor.tenantId, workspaceId: site.workspaceId },
+      capability: 'artifact.write',
+      dungeonId: 'website',
+      policy,
+      resource: { type: 'artifact', id: site.id, tenantId: site.tenantId, workspaceId: site.workspaceId },
+    });
+    if (!write.allowed) throw new WebsiteError('permission_denied', GENERIC_DENY, 404);
     const conversation = await this.deps.runtime.createConversation({ title: site.name, projectId: site.workspaceId });
     let html = '';
     let executionId: string | null = null;
     for await (const event of this.deps.runtime.sendMessage(conversation.id, {
-      content: `Generate a complete, accessible HTML document for this site brief. Return HTML only.\n\n${brief}`,
+      content: `${this.deps.policy.scopedModelInstructions(policy)}\n\nGenerate a complete, accessible HTML document for this site brief. Return HTML only.\n\n${brief}`,
       capability: 'nexus/code',
+      privacy: this.deps.policy.runtimePrivacy(policy),
     })) {
       if (event.type === 'execution') executionId = event.execution.id;
       if (event.type === 'assistant.delta' && event.text) html += event.text;
@@ -177,12 +187,9 @@ export class WebsiteStudioService {
   }
 
   private async effectivePolicy(actor: WebsiteActor) {
-    const bound = this.deps.persistence.forActor(actor).privacy;
-    const tenantRow = await bound.getPolicy(actor, null);
-    const dungeonRow = await bound.getPolicy(actor, 'website');
-    const tenant = this.deps.policy.parse(actor.tenantId, null, tenantRow?.payload ?? {});
-    const dungeon = dungeonRow ? this.deps.policy.parse(actor.tenantId, 'website', dungeonRow.payload) : null;
-    return this.deps.policy.overlay(tenant, dungeon);
+    return this.deps.policy.loadForDungeon(actor.tenantId, 'website', (dungeonId) =>
+      this.deps.persistence.forActor(actor).privacy.getPolicy(actor, dungeonId),
+    );
   }
 
   private async requireProject(actor: WebsiteActor, projectId: string, capability: 'artifact.read' | 'artifact.write') {

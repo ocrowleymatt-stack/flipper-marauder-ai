@@ -3,7 +3,7 @@ import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { ContextService } from '@atlas-vnext/context';
 import type { FilesService } from '@atlas-vnext/files';
 import type { DungeonRecordRow, PersistenceActor, PlatformPersistence } from '@atlas-vnext/persistence';
-import { AuthorityEngine } from '@atlas-vnext/permissions';
+import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import type { ProjectService } from '@atlas-vnext/projects';
 
 export const dungeonId: DungeonId = 'research';
@@ -58,6 +58,7 @@ export class ResearchService {
       context: ContextService;
       runtime: ConversationRuntime;
       authority: AuthorityEngine;
+      policy: EffectivePolicyEngine;
     },
   ) {}
 
@@ -90,24 +91,33 @@ export class ResearchService {
     this.authorize(actor, 'artifact.write', brief.workspaceId ?? brief.id, brief.tenantId);
     const projectId = brief.workspaceId;
     if (!projectId) throw new ResearchError('malformed', 'Brief is missing a project.');
+    const policy = await this.boundPolicy(actor);
+    this.assertPolicy(actor, 'artifact.write', policy, projectId, brief.tenantId);
     const question = String(brief.payload.question ?? '');
     const fileIds = Array.isArray(brief.payload.fileIds) ? (brief.payload.fileIds as string[]) : [];
-    const assembled = await this.deps.context.assemble(actor, {
-      projectId,
-      query: question,
-      tokenBudget: 4000,
-      ...(fileIds.length > 0 ? { restrictFileIds: fileIds, attachmentFileIds: fileIds } : {}),
-    });
+    const assembled =
+      policy.retrievalScope === 'none'
+        ? { slices: [], citations: [], truncated: false, tokenCount: 0, tokenBudget: 4000 }
+        : await this.deps.context.assemble(actor, {
+            projectId,
+            query: question,
+            tokenBudget: 4000,
+            ...(policy.retrievalScope === 'project' && fileIds.length === 0
+              ? {}
+              : { restrictFileIds: fileIds, attachmentFileIds: fileIds }),
+          });
     const conversation = await this.deps.runtime.createConversation({ title: brief.title, projectId });
     let text = '';
     let executionId: string | null = null;
     for await (const event of this.deps.runtime.sendMessage(conversation.id, {
       content: [
+        this.deps.policy.scopedModelInstructions(policy),
         'Synthesise an answer using only the retrieved slices. Cite paths and hashes. If evidence is missing, say so.',
         `Question: ${question}`,
         ...assembled.slices.map((slice) => `File ${slice.path} (${slice.contentHash.slice(0, 12)}):\n${slice.text}`),
       ].join('\n\n'),
       capability: 'nexus/reason',
+      privacy: this.deps.policy.runtimePrivacy(policy),
     })) {
       if (event.type === 'execution') executionId = event.execution.id;
       if (event.type === 'assistant.delta' && event.text) text += event.text;
@@ -174,5 +184,28 @@ export class ResearchService {
       resource: { type: 'artifact', id: workspaceId, tenantId, workspaceId },
     });
     if (verdict.decision !== 'ALLOW') throw new ResearchError('permission_denied', GENERIC_DENY, 404);
+  }
+
+  private async boundPolicy(actor: ResearchActor) {
+    return this.deps.policy.loadForDungeon(actor.tenantId, 'research', (dungeonId) =>
+      this.deps.persistence.forActor(actor).privacy.getPolicy(actor, dungeonId),
+    );
+  }
+
+  private assertPolicy(
+    actor: ResearchActor,
+    capability: string,
+    policy: Awaited<ReturnType<ResearchService['boundPolicy']>>,
+    workspaceId: string,
+    tenantId: string,
+  ) {
+    const decision = this.deps.policy.authorize({
+      principal: { principalId: actor.principalId, kind: 'user', tenantId: actor.tenantId, workspaceId },
+      capability,
+      dungeonId: 'research',
+      policy,
+      resource: { type: 'artifact', id: workspaceId, tenantId, workspaceId },
+    });
+    if (!decision.allowed) throw new ResearchError('permission_denied', GENERIC_DENY, 404);
   }
 }

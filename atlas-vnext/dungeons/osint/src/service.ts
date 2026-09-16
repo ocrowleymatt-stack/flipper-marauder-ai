@@ -62,6 +62,14 @@ export class OsintService {
       resource: { type: 'project', id: project.id, tenantId: actor.tenantId, workspaceId: project.id },
     });
     if (!network.allowed) throw new DungeonError('permission_denied', GENERIC_DENY, 404);
+    const write = this.deps.policy.authorize({
+      principal: { principalId: actor.principalId, kind: 'user', tenantId: actor.tenantId, workspaceId: project.id },
+      capability: 'artifact.write',
+      dungeonId: 'osint',
+      policy,
+      resource: { type: 'artifact', id: project.id, tenantId: actor.tenantId, workspaceId: project.id },
+    });
+    if (!write.allowed) throw new DungeonError('permission_denied', GENERIC_DENY, 404);
 
     const jobs = this.deps.persistence.forActor(actor).jobs;
     const job = await jobs.enqueue(actor, {
@@ -92,7 +100,7 @@ export class OsintService {
       }
       let dossier: DungeonRecordRow | undefined;
       if (input.synthesize !== false) {
-        dossier = await this.synthesize(actor, project.id, target, findings);
+        dossier = await this.synthesize(actor, project.id, target, findings, policy);
       }
       const updated = await this.records(actor).update(actor, target.id, {
         status: 'completed',
@@ -163,6 +171,7 @@ export class OsintService {
     projectId: string,
     target: DungeonRecordRow,
     findings: DungeonRecordRow[],
+    policy: Awaited<ReturnType<OsintService['effectivePolicy']>>,
   ): Promise<DungeonRecordRow> {
     const conversation = await this.deps.runtime.createConversation({
       title: `OSINT ${target.title}`,
@@ -171,6 +180,7 @@ export class OsintService {
     let text = '';
     let executionId: string | null = null;
     const prompt = [
+      this.deps.policy.scopedModelInstructions(policy),
       'Produce a concise OSINT dossier from the findings. Do not invent sources. Cite only supplied findings.',
       `Target: ${JSON.stringify(target.payload)}`,
       ...findings.map((item) => `- ${item.payload.confidence}: ${item.payload.summary} (${item.payload.source})`),
@@ -178,7 +188,7 @@ export class OsintService {
     for await (const event of this.deps.runtime.sendMessage(conversation.id, {
       content: prompt,
       capability: 'nexus/reason',
-      privacy: 'any',
+      privacy: this.deps.policy.runtimePrivacy(policy),
     })) {
       if (event.type === 'execution') executionId = event.execution.id;
       if (event.type === 'assistant.delta' && event.text) text += event.text;
@@ -208,12 +218,9 @@ export class OsintService {
   }
 
   private async effectivePolicy(actor: OsintActor) {
-    const bound = this.deps.persistence.forActor(actor).privacy;
-    const tenantRow = await bound.getPolicy(actor, null);
-    const dungeonRow = await bound.getPolicy(actor, 'osint');
-    const tenant = this.deps.policy.parse(actor.tenantId, null, tenantRow?.payload ?? {});
-    const dungeon = dungeonRow ? this.deps.policy.parse(actor.tenantId, 'osint', dungeonRow.payload) : null;
-    return this.deps.policy.overlay(tenant, dungeon);
+    return this.deps.policy.loadForDungeon(actor.tenantId, 'osint', (dungeonId) =>
+      this.deps.persistence.forActor(actor).privacy.getPolicy(actor, dungeonId),
+    );
   }
 
   private async requireProject(actor: OsintActor, projectId: string, capability: 'artifact.read' | 'artifact.write') {

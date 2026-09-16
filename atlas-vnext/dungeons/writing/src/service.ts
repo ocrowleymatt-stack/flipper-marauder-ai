@@ -309,6 +309,7 @@ export class WritingService {
         privacy: requirements.privacy,
         contextTokens: requirements.contextTokens,
         requireTools: requirements.requireTools,
+        allowTools: Boolean(input.tools),
         requireReasoning: requirements.requireReasoning,
         requireCode: requirements.requireCode,
         requireVision: requirements.requireVision,

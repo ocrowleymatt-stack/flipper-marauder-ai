@@ -183,6 +183,8 @@ export class ConversationRuntime {
       systemPrompt?: string;
       contextTokens?: number;
       requireTools?: boolean;
+      /** Product opt-in to advertise and execute tools. Distinct from Nexus `requireTools`. */
+      allowTools?: boolean;
       requireReasoning?: boolean;
       requireVision?: boolean;
       requireCode?: boolean;
@@ -408,8 +410,9 @@ export class ConversationRuntime {
       const collectedToolCalls: ToolCallRequest[] = [];
       const maxToolRounds = this.deps.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
       let toolRounds = 0;
+      const toolsEnabled = input.allowTools === true;
       const callableTools =
-        this.deps.toolOrchestrator?.listCallable && conversation.tenantId
+        toolsEnabled && this.deps.toolOrchestrator?.listCallable && conversation.tenantId
           ? await this.deps.toolOrchestrator.listCallable({
               tenantId: conversation.tenantId,
               principalId: this.deps.principalId ?? conversation.tenantId,
@@ -630,6 +633,9 @@ export class ConversationRuntime {
               continue;
             }
             if (chunk.type === 'tool_call') {
+              if (!toolsEnabled) {
+                continue;
+              }
               yield { type: 'tool.requested', executionId, call: chunk.call };
               if (!this.deps.toolOrchestrator || !conversation.tenantId) {
                 continue;

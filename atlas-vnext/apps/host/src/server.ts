@@ -301,6 +301,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
       const body = await readJson(req, options.maxRequestBytes);
       const content = typeof body.content === 'string' ? body.content : '';
       const capability = typeof body.capability === 'string' ? body.capability : 'nexus/fast';
+      const allowTools = body.tools === true;
       const origin = matchingOrigin(req, options.allowedOrigins);
       const tenantKey = conversationActor?.tenantId ?? options.tenantId ?? 'local';
       const conversationId = decodeURIComponent(messageMatch[1]!);
@@ -309,7 +310,12 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
       try {
         await pipeSse(
           res,
-          options.runtime.sendMessage(conversationId, { content, capability }),
+          options.runtime.sendMessage(conversationId, {
+            content,
+            capability,
+            requireTools: allowTools,
+            allowTools,
+          }),
           options.timeouts?.streamIdleMs ?? 120_000,
           async (executionId) => {
             if (!executionId) return;

@@ -454,7 +454,13 @@ export class ToolEngine {
         lookupEffect: async () => null,
       });
       if (controller.signal.aborted) {
-        return this.terminaliseAbort(current, definition);
+        if (signal?.aborted) {
+          return this.terminaliseAbort(current, definition);
+        }
+        const timedOut = await this.transition(current, 'failed', {
+          failureReason: failure('timeout', 'Tool execution timed out.', false),
+        });
+        return { invocation: timedOut, provenance: this.provenance(timedOut) };
       }
       const succeeded = await this.transition(current, 'succeeded', {
         resultRef: result.resultRef ?? `toolres:${current.id}`,
@@ -475,7 +481,14 @@ export class ToolEngine {
         return { invocation: uncertain, provenance: this.provenance(uncertain) };
       }
       if (err instanceof ToolCancelUnconfirmedError || isAbortError(err) || controller.signal.aborted) {
-        return this.terminaliseAbort(current, definition);
+        if (signal?.aborted) {
+          return this.terminaliseAbort(current, definition);
+        }
+        const message = err instanceof Error ? err.message : 'Tool execution timed out.';
+        const timedOut = await this.transition(current, 'failed', {
+          failureReason: failure('timeout', message, false),
+        });
+        return { invocation: timedOut, provenance: this.provenance(timedOut) };
       }
       const message = err instanceof Error ? err.message : String(err);
       const failed = await this.transition(current, 'failed', {

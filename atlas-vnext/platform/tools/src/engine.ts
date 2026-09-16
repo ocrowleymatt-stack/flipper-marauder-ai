@@ -467,7 +467,7 @@ export class ToolEngine {
         lookupEffect: async () => null,
       });
       childOwnsOccupancy = true;
-      void executePromise.finally(releaseOccupancy);
+      void executePromise.then(releaseOccupancy, releaseOccupancy);
       const raced = await awaitOrAbort(executePromise, controller.signal);
       if (raced.status === 'aborted' || controller.signal.aborted) {
         if (signal?.aborted) {

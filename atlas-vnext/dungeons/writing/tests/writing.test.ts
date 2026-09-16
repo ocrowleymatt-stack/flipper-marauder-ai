@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { composeWritingPrompt, writingRouteRequirements, WritingService } from '../src/index.ts';
-import { ConversationRuntime, memoryStores } from '@atlas-vnext/conversation';
+import { ConversationRuntime, memoryStores, type ToolOrchestrator } from '@atlas-vnext/conversation';
 import { MemoryEventBus } from '@atlas-vnext/events';
 import { openMemoryPersistence, type PlatformPersistence } from '@atlas-vnext/persistence';
 import { ProjectService } from '@atlas-vnext/projects';
@@ -38,7 +38,13 @@ function decision(): RouteDecision {
 
 async function makeWriting(
   stream: (prompt: string, signal?: AbortSignal) => AsyncGenerator<StreamChunk>,
-  capture?: { target?: string; systemPrompt?: string },
+  capture?: {
+    target?: string;
+    systemPrompt?: string;
+    tools?: Array<{ id: string }>;
+    requireTools?: boolean;
+  },
+  opts?: { maxGeneratedBytes?: number; toolOrchestrator?: ToolOrchestrator },
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'caspa-unit-'));
   dirs.push(dir);
@@ -51,6 +57,14 @@ async function makeWriting(
   const projects = new ProjectService(persistence);
   const context = new ContextService(persistence);
   const stores = memoryStores();
+  if (opts?.toolOrchestrator) {
+    const create = stores.conversations.create.bind(stores.conversations);
+    stores.conversations.create = async (input) => {
+      const conversation = await create(input);
+      Object.assign(conversation, { tenantId: actor.tenantId, workspaceId: input.projectId });
+      return stores.conversations.save(conversation);
+    };
+  }
   const runtime = new ConversationRuntime({
     conversations: stores.conversations,
     messages: stores.messages,
@@ -58,14 +72,23 @@ async function makeWriting(
     provenance: stores.provenance,
     events: new MemoryEventBus(),
     router: {
-      resolve: (target: string) => {
-        if (capture) capture.target = target;
+      resolve: (target: string, request) => {
+        if (capture) {
+          capture.target = target;
+          capture.requireTools = request?.requireTools;
+        }
         return decision();
       },
     },
+    maxGeneratedBytes: opts?.maxGeneratedBytes,
+    toolOrchestrator: opts?.toolOrchestrator,
+    principalId: actor.principalId,
     executor: {
       async *execute(_routed, execContext, observer) {
-        if (capture) capture.systemPrompt = execContext.systemPrompt ?? '';
+        if (capture) {
+          capture.systemPrompt = execContext.systemPrompt ?? '';
+          capture.tools = execContext.tools?.map((tool) => ({ id: tool.id }));
+        }
         observer?.onAttempt({
           index: 1,
           provider: 'mock',
@@ -276,6 +299,86 @@ describe('Caspa writing service', () => {
     expect(writingRouteRequirements({ operation: 'shorten', contentChars: 10, selectedFileCount: 0 }).target).toBe('nexus/fast');
   });
 
+  it('does not advertise or handle tools on generate when tools are not requested', async () => {
+    const capture: { tools?: Array<{ id: string }>; requireTools?: boolean } = {};
+    const handled: string[] = [];
+    const orchestrator: ToolOrchestrator = {
+      async listCallable() {
+        return [
+          { id: 'retrieval.search', description: 'search', inputSchema: { type: 'object' } },
+          { id: 'job.run', description: 'enqueue', inputSchema: { type: 'object' } },
+          { id: 'project.file_op', description: 'jail file op', inputSchema: { type: 'object' } },
+        ];
+      },
+      async handleCall(input) {
+        handled.push(input.call.toolId);
+        throw new Error(`handleCall must not run for ${input.call.toolId} on tools-off Caspa generate`);
+      },
+    };
+    const { writing, actor, project } = await makeWriting(
+      async function* () {
+        yield {
+          type: 'tool_call',
+          call: { id: 'call_job', toolId: 'job.run', arguments: { label: 'sneak' } },
+        };
+        yield { type: 'text', text: 'kettle chapter' };
+      },
+      capture,
+      { toolOrchestrator: orchestrator },
+    );
+    const created = await writing.create(actor, { projectId: project.id, title: 'Tools off' });
+    for await (const _event of writing.generate(actor, created.id, {
+      operation: 'create',
+      instruction: 'Write a chapter.',
+      expectedRevision: created.revision,
+    })) {
+      // drain
+    }
+    expect(capture.requireTools).toBe(false);
+    expect(capture.tools).toBeUndefined();
+    expect(handled).toEqual([]);
+    const after = await writing.get(actor, created.id);
+    expect(after.content).toMatch(/kettle chapter/);
+  });
+
+  it('advertises authorised tools on generate when tools are requested', async () => {
+    const capture: { tools?: Array<{ id: string }>; requireTools?: boolean } = {};
+    const handled: string[] = [];
+    const orchestrator: ToolOrchestrator = {
+      async listCallable() {
+        return [{ id: 'retrieval.search', description: 'search', inputSchema: { type: 'object' } }];
+      },
+      async handleCall(input) {
+        handled.push(input.call.toolId);
+        return {
+          invocationId: `inv_${input.call.id}`,
+          toolId: input.call.toolId,
+          status: 'succeeded',
+          output: { ok: true },
+        };
+      },
+    };
+    const { writing, actor, project } = await makeWriting(
+      async function* () {
+        yield { type: 'text', text: 'tools-on chapter' };
+      },
+      capture,
+      { toolOrchestrator: orchestrator },
+    );
+    const created = await writing.create(actor, { projectId: project.id, title: 'Tools on' });
+    for await (const _event of writing.generate(actor, created.id, {
+      operation: 'create',
+      instruction: 'Write a chapter.',
+      expectedRevision: created.revision,
+      tools: true,
+    })) {
+      // drain
+    }
+    expect(capture.requireTools).toBe(true);
+    expect(capture.tools).toEqual([{ id: 'retrieval.search' }]);
+    expect(handled).toEqual([]);
+  });
+
   it('grounds provenance on selected files only and does not dump the project', async () => {
     const capture: { target?: string; systemPrompt?: string } = {};
     const { writing, actor, project, files } = await makeWriting(async function* () {
@@ -441,6 +544,36 @@ describe('Caspa writing service', () => {
     expect(events.some((event) => event.type === 'document' && event.document.status === 'committed')).toBe(false);
   });
 
+  it('seals a cancelled draft when the generate iterator is returned after visible output', async () => {
+    const { writing, actor, project } = await makeWriting(async function* (_prompt, signal) {
+      yield { type: 'text', text: 'Visible draft that must not become a version.' };
+      await new Promise<never>(() => {
+        void signal;
+      });
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'Return after visible' });
+    const iterator = writing.generate(actor, created.id, {
+      operation: 'create',
+      instruction: 'Write a sealed draft.',
+      expectedRevision: created.revision,
+    })[Symbol.asyncIterator]();
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) throw new Error('generate ended before visible draft');
+      const event = next.value;
+      if (event.type === 'draft.delta' && event.text.includes('Visible draft')) {
+        await iterator.return?.(undefined);
+        break;
+      }
+    }
+    const after = await writing.get(actor, created.id);
+    expect(after.status).toBe('failed');
+    expect(after.failure?.code).toBe('cancelled');
+    expect(after.currentVersion).toBe(0);
+    expect(after.content).toBe('');
+    expect(after.draft).toContain('Visible draft that must not become a version.');
+  });
+
   it('persists later streamed chunks before a multi-chunk provider failure is sealed', async () => {
     const { writing, actor, project } = await makeWriting(async function* () {
       yield { type: 'text', text: 'First visible chunk. ' };
@@ -516,5 +649,36 @@ describe('Caspa writing service', () => {
     expect(events.some((event) => event.type === 'document' && event.document.status === 'committed')).toBe(false);
     const provenance = await writing.provenance(base.actor, created.id);
     expect(provenance.some((entry) => entry.capability === 'writing')).toBe(false);
+  });
+
+  it('emits incremental draft.delta text with O(n) payload growth across many tiny chunks', async () => {
+    const chunks = Array.from({ length: 400 }, (_, i) => String.fromCharCode(97 + (i % 26)));
+    const { writing, actor, project } = await makeWriting(
+      async function* () {
+        for (const chunk of chunks) yield { type: 'text', text: chunk };
+      },
+      undefined,
+      { maxGeneratedBytes: 512 },
+    );
+    const created = await writing.create(actor, { projectId: project.id, title: 'Linear draft' });
+    const deltas: string[] = [];
+    for await (const event of writing.generate(actor, created.id, {
+      operation: 'create',
+      instruction: 'Write many tiny chunks.',
+      expectedRevision: created.revision,
+      commit: false,
+    })) {
+      if (event.type === 'draft.delta') deltas.push(event.text);
+    }
+    const assembled = chunks.join('');
+    expect(deltas).toEqual(chunks);
+    expect(deltas.join('')).toBe(assembled);
+    const emittedBytes = deltas.reduce((sum, text) => sum + Buffer.byteLength(text, 'utf8'), 0);
+    expect(emittedBytes).toBe(Buffer.byteLength(assembled, 'utf8'));
+    const quadratic = (assembled.length * (assembled.length + 1)) / 2;
+    expect(emittedBytes).toBeLessThan(quadratic / 4);
+    const after = await writing.get(actor, created.id);
+    expect(after.draft).toBe(assembled);
+    expect(after.status).toBe('candidate');
   });
 });

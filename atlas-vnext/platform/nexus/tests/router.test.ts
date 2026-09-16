@@ -120,6 +120,23 @@ describe('Nexus router (policy only)', () => {
     expect(router.resolve('nexus/fast').candidateChain.some((id) => id.startsWith('anthropic/'))).toBe(false);
   });
 
+  it('keeps operator-disabled providers out of Nexus candidates after a successful health probe', () => {
+    const { registry, router } = harness();
+    registry.setDisabledProviders(['ollama']);
+    registry.setHealth('ollama', 'healthy');
+    const ollama = registry.get('ollama', 'llama3.2');
+    expect(ollama?.health).toBe('healthy');
+    expect(registry.isRoutable(ollama!)).toBe(false);
+    const fast = router.resolve('nexus/fast');
+    expect(fast.candidateChain.some((id) => id.startsWith('ollama/'))).toBe(false);
+    expect(fast.provider).not.toBe('ollama');
+    expect(() => router.resolve('nexus/local')).toThrow(/No healthy candidates/);
+    expect(() => router.resolve('ollama/llama3.2')).toThrow(/does not meet route requirements|not healthy/);
+    registry.setDisabledProviders([]);
+    expect(registry.isRoutable(registry.get('ollama', 'llama3.2')!)).toBe(true);
+    expect(router.resolve('nexus/cheap').resolvedRouteId).toBe('ollama/llama3.2');
+  });
+
   it('rejects tools-incapable models when tools are required', () => {
     const { registry, router } = harness();
     registry.register(

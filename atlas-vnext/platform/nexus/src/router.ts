@@ -210,6 +210,7 @@ export class NexusRouter {
     request: RouteRequest,
     opts: { localOnly: boolean; aliasPolicy?: (typeof ALIAS_POLICIES)[CapabilityAlias] },
   ): string | null {
+    if (this.registry.isDisabled(model.provider)) return 'operator_disabled';
     if (!this.registry.isRoutable(model)) return `unhealthy:${model.health}`;
     if (opts.localOnly && model.locality !== 'local') return 'privacy_local_only';
     if (request.privacy === 'local_only' && model.locality === 'public_cloud') return 'privacy_local_only';

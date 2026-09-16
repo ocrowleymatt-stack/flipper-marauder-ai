@@ -22,6 +22,8 @@
 - A single-region outage of Postgres without WAL archive is data loss of metadata since last dump. CAS without replica is data loss of blobs.
 - Conversation history is not required to restore projects.
 
+Automated restore drill (CI, PostgreSQL present): reopen the schema and copy the CAS directory, then read project, file bytes, provenance, conversation, pending approval, and Caspa document/version. See [PRODUCTION.md](./PRODUCTION.md).
+
 ## Migration rollback
 
 Schema migrations are forward-only, checksummed, and fail startup visibly. There is no automatic destructive schema recreation. See [PERSISTENCE.md](./PERSISTENCE.md).

@@ -39,3 +39,11 @@ export class FilesAccessError extends Error {
     this.name = 'FilesAccessError';
   }
 }
+
+/** Metadata exists but the CAS object does not. Callers must not invent bytes. */
+export class CasMissingError extends Error {
+  constructor(readonly sha256: string) {
+    super(`CAS object missing for hash ${sha256}.`);
+    this.name = 'CasMissingError';
+  }
+}

@@ -1,15 +1,22 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { AuthenticationError } from '@atlas-vnext/auth';
 import { CASPA_WRITING_DUNGEON, WritingError, WritingService, type WritingActor } from '@atlas-vnext/dungeon-writing';
-import { writingOperationSchema } from '@atlas-vnext/contracts';
-import { FilesAccessError } from '@atlas-vnext/files';
-import { ConflictError, OwnershipError } from '@atlas-vnext/persistence';
+import { DEFAULT_OPERATIONAL_LIMITS, writingOperationSchema } from '@atlas-vnext/contracts';
+import { CasMissingError, FilesAccessError } from '@atlas-vnext/files';
+import { ConflictError, OwnershipError, PersistenceClosedError, PersistenceUnavailableError, isPersistenceConnectionLoss } from '@atlas-vnext/persistence';
 import { AuthorityDeniedError } from '@atlas-vnext/permissions';
-import { header, isMutating, json, readJson, sseHeaders, urlPath, writeSse } from './http.ts';
+import { PlatformHttpError } from './errors.ts';
+import { header, isMutating, json, matchingOrigin, readJson, sseHeaders, urlPath, writeSse } from './http.ts';
+import { normalizeContextFileIds, type ResourceGuard } from './limits.ts';
+import type { TimeoutContract } from './production-config.ts';
+import { acquireRunAndStreamPermits, pipeSse } from './sse.ts';
 import { resolveActor, type WorkbenchHostOptions } from './workbench.ts';
 
 export interface CaspaHostOptions extends WorkbenchHostOptions {
   writing?: WritingService | null;
+  resources?: ResourceGuard;
+  timeouts?: TimeoutContract;
+  allowedOrigins?: string[];
 }
 
 export async function handleCaspa(
@@ -118,20 +125,37 @@ export async function handleCaspa(
         json(res, 400, { error: 'Malformed writing operation.', code: 'malformed' });
         return true;
       }
-      sseHeaders(res);
-      for await (const event of writing.generate(writingActor, decodeURIComponent(generateMatch[1]!), {
-        operation: parsed.data,
-        instruction: typeof body.instruction === 'string' ? body.instruction : '',
-        fileIds: Array.isArray(body.fileIds) ? body.fileIds.filter((item): item is string => typeof item === 'string') : [],
-        expectedRevision: Number(body.expectedRevision),
-        privacy: body.privacy === 'local_only' ? 'local_only' : 'any',
-        tools: body.tools === true,
-        commit: body.commit === false ? false : true,
-      })) {
-        writeSse(res, event.type, event);
-        if (res.destroyed) break;
+      const fileIds = normalizeContextFileIds(body.fileIds);
+      options.resources?.assertContextFiles(fileIds.length);
+      const origin = matchingOrigin(req, options.allowedOrigins);
+      const releaseAdmission = acquireRunAndStreamPermits(options.resources, writingActor.tenantId);
+      sseHeaders(res, origin);
+      try {
+        await pipeSse(
+          res,
+          writing.generate(writingActor, decodeURIComponent(generateMatch[1]!), {
+            operation: parsed.data,
+            instruction: typeof body.instruction === 'string' ? body.instruction : '',
+            fileIds,
+            expectedRevision: Number(body.expectedRevision),
+            privacy: body.privacy === 'local_only' ? 'local_only' : 'any',
+            tools: body.tools === true,
+            commit: body.commit === false ? false : true,
+          }),
+          options.timeouts?.streamIdleMs ?? 120_000,
+          async (executionId) => {
+            if (!executionId) return;
+            try {
+              await options.runtime.cancel(executionId);
+            } catch {
+              // Cancel is best-effort and idempotent; admission still releases below.
+            }
+          },
+          options.resources?.generatedByteLimit() ?? DEFAULT_OPERATIONAL_LIMITS.maxGeneratedBytes,
+        );
+      } finally {
+        releaseAdmission();
       }
-      res.end();
       return true;
     }
     json(res, 404, { error: 'Not found.' });
@@ -162,6 +186,21 @@ class CaspaUnavailableError extends Error {
 }
 
 function handleCaspaError(res: ServerResponse, err: unknown): true {
+  if (res.headersSent) {
+    if (!res.writableEnded && !res.destroyed) {
+      const message = err instanceof Error ? err.message : String(err);
+      writeSse(res, 'error', {
+        type: 'error',
+        failure: { code: 'internal', message, retryable: false, at: new Date().toISOString() },
+      });
+      res.end();
+    }
+    return true;
+  }
+  if (err instanceof PlatformHttpError) {
+    json(res, err.httpStatus, { error: err.message, code: err.code });
+    return true;
+  }
   if (err instanceof CaspaUnavailableError) {
     json(res, 503, { error: err.message, code: err.code });
     return true;
@@ -176,6 +215,14 @@ function handleCaspaError(res: ServerResponse, err: unknown): true {
   }
   if (err instanceof OwnershipError || err instanceof FilesAccessError || err instanceof AuthorityDeniedError) {
     json(res, 404, { error: 'Permission denied.' });
+    return true;
+  }
+  if (err instanceof CasMissingError) {
+    json(res, 503, { error: 'CAS object missing.', code: 'cas_unavailable' });
+    return true;
+  }
+  if (err instanceof PersistenceUnavailableError || err instanceof PersistenceClosedError || isPersistenceConnectionLoss(err)) {
+    json(res, 503, { error: 'Persistence unavailable.', code: 'persistence_unavailable' });
     return true;
   }
   if (err instanceof ConflictError) {

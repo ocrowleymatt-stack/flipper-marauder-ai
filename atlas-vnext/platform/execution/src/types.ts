@@ -11,12 +11,26 @@ export interface ExecutionContext {
   priorToolResults?: Array<{
     callId: string;
     toolId: string;
+    arguments?: Record<string, unknown>;
     status: string;
     resultRef?: string | null;
     output?: unknown;
+    round?: number;
   }>;
   signal?: AbortSignal;
   traceId?: string;
+  /**
+   * Last attempt index already recorded for this execution. The broker continues
+   * from this value so later tool rounds do not reuse index 1 and overwrite
+   * prior `emittedVisibleOutput` records.
+   */
+  attemptIndexBase?: number;
+  /**
+   * Sticky visible-output flag from earlier rounds (reasoning or assistant text).
+   * Failover is forbidden once this is true, even if the current round emits
+   * only tool calls with empty assembled text.
+   */
+  visibleOutputAlready?: boolean;
 }
 
 /**

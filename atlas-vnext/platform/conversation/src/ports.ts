@@ -75,19 +75,39 @@ export interface ModelExecutor {
       priorToolResults?: Array<{
         callId: string;
         toolId: string;
+        arguments?: Record<string, unknown>;
         status: string;
         resultRef?: string | null;
         output?: unknown;
+        round?: number;
       }>;
+      tools?: Array<{
+        id: string;
+        description: string;
+        inputSchema: Record<string, unknown>;
+      }>;
+      attemptIndexBase?: number;
+      visibleOutputAlready?: boolean;
     },
     observer?: {
       onAttempt(attempt: Pick<ExecutionAttempt, 'index' | 'provider' | 'model' | 'outcome' | 'error' | 'emittedVisibleOutput'>): void;
       onSelected?(selection: { provider: string; model: string }): void;
     },
-  ): AsyncGenerator<StreamChunk>;
+  ): AsyncIterable<StreamChunk>;
 }
 
 export interface ToolOrchestrator {
+  listCallable?(input: {
+    tenantId: string;
+    principalId: string;
+    workspaceId?: string | null;
+  }): Promise<
+    Array<{
+      id: string;
+      description: string;
+      inputSchema: Record<string, unknown>;
+    }>
+  >;
   handleCall(input: {
     tenantId: string;
     principalId: string;
@@ -97,6 +117,7 @@ export interface ToolOrchestrator {
     provider?: string | null;
     model?: string | null;
     call: import('@atlas-vnext/contracts').ToolCallRequest;
+    signal?: AbortSignal;
   }): Promise<{
     invocationId: string;
     toolId: string;

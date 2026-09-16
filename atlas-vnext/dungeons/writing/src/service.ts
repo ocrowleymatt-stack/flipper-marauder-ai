@@ -164,11 +164,16 @@ export class WritingService {
       return;
     }
 
-    let record: Awaited<ReturnType<WritingService['requireDocument']>>;
+    let record: Awaited<ReturnType<WritingService['requireDocument']>> | undefined;
     try {
       record = await this.requireDocument(actor, id, 'artifact.write');
     } catch (err) {
       yield { type: 'error', failure: this.failureFrom(err) };
+      yield { type: 'done' };
+      return;
+    }
+    if (!record) {
+      yield { type: 'error', failure: failure('not_found', GENERIC_DENY, false) };
       yield { type: 'done' };
       return;
     }
@@ -271,15 +276,22 @@ export class WritingService {
     let committed = false;
     let sealedFailure: StructuredFailure | null = null;
     const persistAccumulatedDraft = async () => {
+      const current = record;
+      if (!current) return;
       if (draft.trim() && draft !== persistedDraft) {
-        record = await this.persistDraft(actor, record, draft);
+        record = await this.persistDraft(actor, current, draft);
         persistedDraft = draft;
       }
     };
     const sealFailure = async (nextFailure: StructuredFailure) => {
+      const current = record;
+      if (!current) {
+        throw new Error('Writing generate seal requested before a document was loaded.');
+      }
       sealedFailure = nextFailure;
       await persistAccumulatedDraft();
-      record = await this.failDocument(actor, record, {
+      const latest = record ?? current;
+      record = await this.failDocument(actor, latest, {
         draft,
         failure: sealedFailure,
         executionId,
@@ -297,20 +309,38 @@ export class WritingService {
         privacy: requirements.privacy,
         contextTokens: requirements.contextTokens,
         requireTools: requirements.requireTools,
+        allowTools: Boolean(input.tools),
         requireReasoning: requirements.requireReasoning,
         requireCode: requirements.requireCode,
         requireVision: requirements.requireVision,
       })) {
         yield { type: 'execution', event };
         if (event.type === 'execution') executionId = event.execution.id;
-        if (event.type === 'assistant.delta' || event.type === 'assistant.completed') {
-          draft = event.text;
-          if (!visible && draft.trim()) {
-            visible = true;
+        if (event.type === 'assistant.delta') {
+          if (event.text) draft += event.text;
+          const firstVisible = !visible && Boolean(draft.trim());
+          if (firstVisible) visible = true;
+          if (event.text) {
+            yield { type: 'draft.delta', documentId: record.id, text: event.text };
+          }
+          if (firstVisible) {
             await persistAccumulatedDraft();
             yield { type: 'document', document: await this.present(actor, record, { content: currentText, draft }) };
           }
-          yield { type: 'draft.delta', documentId: record.id, text: draft };
+        }
+        if (event.type === 'assistant.completed') {
+          const previous = draft;
+          if (event.text) draft = event.text;
+          const extra = incrementalCompletedDelta(previous, event.text);
+          const firstVisible = !visible && Boolean(draft.trim());
+          if (firstVisible) visible = true;
+          if (extra) {
+            yield { type: 'draft.delta', documentId: record.id, text: extra };
+          }
+          if (firstVisible) {
+            await persistAccumulatedDraft();
+            yield { type: 'document', document: await this.present(actor, record, { content: currentText, draft }) };
+          }
         }
         const cancelled = event.type === 'execution' && event.execution.status === 'cancelled';
         if (cancelled || event.type === 'execution.failed' || event.type === 'error') {
@@ -326,9 +356,9 @@ export class WritingService {
               : classified.code === 'routing_failed'
                 ? 'provider_unavailable'
                 : 'fail_before_visible';
-          record = await sealFailure(failure(code, classified.message, cancelled ? false : !visible));
-          yield { type: 'document', document: await this.present(actor, record, { content: currentText, draft: draft || null }) };
-          yield { type: 'error', failure: record.failure ?? sealedFailure ?? classified };
+          const sealed = await sealFailure(failure(code, classified.message, cancelled ? false : !visible));
+          yield { type: 'document', document: await this.present(actor, sealed, { content: currentText, draft: draft || null }) };
+          yield { type: 'error', failure: sealed.failure ?? sealedFailure ?? classified };
           yield { type: 'done' };
           return;
         }
@@ -343,9 +373,9 @@ export class WritingService {
       }
 
       if (!draft.trim()) {
-        record = await sealFailure(failure('fail_before_visible', 'The writing run produced no visible document text.', true));
-        yield { type: 'document', document: await this.present(actor, record, { content: currentText }) };
-        yield { type: 'error', failure: record.failure! };
+        const sealed = await sealFailure(failure('fail_before_visible', 'The writing run produced no visible document text.', true));
+        yield { type: 'document', document: await this.present(actor, sealed, { content: currentText }) };
+        yield { type: 'error', failure: sealed.failure! };
         yield { type: 'done' };
         return;
       }
@@ -378,14 +408,28 @@ export class WritingService {
       if (!committed) {
         const classified = this.failureFrom(err, visible);
         try {
-          record = await sealFailure(classified);
-          yield { type: 'document', document: await this.present(actor, record, { content: currentText, draft: draft || null }) };
+          const sealed = await sealFailure(classified);
+          yield { type: 'document', document: await this.present(actor, sealed, { content: currentText, draft: draft || null }) };
         } catch {
           // Persistence of the classified failure is best-effort after the run error.
         }
         yield { type: 'error', failure: classified };
       }
       yield { type: 'done' };
+    } finally {
+      const inflight =
+        record &&
+        (record.status === 'requested' || record.status === 'running' || record.status === 'streaming');
+      if (!committed && inflight && !sealedFailure) {
+        const classified = visible
+          ? failure('cancelled', 'The writing run was cancelled.', false)
+          : failure('fail_before_visible', 'The writing run failed.', true);
+        try {
+          record = await sealFailure(classified);
+        } catch {
+          // Best-effort seal on generator teardown (idle timeout, disconnect, return()).
+        }
+      }
     }
   }
 
@@ -681,7 +725,22 @@ function titleFromInstruction(instruction?: string): string | null {
 }
 
 function unique(values: string[]): string[] {
-  return [...new Set(values.filter(Boolean))];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const id = value.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function incrementalCompletedDelta(assembled: string, completed: string): string {
+  if (!completed || completed === assembled) return '';
+  if (assembled && completed.startsWith(assembled)) return completed.slice(assembled.length);
+  if (!assembled) return completed;
+  return '';
 }
 
 function failure(code: string, message: string, retryable: boolean): StructuredFailure {

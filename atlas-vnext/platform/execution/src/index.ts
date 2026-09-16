@@ -1,4 +1,25 @@
 export type { ExecutionContext, ExecutionObserver, HealthObserver, ProviderAdapter, ProviderHealthSnapshot } from './types.ts';
+export {
+  anthropicMessagesFrom,
+  anthropicToolsFrom,
+  fromProviderToolName,
+  geminiContentsFrom,
+  geminiToolsFrom,
+  groupPriorToolRounds,
+  knownProviderToolIds,
+  openaiMessagesFrom,
+  openaiToolsFrom,
+  remapProviderToolChunks,
+  serializeToolResult,
+  toProviderToolName,
+} from './tool-transcript.ts';
+export type {
+  AnthropicMessage,
+  GeminiContent,
+  OpenAIChatMessage,
+  PriorToolResult,
+  ToolRound,
+} from './tool-transcript.ts';
 export { CircuitBreaker } from './circuit-breaker.ts';
 export { ExecutionBroker } from './broker.ts';
 export { MockAdapter, estimateTokens } from './adapters/mock.ts';
@@ -24,7 +45,7 @@ export {
 export type { SecretStore } from './secrets.ts';
 export { readExecutionConfig } from './config.ts';
 export type { ExecutionConfig } from './config.ts';
-export { FetchTransport, ScriptedTransport, responseFromText, bytesFromString, readAllText } from './transport.ts';
+export { FetchTransport, ScriptedTransport, responseFromText, bytesFromString, readAllText, iterableFromReadable } from './transport.ts';
 export type { HttpRequest, HttpResponse, HttpTransport } from './transport.ts';
 export { parseSse, parseNdjson } from './stream-parse.ts';
 export {

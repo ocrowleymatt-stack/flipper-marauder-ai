@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { ProviderHealth } from '@atlas-vnext/contracts';
+import type { OperationalLimits, ProviderHealth } from '@atlas-vnext/contracts';
 import { ConversationRuntime, type ToolOrchestrator } from '@atlas-vnext/conversation';
 import {
   AuthService,
@@ -42,8 +42,13 @@ import {
   ToolRegistry,
 } from '@atlas-vnext/tools';
 import { WritingService } from '@atlas-vnext/dungeon-writing';
+import { EnvFlagStore, type KillSwitchState } from '@atlas-vnext/flags';
+import { logPlatform } from '@atlas-vnext/observability';
 import { MODEL_CATALOGUE } from './catalogue.ts';
 import { ShutdownController, readOperationalLimits, type HealthProbe } from './ops.ts';
+import { PlatformRateLimiter, ResourceGuard } from './limits.ts';
+import { readTimeoutContract, type TimeoutContract } from './production-config.ts';
+import { raceStartup, raceStartupCloseable, throwIfStartupAborted } from './startup-deadline.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
@@ -70,6 +75,12 @@ export interface Spine {
   healthProbe: HealthProbe;
   tenantId: string;
   principalId: string;
+  flags: EnvFlagStore;
+  killSwitches: KillSwitchState;
+  rateLimiter: PlatformRateLimiter;
+  resources: ResourceGuard;
+  limits: OperationalLimits;
+  timeouts: TimeoutContract;
   close: () => Promise<void>;
 }
 
@@ -83,7 +94,9 @@ export interface ComposeOptions {
   runtimeStatePath?: string | null;
   runpodClient?: RunPodClient;
   persistence?: PersistenceConfig;
+  openPersistence?: (config: PersistenceConfig) => Promise<PlatformPersistence>;
   casRoot?: string;
+  signal?: AbortSignal;
 }
 
 /**
@@ -97,10 +110,28 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   const persistenceConfig = options.persistence ?? readPersistenceConfig(env);
   const limits = readOperationalLimits(env);
   const shutdown = new ShutdownController();
+  const flags = new EnvFlagStore(env);
+  const killSwitches = flags.snapshot();
+  const rateLimiter = new PlatformRateLimiter();
+  const resources = new ResourceGuard(limits);
+  const timeouts = readTimeoutContract(env);
+  const signal = options.signal;
+  const budgetMs = timeouts.startupMs;
+  const closers: Array<() => Promise<void> | void> = [];
+  const remember = (close: () => Promise<void> | void): void => {
+    closers.push(close);
+  };
 
+  throwIfStartupAborted(signal, budgetMs);
+
+  try {
   const registry = new NexusRegistry();
   for (const model of MODEL_CATALOGUE) {
     registry.register(model);
+  }
+  registry.setDisabledProviders(killSwitches.disabledProviders);
+  for (const provider of killSwitches.disabledProviders) {
+    logPlatform('flags.provider_killed', { provider }, 'warn');
   }
 
   const secrets = options.secrets ?? new EnvSecretStore(env);
@@ -116,6 +147,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       options.runtimeStatePath ?? (mode === 'live' ? join(dirname(options.dataPath), 'runtime.json') : null),
     health: {
       onProviderHealth(provider, health) {
+        // Observe probe results; Nexus `isRoutable` still honours the kill list.
         registry.setHealth(provider, health);
       },
     },
@@ -126,10 +158,12 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   }
 
   if (mode === 'live') {
-    await plane.refreshOllamaHealth();
-    await plane.refreshForgeHealth();
+    throwIfStartupAborted(signal, budgetMs);
+    await raceStartup(signal, plane.refreshOllamaHealth(), budgetMs);
+    await raceStartup(signal, plane.refreshForgeHealth(), budgetMs);
     if (plane.scheduler) {
-      await plane.scheduler.reconcile();
+      remember(() => plane.scheduler?.stopIdleWatch());
+      await raceStartup(signal, plane.scheduler.reconcile(), budgetMs);
     }
   }
 
@@ -199,6 +233,13 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   let tools: ToolEngine;
 
   const makeOrchestrator = (engine: ToolEngine): ToolOrchestrator => ({
+    async listCallable(input) {
+      return engine.listCallable({
+        tenantId: input.tenantId,
+        principalId: input.principalId,
+        workspaceId: input.workspaceId,
+      });
+    },
     async handleCall(input) {
       const result = await engine.invoke(
         { tenantId: input.tenantId, principalId: input.principalId, workspaceId: input.workspaceId },
@@ -211,6 +252,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
           provider: input.provider,
           model: input.model,
         },
+        { signal: input.signal },
       );
       return {
         invocationId: result.invocation.id,
@@ -224,7 +266,10 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   });
 
   if (persistenceConfig.mode === 'postgres' || persistenceConfig.mode === 'memory') {
-    persistence = await openPlatformPersistence(persistenceConfig);
+    throwIfStartupAborted(signal, budgetMs);
+    const opening = (options.openPersistence ?? openPlatformPersistence)(persistenceConfig);
+    persistence = await raceStartupCloseable(signal, opening, budgetMs);
+    remember(() => persistence?.close());
     if (!persistenceConfig.defaultTenantId) {
       await persistence.close();
       throw new PersistenceConfigError('PostgreSQL/memory host mode requires ATLAS_TENANT_ID.');
@@ -266,12 +311,23 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       executor: plane.broker,
       availableRuntimes: plane.available,
       unitOfWork: persistence,
-      toolOrchestrator: makeOrchestrator(tools),
+      toolOrchestrator: killSwitches.tools ? makeOrchestrator(tools) : undefined,
       principalId,
+      maxConcurrentExecutions: limits.maxConcurrentRuns,
+      maxGeneratedBytes: limits.maxGeneratedBytes,
+      maxToolRounds: limits.maxToolRounds,
+      executionDeadlineMs: limits.maxExecutionMs,
     });
-    await persistence.recoverOnStart();
-    await tools.reconcile();
-    cas = await openFilesystemCas(options.casRoot ?? join(dirname(options.dataPath), 'cas'));
+    await raceStartup(signal, persistence.recoverOnStart(), budgetMs);
+    await raceStartup(signal, tools.reconcile(), budgetMs);
+    throwIfStartupAborted(signal, budgetMs);
+    cas = await raceStartup(
+      signal,
+      openFilesystemCas(
+        options.casRoot ?? env.ATLAS_CAS_ROOT?.trim() ?? join(dirname(options.dataPath), 'cas'),
+      ),
+      budgetMs,
+    );
     files = new FilesService(persistence, cas);
     projects = new ProjectService(persistence);
     context = new ContextService(persistence);
@@ -297,11 +353,15 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       router,
       executor: plane.broker,
       availableRuntimes: plane.available,
-      toolOrchestrator: makeOrchestrator(tools),
+      toolOrchestrator: killSwitches.tools ? makeOrchestrator(tools) : undefined,
       principalId,
+      maxConcurrentExecutions: limits.maxConcurrentRuns,
+      maxGeneratedBytes: limits.maxGeneratedBytes,
+      maxToolRounds: limits.maxToolRounds,
+      executionDeadlineMs: limits.maxExecutionMs,
     });
-    await runtime.recoverInFlight();
-    await tools.reconcile();
+    await raceStartup(signal, runtime.recoverInFlight(), budgetMs);
+    await raceStartup(signal, tools.reconcile(), budgetMs);
   }
 
   const healthProbe: HealthProbe = {
@@ -360,6 +420,12 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     healthProbe,
     tenantId,
     principalId,
+    flags,
+    killSwitches,
+    rateLimiter,
+    resources,
+    limits,
+    timeouts,
     close: async () => {
       shutdown.begin();
       tools.stopAccepting();
@@ -367,6 +433,12 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       await persistence?.close();
     },
   };
+  } catch (err) {
+    for (const close of closers.reverse()) {
+      await Promise.resolve(close()).catch(() => undefined);
+    }
+    throw err;
+  }
 }
 
 export function grantSideEffects(authority: AuthorityEngine, principalId: string, tenantId: string): void {

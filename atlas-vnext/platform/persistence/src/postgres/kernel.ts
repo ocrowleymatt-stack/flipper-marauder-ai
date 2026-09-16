@@ -29,7 +29,7 @@ import { createSiteStores } from './sites.ts';
 import { createDocumentStore } from './documents.ts';
 import { mapArtefact, mapExecution, mapLease, sqlRow, type ExecutionRow } from './mappers.ts';
 import { CURRENT_SCHEMA_VERSION, ensureSchema, loadMigrations, migrate } from './migrate.ts';
-import { PgTx, createPool } from './tx.ts';
+import { PgTx, createPool, isTransientDbError } from './tx.ts';
 
 export class PostgresPersistence implements PlatformPersistence {
   readonly mode = 'postgres' as const;
@@ -202,17 +202,7 @@ export async function openPostgresPersistence(
     statementTimeoutMs: config.statementTimeoutMs,
     schema: config.schema,
   });
-  const client = await pool.connect().catch((err: unknown) => {
-    logPlatform(
-      'db.unavailable',
-      { error: err instanceof Error ? err.message : String(err), url: redactSecret(config.databaseUrl ?? '') },
-      'error',
-    );
-    void pool.end();
-    throw new PersistenceUnavailableError(
-      `PostgreSQL is unavailable: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  });
+  const client = await connectWithBoundedRetry(pool, config.databaseUrl);
   try {
     if (config.schema) {
       await ensureSchema(client, config.schema);
@@ -375,6 +365,34 @@ function createArtefactStore(tx: PgTx, clock: () => string): ArtefactMetadataSto
     },
   };
   return store;
+}
+
+async function connectWithBoundedRetry(pool: ReturnType<typeof createPool>, databaseUrl: string | null) {
+  const max = 2;
+  let last: unknown;
+  for (let attempt = 0; attempt <= max; attempt += 1) {
+    try {
+      return await pool.connect();
+    } catch (err: unknown) {
+      last = err;
+      if (!isTransientDbError(err) || attempt === max) {
+        logPlatform(
+          'db.unavailable',
+          { error: err instanceof Error ? err.message : String(err), url: redactSecret(databaseUrl ?? '') },
+          'error',
+        );
+        void pool.end();
+        throw new PersistenceUnavailableError(
+          `PostgreSQL is unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      logPlatform('db.startup_retry', { attempt: attempt + 1, max }, 'warn');
+      await new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt));
+    }
+  }
+  throw last instanceof Error
+    ? last
+    : new PersistenceUnavailableError('PostgreSQL is unavailable.');
 }
 
 export type { RuntimeLeaseRecord, ArtefactMetadata };

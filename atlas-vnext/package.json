@@ -25,6 +25,9 @@
     "test:files": "vitest run platform/storage/tests platform/files/tests platform/context/tests platform/projects/tests",
     "test:tools": "vitest run platform/tools/tests platform/auth/tests platform/permissions/tests platform/plugins/tests platform/secrets/tests",
     "test:caspa": "vitest run dungeons/writing apps/host/tests/caspa.test.ts tests/architecture/caspa.test.ts",
+    "test:production": "vitest run tests/production apps/host/tests/ops.test.ts platform/flags platform/observability/tests",
+    "config:validate": "tsx scripts/validate-config.ts",
+    "advisories:classify": "node scripts/classify-advisories.mjs",
     "test:compat": "vitest run tests/compat",
     "test:live": "vitest run tests/live",
     "smoke:live": "tsx scripts/live-smoke.ts",
@@ -33,9 +36,11 @@
   "devDependencies": {
     "@types/node": "^24.3.0",
     "@types/pg": "^8.23.1",
-    "tsx": "^4.20.5",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "tsx": "^4.20.5"
   },
   "engines": {
     "node": ">=20"

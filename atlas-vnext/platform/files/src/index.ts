@@ -5,6 +5,7 @@ export {
   ExtractionError,
   CitationUnknownError,
   FilesAccessError,
+  CasMissingError,
 } from './errors.ts';
 export { sanitiseRelPath, displayNameFromPath } from './path.ts';
 export { ALLOWED_MIME_TYPES, resolveMime, sniffMime } from './mime.ts';

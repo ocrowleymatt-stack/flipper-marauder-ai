@@ -24,7 +24,9 @@ export function applyStream(view: StreamView, conversationId: string, event: Str
     }
     snapshot = {
       ...snapshot,
-      messages: snapshot.messages.map((item) => (item.id === event.messageId ? { ...item, content: event.content as string } : item)),
+      messages: snapshot.messages.map((item) =>
+        item.id === event.messageId ? { ...item, content: `${item.content}${event.content}` } : item,
+      ),
     };
   }
   if (event.type === 'assistant.delta' || event.type === 'assistant.completed' || event.type === 'message.delta') {

@@ -30,6 +30,12 @@ export function header(req: IncomingMessage, name: string): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+export function matchingOrigin(req: IncomingMessage, allowedOrigins?: string[]): string | undefined {
+  const origin = header(req, 'origin');
+  if (origin && allowedOrigins?.includes(origin)) return origin;
+  return undefined;
+}
+
 export function json(res: ServerResponse, status: number, body: unknown): void {
   const payload = `${JSON.stringify(body)}\n`;
   res.writeHead(status, {
@@ -39,12 +45,18 @@ export function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
-export function sseHeaders(res: ServerResponse): void {
-  res.writeHead(200, {
+export function sseHeaders(res: ServerResponse, origin?: string): void {
+  const headers: Record<string, string> = {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
-  });
+  };
+  if (origin) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Access-Control-Allow-Credentials'] = 'true';
+    headers.Vary = 'Origin';
+  }
+  res.writeHead(200, headers);
   res.write(': connected\n\n');
 }
 

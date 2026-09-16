@@ -98,13 +98,38 @@ describe('workbench client contracts', () => {
     };
     const unsealed = applyStream(view, 'con_1', { type: 'execution', execution: nextExecution }, runtimeWaitingLabel);
     expect(unsealed.sealedResponse).toBe(false);
-    const live = applyStream(
+    const withMessage = applyStream(
       unsealed,
       'con_1',
-      { type: 'message.delta', messageId: 'msg_a', content: 'fresh turn' },
+      {
+        type: 'message',
+        message: {
+          id: 'msg_b',
+          urn: 'u',
+          conversationId: 'con_1',
+          role: 'assistant',
+          content: '',
+          sequence: 2,
+          executionId: 'ex_2',
+          createdAt: 't',
+          updatedAt: 't',
+        },
+      },
       runtimeWaitingLabel,
     );
-    expect(live.snapshot.messages[0]?.content).toBe('fresh turn');
+    const live = applyStream(
+      withMessage,
+      'con_1',
+      { type: 'message.delta', messageId: 'msg_b', content: 'fresh ' },
+      runtimeWaitingLabel,
+    );
+    const assembled = applyStream(
+      live,
+      'con_1',
+      { type: 'message.delta', messageId: 'msg_b', content: 'turn' },
+      runtimeWaitingLabel,
+    );
+    expect(assembled.snapshot.messages.find((item) => item.id === 'msg_b')?.content).toBe('fresh turn');
   });
 
   it('seals only the latest failed execution when hydrating a snapshot', () => {

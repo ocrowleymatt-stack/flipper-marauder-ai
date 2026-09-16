@@ -1,16 +1,17 @@
-import type {
-  Conversation,
-  ConversationSnapshot,
-  ConversationStreamEvent,
-  ExecutionAttempt,
-  ExecutionRecord,
-  ExecutionStatus,
-  Message,
-  ProvenanceRecord,
-  RouteDecision,
-  StructuredFailure,
-  TokenUsage,
-  ToolCallRequest,
+import {
+  DEFAULT_OPERATIONAL_LIMITS,
+  type Conversation,
+  type ConversationSnapshot,
+  type ConversationStreamEvent,
+  type ExecutionAttempt,
+  type ExecutionRecord,
+  type ExecutionStatus,
+  type Message,
+  type ProvenanceRecord,
+  type RouteDecision,
+  type StructuredFailure,
+  type TokenUsage,
+  type ToolCallRequest,
 } from '@atlas-vnext/contracts';
 import type { EventBus } from '@atlas-vnext/events';
 import type { IdFactory } from './ids.ts';
@@ -26,7 +27,32 @@ import type {
   ToolOrchestrator,
   UnitOfWork,
 } from './ports.ts';
+import { iterateUntilAborted } from './async-iterator.ts';
 import { assertExecutionTransition } from './transitions.ts';
+
+/** Base UTF-8 size for the first stream persist checkpoint. Later checkpoints double. */
+export const STREAM_PERSIST_CHECKPOINT_BYTES = 8 * 1024;
+/** Hard ceiling on tool-using model rounds per `sendMessage` when callers omit `maxToolRounds`. */
+export const DEFAULT_MAX_TOOL_ROUNDS = 8;
+
+/**
+ * Next persist threshold after `persistedBytes`. Thresholds grow geometrically
+ * (8 KiB, 16 KiB, 32 KiB, …) so cumulative saved payload stays O(n) while crash
+ * recovery still has a checkpointed prefix.
+ */
+export function nextStreamPersistCheckpoint(
+  persistedBytes: number,
+  baseBytes = STREAM_PERSIST_CHECKPOINT_BYTES,
+): number {
+  if (persistedBytes < baseBytes) return baseBytes;
+  let next = baseBytes;
+  while (next <= persistedBytes) {
+    const doubled = next * 2;
+    if (!Number.isFinite(doubled) || doubled <= next) return Number.MAX_SAFE_INTEGER;
+    next = doubled;
+  }
+  return next;
+}
 
 const DEFAULT_TITLE = 'New conversation';
 const TITLE_LIMIT = 72;
@@ -48,6 +74,25 @@ export interface ConversationRuntimeDeps {
   unitOfWork?: UnitOfWork;
   toolOrchestrator?: ToolOrchestrator;
   principalId?: string;
+  maxConcurrentExecutions?: number;
+  /** UTF-8 byte ceiling for provider-generated user-visible output. */
+  maxGeneratedBytes?: number;
+  /** Hard ceiling on tool-using model rounds per sendMessage. */
+  maxToolRounds?: number;
+  /** Overall execution deadline; abort is propagated to iterators and in-flight tool waits. */
+  executionDeadlineMs?: number;
+}
+
+export class GeneratedOutputLimitError extends Error {
+  readonly code = 'payload_too_large';
+
+  constructor(
+    readonly acceptedBytes: number,
+    readonly limitBytes: number,
+  ) {
+    super('generated exceeds the configured limit.');
+    this.name = 'GeneratedOutputLimitError';
+  }
 }
 
 export class ConversationRuntime {
@@ -58,6 +103,10 @@ export class ConversationRuntime {
   constructor(private readonly deps: ConversationRuntimeDeps) {
     this.ids = deps.ids ?? new UuidIdFactory();
     this.clock = deps.clock ?? { now: () => new Date().toISOString() };
+  }
+
+  private generatedByteLimit(): number {
+    return this.deps.maxGeneratedBytes ?? DEFAULT_OPERATIONAL_LIMITS.maxGeneratedBytes;
   }
 
   async createConversation(input: { title?: string; projectId?: string | null } = {}): Promise<Conversation> {
@@ -134,6 +183,8 @@ export class ConversationRuntime {
       systemPrompt?: string;
       contextTokens?: number;
       requireTools?: boolean;
+      /** Product opt-in to advertise and execute tools. Distinct from Nexus `requireTools`. */
+      allowTools?: boolean;
       requireReasoning?: boolean;
       requireVision?: boolean;
       requireCode?: boolean;
@@ -152,6 +203,17 @@ export class ConversationRuntime {
     }
 
     const capability = input.capability?.trim() || 'nexus/fast';
+    const maxConcurrent = this.deps.maxConcurrentExecutions;
+    if (maxConcurrent) {
+      const running = (await this.deps.executions.listInFlight()).length;
+      if (running >= maxConcurrent || this.inflight.size >= maxConcurrent) {
+        yield {
+          type: 'error',
+          failure: failure('rate_limit', 'Concurrent run limit reached.', true),
+        };
+        return;
+      }
+    }
     const started = await this.transact(async () => {
       const userMessage = await this.deps.messages.append({
         conversationId,
@@ -196,10 +258,37 @@ export class ConversationRuntime {
 
     const controller = new AbortController();
     this.inflight.set(executionId, controller);
+    let abortKind: 'deadline' | null = null;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const deadlineMs = this.deps.executionDeadlineMs;
+    if (deadlineMs && Number.isFinite(deadlineMs) && deadlineMs > 0) {
+      deadlineTimer = setTimeout(() => {
+        abortKind = 'deadline';
+        controller.abort();
+      }, deadlineMs);
+    }
+
+    let assistant: Message | null = null;
+    let assembled = '';
+    let generatedBytes = 0;
+    let persistedGeneratedBytes = 0;
+    let nextPersistAt = STREAM_PERSIST_CHECKPOINT_BYTES;
+    let usage: TokenUsage | null = null;
+    let roundUsage: TokenUsage | null = null;
+    const commitRoundUsage = (): void => {
+      if (!roundUsage) return;
+      usage = addTokenUsage(usage, roundUsage);
+      roundUsage = null;
+    };
+    let attempts: ExecutionAttempt[] = [];
+    let visibleOutputEver = false;
+    let startedMs = Date.now();
+    let settled = false;
 
     try {
       if (controller.signal.aborted) {
         execution = await this.finishCancelled(execution, [], null);
+        settled = true;
         yield { type: 'execution', execution };
         yield { type: 'done' };
         return;
@@ -226,6 +315,7 @@ export class ConversationRuntime {
           failureReason: failure('routing_failed', message, false),
         });
         await this.publish(conversationId, 'execution.failed', { executionId, code: 'routing_failed' });
+        settled = true;
         yield { type: 'execution', execution };
         yield { type: 'execution.failed', executionId, failure: execution.failureReason ?? failure('routing_failed', message, false) };
         yield { type: 'error', failure: execution.failureReason ?? failure('routing_failed', message, false) };
@@ -246,20 +336,90 @@ export class ConversationRuntime {
       });
       yield { type: 'execution', execution };
 
-      let assistant: Message | null = null;
-      let assembled = '';
-      let usage: TokenUsage | null = null;
-      const attempts: ExecutionAttempt[] = [];
-      const startedMs = Date.now();
+      const persistAssembled = async (force = false): Promise<void> => {
+        if (!assistant) return;
+        if (generatedBytes === persistedGeneratedBytes) return;
+        if (!force && generatedBytes < nextPersistAt) return;
+        assistant = await this.deps.messages.save({
+          ...assistant,
+          content: assembled,
+          updatedAt: this.clock.now(),
+        });
+        persistedGeneratedBytes = generatedBytes;
+        nextPersistAt = nextStreamPersistCheckpoint(generatedBytes);
+      };
+
+      const acceptGenerated = (text: string): void => {
+        const extra = utf8ByteLength(text);
+        const limit = this.generatedByteLimit();
+        if (generatedBytes + extra > limit) {
+          throw new GeneratedOutputLimitError(generatedBytes, limit);
+        }
+        generatedBytes += extra;
+      };
+
+      const applyText = async (text: string): Promise<ConversationStreamEvent[]> => {
+        acceptGenerated(text);
+        assembled += text;
+        const events: ConversationStreamEvent[] = [];
+        if (!assistant) {
+          const first = await this.transact(async () => {
+            const message = await this.deps.messages.append({
+              conversationId,
+              role: 'assistant',
+              content: assembled,
+              executionId,
+            });
+            const nextExecution = await this.saveExecution({
+              ...execution,
+              assistantMessageId: message.id,
+              attempts: [...attempts],
+              selectedProvider: execution.selectedProvider,
+              selectedModel: execution.selectedModel,
+            });
+            await this.publish(conversationId, 'message.appended', {
+              messageId: message.id,
+              role: 'assistant',
+            });
+            return { message, execution: nextExecution };
+          });
+          assistant = first.message;
+          execution = first.execution;
+          persistedGeneratedBytes = generatedBytes;
+          nextPersistAt = nextStreamPersistCheckpoint(generatedBytes);
+          events.push({ type: 'message', message: { ...assistant, content: '' } });
+          events.push({ type: 'execution', execution });
+        } else {
+          await persistAssembled(false);
+        }
+        events.push({ type: 'assistant.delta', executionId, text });
+        events.push({ type: 'message.delta', messageId: assistant.id, content: text });
+        return events;
+      };
+
+      startedMs = Date.now();
       const pending: ConversationStreamEvent[] = [];
-      const toolResults: Array<{
+      const accumulatedToolResults: Array<{
         callId: string;
         toolId: string;
+        arguments: Record<string, unknown>;
         status: string;
         resultRef?: string | null;
         output?: unknown;
+        round: number;
       }> = [];
       const collectedToolCalls: ToolCallRequest[] = [];
+      const maxToolRounds = this.deps.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
+      let toolRounds = 0;
+      const toolsEnabled = input.allowTools === true;
+      const callableTools =
+        toolsEnabled && this.deps.toolOrchestrator?.listCallable && conversation.tenantId
+          ? await this.deps.toolOrchestrator.listCallable({
+              tenantId: conversation.tenantId,
+              principalId: this.deps.principalId ?? conversation.tenantId,
+              workspaceId: conversation.workspaceId ?? conversation.projectId ?? null,
+            })
+          : undefined;
 
       const observer = {
         onAttempt: (
@@ -267,6 +427,9 @@ export class ConversationRuntime {
         ) => {
           const at = this.clock.now();
           const existing = attempts.findIndex((item) => item.index === attempt.index);
+          const priorVisible = existing === -1 ? false : attempts[existing]!.emittedVisibleOutput;
+          const visible = priorVisible || attempt.emittedVisibleOutput;
+          if (visible) visibleOutputEver = true;
           const record: ExecutionAttempt = {
             index: attempt.index,
             provider: attempt.provider,
@@ -275,7 +438,7 @@ export class ConversationRuntime {
             endedAt: attempt.outcome === 'started' ? null : at,
             outcome: attempt.outcome,
             error: attempt.error,
-            emittedVisibleOutput: attempt.emittedVisibleOutput,
+            emittedVisibleOutput: visible,
           };
           if (existing === -1) attempts.push(record);
           else attempts[existing] = record;
@@ -295,7 +458,7 @@ export class ConversationRuntime {
               provider: attempt.provider,
               model: attempt.model,
               failure: attempt.error,
-              emittedVisibleOutput: attempt.emittedVisibleOutput,
+              emittedVisibleOutput: visible,
             });
             pending.push({
               type: 'provider.failed',
@@ -322,43 +485,183 @@ export class ConversationRuntime {
       };
 
       try {
-        for await (const chunk of this.deps.executor.execute(
-          decision,
-          { prompt: content, systemPrompt: input.systemPrompt, signal: controller.signal, traceId: decision.traceId },
-          observer,
-        )) {
-          for (const event of pending.splice(0)) yield event;
-          if (chunk.type === 'usage') {
-            usage = chunk.usage;
-            yield { type: 'usage', executionId, usage: chunk.usage };
-            continue;
+        const hasVisibleOutput = (): boolean =>
+          visibleOutputEver || assembled.length > 0 || attempts.some((attempt) => attempt.emittedVisibleOutput);
+
+        const pinnedDecision = (): RouteDecision => {
+          if (!hasVisibleOutput() || !execution.selectedProvider || !execution.selectedModel) {
+            return decision;
           }
-          if (chunk.type === 'warning') {
-            yield {
-              type: 'provider.warning',
+          const pinned = `${execution.selectedProvider}/${execution.selectedModel}`;
+          return {
+            ...decision,
+            provider: execution.selectedProvider,
+            model: execution.selectedModel,
+            resolvedRouteId: pinned,
+            candidateChain: [pinned],
+          };
+        };
+
+        const settleAbort = async (): Promise<ConversationStreamEvent[]> => {
+          await persistAssembled(true);
+          if (abortKind === 'deadline') {
+            const structured = failure('timeout', 'Execution deadline exceeded.', false);
+            execution = await this.transition(
+              { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
+              'failed',
+              { failureReason: structured },
+            );
+            await this.publish(
+              conversationId,
+              'execution.failed',
+              { executionId, code: 'timeout', visibleOutput: hasVisibleOutput() },
+              `execution:${executionId}:failed`,
+            );
+            settled = true;
+            return [
+              { type: 'execution', execution },
+              { type: 'execution.failed', executionId, failure: structured },
+              { type: 'error', failure: structured },
+              { type: 'done' },
+            ];
+          }
+          execution = await this.finishCancelled(execution, attempts, usage, Date.now() - startedMs);
+          settled = true;
+          return [
+            { type: 'execution', execution },
+            { type: 'done' },
+          ];
+        };
+
+        const failStructured = async (
+          code: string,
+          message: string,
+          retryable: boolean,
+        ): Promise<ConversationStreamEvent[]> => {
+          await persistAssembled(true);
+          const structured = failure(code, message, retryable);
+          execution = await this.transition(
+            { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
+            'failed',
+            { failureReason: structured },
+          );
+          await this.publish(
+            conversationId,
+            'execution.failed',
+            { executionId, code, visibleOutput: hasVisibleOutput() },
+            `execution:${executionId}:failed`,
+          );
+          settled = true;
+          return [
+            { type: 'execution', execution },
+            { type: 'execution.failed', executionId, failure: structured },
+            { type: 'error', failure: structured },
+            { type: 'done' },
+          ];
+        };
+
+        const completeSuccessfully = async (): Promise<ConversationStreamEvent[]> => {
+          await persistAssembled(true);
+          execution = await this.transition(
+            { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
+            'completed',
+          );
+          const events: ConversationStreamEvent[] = [];
+          if (assembled.length > 0) {
+            events.push({ type: 'assistant.completed', executionId, text: assembled });
+          }
+          if (assistant && execution.selectedProvider && execution.selectedModel) {
+            await this.recordProvenance(conversation, userMessage, assistant, execution, decision, collectedToolCalls);
+          }
+          await this.publish(
+            conversationId,
+            'execution.completed',
+            {
               executionId,
-              provider: chunk.provider ?? execution.selectedProvider ?? decision.provider,
-              message: chunk.message,
-            };
-            continue;
-          }
-          if (chunk.type === 'reasoning') {
-            yield { type: 'reasoning.delta', executionId, text: chunk.text };
-            continue;
-          }
-          if (chunk.type === 'tool_call') {
-            yield { type: 'tool.requested', executionId, call: chunk.call };
-            if (this.deps.toolOrchestrator && conversation.tenantId) {
-              const handled = await this.deps.toolOrchestrator.handleCall({
-                tenantId: conversation.tenantId,
-                principalId: this.deps.principalId ?? conversation.tenantId,
-                workspaceId: conversation.workspaceId ?? conversation.projectId ?? null,
-                conversationId,
+              provider: execution.selectedProvider,
+              model: execution.selectedModel,
+            },
+            `execution:${executionId}:completed`,
+          );
+          settled = true;
+          events.push({
+            type: 'execution.completed',
+            executionId,
+            provider: execution.selectedProvider,
+            model: execution.selectedModel,
+          });
+          events.push({ type: 'execution', execution });
+          events.push({ type: 'done' });
+          return events;
+        };
+
+        for (;;) {
+          const prior = accumulatedToolResults.length > 0 ? accumulatedToolResults : undefined;
+          const routed = prior ? pinnedDecision() : decision;
+          const roundTools: typeof accumulatedToolResults = [];
+          let roundLimitHit = false;
+
+          for await (const chunk of iterateUntilAborted(
+            this.deps.executor.execute(
+              routed,
+              {
+                prompt: content,
+                systemPrompt: input.systemPrompt,
+                signal: controller.signal,
+                traceId: decision.traceId,
+                priorToolResults: prior,
+                tools: callableTools,
+                attemptIndexBase: attempts.reduce((max, item) => Math.max(max, item.index), 0),
+                visibleOutputAlready: hasVisibleOutput(),
+              },
+              observer,
+            ),
+            controller.signal,
+          )) {
+            for (const event of pending.splice(0)) yield event;
+            if (chunk.type === 'usage') {
+              roundUsage = chunk.usage;
+              yield { type: 'usage', executionId, usage: chunk.usage };
+              continue;
+            }
+            if (chunk.type === 'warning') {
+              yield {
+                type: 'provider.warning',
                 executionId,
-                provider: execution.selectedProvider,
-                model: execution.selectedModel,
-                call: chunk.call,
-              });
+                provider: chunk.provider ?? execution.selectedProvider ?? decision.provider,
+                message: chunk.message,
+              };
+              continue;
+            }
+            if (chunk.type === 'reasoning') {
+              if (chunk.text.length > 0) visibleOutputEver = true;
+              acceptGenerated(chunk.text);
+              yield { type: 'reasoning.delta', executionId, text: chunk.text };
+              continue;
+            }
+            if (chunk.type === 'tool_call') {
+              if (!toolsEnabled) {
+                continue;
+              }
+              yield { type: 'tool.requested', executionId, call: chunk.call };
+              if (!this.deps.toolOrchestrator || !conversation.tenantId) {
+                continue;
+              }
+              if (toolRounds >= maxToolRounds) {
+                roundLimitHit = true;
+                continue;
+              }
+              const handled = await this.deps.toolOrchestrator.handleCall({
+                  tenantId: conversation.tenantId,
+                  principalId: this.deps.principalId ?? conversation.tenantId,
+                  workspaceId: conversation.workspaceId ?? conversation.projectId ?? null,
+                  conversationId,
+                  executionId,
+                  provider: execution.selectedProvider,
+                  model: execution.selectedModel,
+                  call: chunk.call,
+                  signal: controller.signal,
+                });
               yield {
                 type: 'tool.lifecycle',
                 executionId,
@@ -377,146 +680,100 @@ export class ConversationRuntime {
                   output: handled.output,
                 };
               }
-              toolResults.push({
+              roundTools.push({
                 callId: chunk.call.id,
                 toolId: handled.toolId,
+                arguments: chunk.call.arguments,
                 status: handled.status,
                 resultRef: handled.resultRef ?? null,
                 output: handled.output,
+                round: toolRounds,
               });
               collectedToolCalls.push(chunk.call);
+              continue;
             }
-            continue;
+            if (chunk.type !== 'text' || chunk.text.length === 0) {
+              continue;
+            }
+            visibleOutputEver = true;
+            for (const event of await applyText(chunk.text)) yield event;
           }
-          if (chunk.type !== 'text' || chunk.text.length === 0) {
-            continue;
+          for (const event of pending.splice(0)) yield event;
+          commitRoundUsage();
+
+          if (controller.signal.aborted) {
+            for (const event of await settleAbort()) yield event;
+            return;
           }
-          assembled += chunk.text;
-          if (!assistant) {
-            const first = await this.transact(async () => {
-              const message = await this.deps.messages.append({
-                conversationId,
-                role: 'assistant',
-                content: assembled,
-                executionId,
-              });
-              const nextExecution = await this.saveExecution({
-                ...execution,
-                assistantMessageId: message.id,
-                attempts: [...attempts],
-                selectedProvider: execution.selectedProvider,
-                selectedModel: execution.selectedModel,
-              });
-              await this.publish(conversationId, 'message.appended', {
-                messageId: message.id,
-                role: 'assistant',
-              });
-              return { message, execution: nextExecution };
-            });
-            assistant = first.message;
-            execution = first.execution;
-            yield { type: 'message', message: assistant };
-            yield { type: 'execution', execution };
-          } else {
-            assistant = await this.deps.messages.save({
-              ...assistant,
-              content: assembled,
-              updatedAt: this.clock.now(),
-            });
+
+          if (roundLimitHit) {
+            for (const event of await failStructured(
+              'tool_round_limit',
+              'Tool-round limit reached before a final model response.',
+              false,
+            )) {
+              yield event;
+            }
+            return;
           }
-          yield { type: 'assistant.delta', executionId, text: assembled };
-          yield { type: 'message.delta', messageId: assistant.id, content: assembled };
+
+          if (roundTools.length === 0) {
+            break;
+          }
+
+          const blocking = roundTools.filter(
+            (row) => row.status !== 'succeeded' && row.status !== 'awaiting_approval',
+          );
+          if (blocking.length > 0) {
+            const first = blocking[0]!;
+            for (const event of await failStructured(
+              toolFailureCode(first.status),
+              `Tool ${first.toolId} ended in ${first.status}.`,
+              false,
+            )) {
+              yield event;
+            }
+            return;
+          }
+
+          if (roundTools.some((row) => row.status === 'awaiting_approval')) {
+            for (const event of await completeSuccessfully()) yield event;
+            return;
+          }
+
+          toolRounds += 1;
+          accumulatedToolResults.push(...roundTools);
         }
-        for (const event of pending.splice(0)) yield event;
 
         if (controller.signal.aborted) {
-          execution = await this.finishCancelled(execution, attempts, usage, Date.now() - startedMs);
-          yield { type: 'execution', execution };
-          yield { type: 'done' };
+          for (const event of await settleAbort()) yield event;
           return;
         }
 
-        const canContinue =
-          toolResults.length > 0 && toolResults.every((row) => row.status === 'succeeded');
-        if (canContinue && !controller.signal.aborted) {
-          for await (const chunk of this.deps.executor.execute(
-            decision,
-            {
-              prompt: content,
-              systemPrompt: input.systemPrompt,
-              signal: controller.signal,
-              traceId: decision.traceId,
-              priorToolResults: toolResults,
-            },
-            observer,
-          )) {
-            for (const event of pending.splice(0)) yield event;
-            if (chunk.type === 'usage') {
-              usage = chunk.usage;
-              yield { type: 'usage', executionId, usage: chunk.usage };
-              continue;
-            }
-            if (chunk.type === 'text' && chunk.text.length > 0) {
-              assembled += chunk.text;
-              if (!assistant) {
-                assistant = await this.deps.messages.append({
-                  conversationId,
-                  role: 'assistant',
-                  content: assembled,
-                  executionId,
-                });
-                execution = await this.saveExecution({
-                  ...execution,
-                  assistantMessageId: assistant.id,
-                  attempts: [...attempts],
-                });
-                yield { type: 'message', message: assistant };
-                yield { type: 'execution', execution };
-              } else {
-                assistant = await this.deps.messages.save({
-                  ...assistant,
-                  content: assembled,
-                  updatedAt: this.clock.now(),
-                });
-              }
-              yield { type: 'assistant.delta', executionId, text: assembled };
-              yield { type: 'message.delta', messageId: assistant.id, content: assembled };
-            }
-          }
-          for (const event of pending.splice(0)) yield event;
-        }
-
-        execution = await this.transition(
-          { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
-          'completed',
-        );
-        if (assembled.length > 0) {
-          yield { type: 'assistant.completed', executionId, text: assembled };
-        }
-        if (assistant && execution.selectedProvider && execution.selectedModel) {
-          await this.recordProvenance(conversation, userMessage, assistant, execution, decision, collectedToolCalls);
-        }
-        await this.publish(conversationId, 'execution.completed', {
-          executionId,
-          provider: execution.selectedProvider,
-          model: execution.selectedModel,
-        }, `execution:${executionId}:completed`);
-        yield {
-          type: 'execution.completed',
-          executionId,
-          provider: execution.selectedProvider,
-          model: execution.selectedModel,
-        };
-        yield { type: 'execution', execution };
-        yield { type: 'done' };
+        for (const event of await completeSuccessfully()) yield event;
       } catch (err) {
+        commitRoundUsage();
         for (const event of pending.splice(0)) yield event;
-        const aborted = controller.signal.aborted;
+        const limited = err instanceof GeneratedOutputLimitError;
+        if (limited && !controller.signal.aborted) {
+          controller.abort();
+        }
+        await persistAssembled(true);
+        const deadlineHit = abortKind === 'deadline';
+        const aborted = controller.signal.aborted && !limited && !deadlineHit;
         const message = err instanceof Error ? err.message : String(err);
-        const visible = attempts.some((attempt) => attempt.emittedVisibleOutput) || assembled.length > 0;
+        const visible = visibleOutputEver || attempts.some((attempt) => attempt.emittedVisibleOutput) || assembled.length > 0;
         const status: ExecutionStatus = aborted ? 'cancelled' : 'failed';
-        const code = aborted ? 'cancelled' : visible ? 'partial_stream_failure' : 'provider_error';
-        const structured = failure(code, message, !visible && !aborted);
+        const code = deadlineHit
+          ? 'timeout'
+          : aborted
+            ? 'cancelled'
+            : limited
+              ? 'payload_too_large'
+              : visible
+                ? 'partial_stream_failure'
+                : 'provider_error';
+        const structured = failure(code, message, !limited && !visible && !aborted && !deadlineHit);
         execution = await this.transition(
           { ...execution, attempts: [...attempts], usage, latencyMs: Date.now() - startedMs },
           status,
@@ -527,6 +784,7 @@ export class ConversationRuntime {
           code,
           visibleOutput: visible,
         }, `execution:${executionId}:${status}`);
+        settled = true;
         yield { type: 'execution', execution };
         if (status === 'failed') {
           yield { type: 'execution.failed', executionId, failure: structured };
@@ -535,6 +793,25 @@ export class ConversationRuntime {
         yield { type: 'done' };
       }
     } finally {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      try {
+        commitRoundUsage();
+        if (!settled) {
+          const pendingAssistant = assistant;
+          if (pendingAssistant !== null) {
+            assistant = await this.deps.messages.save({
+              ...(pendingAssistant as Message),
+              content: assembled,
+              updatedAt: this.clock.now(),
+            });
+          }
+        }
+        if (!settled && (execution.status === 'queued' || execution.status === 'running')) {
+          execution = await this.finishCancelled(execution, attempts, usage, Date.now() - startedMs);
+        }
+      } catch {
+        // Teardown must still drop inflight even if a late persist fails.
+      }
       this.inflight.delete(executionId);
     }
   }
@@ -656,6 +933,10 @@ export function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
+function utf8ByteLength(text: string): number {
+  return Buffer.byteLength(text, 'utf8');
+}
+
 function titleFromPrompt(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
   if (compact.length <= TITLE_LIMIT) return compact;
@@ -667,6 +948,28 @@ function sanitiseTitle(title: string | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
+function addTokenUsage(acc: TokenUsage | null, next: TokenUsage): TokenUsage {
+  if (!acc) {
+    return {
+      inputTokens: next.inputTokens,
+      outputTokens: next.outputTokens,
+      totalTokens: next.totalTokens,
+    };
+  }
+  return {
+    inputTokens: acc.inputTokens + next.inputTokens,
+    outputTokens: acc.outputTokens + next.outputTokens,
+    totalTokens: acc.totalTokens + next.totalTokens,
+  };
+}
+
 function failure(code: string, message: string, retryable: boolean, at?: string): StructuredFailure {
   return { code, message, retryable, at: at ?? new Date().toISOString() };
+}
+
+function toolFailureCode(status: string): string {
+  if (status === 'denied') return 'tool_denied';
+  if (status === 'uncertain') return 'tool_uncertain';
+  if (status === 'cancelled') return 'cancelled';
+  return 'tool_failed';
 }

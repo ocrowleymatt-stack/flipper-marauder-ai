@@ -20,7 +20,8 @@ describe.skipIf(!enabled)('optional live provider smoke', () => {
       content: 'Reply with exactly: ATLAS LIVE',
       capability: 'nexus/fast',
     })) {
-      if (event.type === 'message.delta') text = event.content;
+      if (event.type === 'message.delta') text += event.content;
+      if (event.type === 'assistant.completed') text = event.text;
       if (event.type === 'execution.completed') completed = true;
       if (event.type === 'error') {
         throw new Error(event.failure.message);

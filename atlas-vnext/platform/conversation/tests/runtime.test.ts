@@ -5,6 +5,8 @@ import {
   ConversationRuntime,
   conversationChannel,
   memoryStores,
+  nextStreamPersistCheckpoint,
+  STREAM_PERSIST_CHECKPOINT_BYTES,
   type CapabilityRouter,
   type ModelExecutor,
 } from '../src/index.ts';
@@ -84,7 +86,12 @@ async function collect(runtime: ConversationRuntime, conversationId: string, con
   return events;
 }
 
-function harness(overrides?: { router?: CapabilityRouter; executor?: ModelExecutor }) {
+function harness(overrides?: {
+  router?: CapabilityRouter;
+  executor?: ModelExecutor;
+  maxConcurrentExecutions?: number;
+  maxGeneratedBytes?: number;
+}) {
   const stores = memoryStores();
   const events = new MemoryEventBus();
   const runtime = new ConversationRuntime({
@@ -93,6 +100,8 @@ function harness(overrides?: { router?: CapabilityRouter; executor?: ModelExecut
     executions: stores.executions,
     provenance: stores.provenance,
     events,
+    maxConcurrentExecutions: overrides?.maxConcurrentExecutions,
+    maxGeneratedBytes: overrides?.maxGeneratedBytes,
     router:
       overrides?.router ??
       fakeRouter((target) => decision(target, target === 'nexus/reason' ? ['anthropic/claude-sonnet'] : ['openai/gpt-4o'])),
@@ -213,7 +222,10 @@ describe('streaming and failure behaviour', () => {
     const conversation = await runtime.createConversation();
     const stream = await collect(runtime, conversation.id, 'hi');
     const deltas = stream.filter((event) => event.type === 'message.delta');
-    expect(deltas.map((event) => (event.type === 'message.delta' ? event.content : ''))).toEqual(['Hel', 'Hello']);
+    expect(deltas.map((event) => (event.type === 'message.delta' ? event.content : ''))).toEqual(['Hel', 'lo']);
+    const assistantDeltas = stream.filter((event) => event.type === 'assistant.delta');
+    expect(assistantDeltas.map((event) => (event.type === 'assistant.delta' ? event.text : ''))).toEqual(['Hel', 'lo']);
+    expect(stream.find((event) => event.type === 'assistant.completed')).toMatchObject({ text: 'Hello' });
   });
 
   it('allows executor-level fallback before visible output', async () => {
@@ -331,6 +343,319 @@ describe('streaming and failure behaviour', () => {
     expect(routedTarget).toBe('nexus/reason');
     expect(seenSystem).toContain('capability policy');
     expect(seenPrompt).toContain('user instruction');
+  });
+});
+
+describe('generated output byte ceiling', () => {
+  function limitedHarness(limit: number, stream: () => AsyncGenerator<StreamChunk>) {
+    const stores = memoryStores();
+    const events = new MemoryEventBus();
+    const runtime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events,
+      maxGeneratedBytes: limit,
+      router: fakeRouter((target) => decision(target, ['openai/gpt-4o'])),
+      executor: fakeExecutor(stream),
+    });
+    return { runtime, stores };
+  }
+
+  it('accepts output below the configured UTF-8 byte limit', async () => {
+    const { runtime, stores } = limitedHarness(16, async function* () {
+      yield { type: 'text', text: 'hello' };
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'hi');
+    expect(stream.some((event) => event.type === 'done')).toBe(true);
+    expect(stream.some((event) => event.type === 'error')).toBe(false);
+    expect(Buffer.byteLength('hello', 'utf8')).toBeLessThan(16);
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe('hello');
+  });
+
+  it('accepts output that lands exactly on the UTF-8 byte limit', async () => {
+    const { runtime, stores } = limitedHarness(5, async function* () {
+      yield { type: 'text', text: 'hello' };
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'hi');
+    expect(stream.some((event) => event.type === 'error')).toBe(false);
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe('hello');
+  });
+
+  it('rejects the chunk that would exceed the limit by one byte and does not persist it', async () => {
+    const { runtime, stores } = limitedHarness(5, async function* () {
+      yield { type: 'text', text: 'hello!' };
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'hi');
+    const error = stream.find((event) => event.type === 'error');
+    expect(error).toMatchObject({ type: 'error', failure: { code: 'payload_too_large', retryable: false } });
+    expect(stream.some((event) => event.type === 'done')).toBe(true);
+    const messages = await stores.messages.list(conversation.id);
+    expect(messages.map((message) => message.role)).toEqual(['user']);
+    const snapshot = await runtime.getSnapshot(conversation.id);
+    expect(snapshot?.executions[0]?.failureReason?.code).toBe('payload_too_large');
+    expect(snapshot?.executions[0]?.status).toBe('failed');
+  });
+
+  it('enforces the ceiling across many small chunks', async () => {
+    const { runtime, stores } = limitedHarness(4, async function* () {
+      yield { type: 'text', text: 'ab' };
+      yield { type: 'text', text: 'cd' };
+      yield { type: 'text', text: 'e' };
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'hi');
+    expect(stream.some((event) => event.type === 'error')).toBe(true);
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe('abcd');
+  });
+
+  it('counts multibyte UTF-8 rather than JavaScript string length', async () => {
+    const euro = '€';
+    expect(euro.length).toBe(1);
+    expect(Buffer.byteLength(euro, 'utf8')).toBe(3);
+    const { runtime, stores } = limitedHarness(2, async function* () {
+      yield { type: 'text', text: euro };
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'hi');
+    expect(stream.find((event) => event.type === 'error')).toMatchObject({
+      failure: { code: 'payload_too_large' },
+    });
+    expect((await stores.messages.list(conversation.id)).map((message) => message.role)).toEqual(['user']);
+  });
+
+  it('does not switch providers after visible output hits the generated-byte ceiling', async () => {
+    const providers: string[] = [];
+    const stores = memoryStores();
+    const runtime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events: new MemoryEventBus(),
+      maxGeneratedBytes: 4,
+      router: fakeRouter(() => decision('nexus/fast', ['openai/gpt-4o', 'ollama/llama3.2'])),
+      executor: {
+        async *execute(routed, _ctx, observer) {
+          observer?.onAttempt({
+            index: 1,
+            provider: 'openai',
+            model: 'gpt-4o',
+            outcome: 'started',
+            error: null,
+            emittedVisibleOutput: false,
+          });
+          providers.push(routed.provider);
+          yield { type: 'text', text: 'abcd' };
+          yield { type: 'text', text: 'e' };
+          observer?.onAttempt({
+            index: 1,
+            provider: 'openai',
+            model: 'gpt-4o',
+            outcome: 'failed',
+            error: { code: 'provider_error', message: 'should not failover', retryable: true, at: '2026-09-14T00:00:00.000Z' },
+            emittedVisibleOutput: true,
+          });
+          observer?.onAttempt({
+            index: 2,
+            provider: 'ollama',
+            model: 'llama3.2',
+            outcome: 'started',
+            error: null,
+            emittedVisibleOutput: false,
+          });
+          providers.push('ollama');
+          yield { type: 'text', text: 'switched' };
+        },
+      },
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'hi');
+    expect(providers).toEqual(['openai']);
+    expect(stream.find((event) => event.type === 'error')).toMatchObject({
+      failure: { code: 'payload_too_large' },
+    });
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe('abcd');
+    expect((await runtime.getSnapshot(conversation.id))?.executions[0]?.failureReason?.code).toBe('payload_too_large');
+  });
+});
+
+describe('true-delta streaming, bounded persistence, and abort teardown', () => {
+  it('emits incremental deltas and persists the exact final assistant text once at the end for tiny chunks', async () => {
+    const stores = memoryStores();
+    const savePayloads: string[] = [];
+    const originalSave = stores.messages.save.bind(stores.messages);
+    stores.messages.save = async (message) => {
+      savePayloads.push(message.content);
+      return originalSave(message);
+    };
+    const chunkCount = 5_000;
+    const runtime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events: new MemoryEventBus(),
+      router: fakeRouter(() => decision('nexus/fast', ['openai/gpt-4o'])),
+      executor: fakeExecutor(async function* () {
+        for (let i = 0; i < chunkCount; i += 1) yield { type: 'text', text: 'x' };
+      }),
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'tiny');
+    const deltas = stream.filter((event) => event.type === 'assistant.delta');
+    const messageDeltas = stream.filter((event) => event.type === 'message.delta');
+    expect(deltas).toHaveLength(chunkCount);
+    expect(messageDeltas).toHaveLength(chunkCount);
+    expect(deltas.every((event) => event.type === 'assistant.delta' && event.text === 'x')).toBe(true);
+    expect(messageDeltas.every((event) => event.type === 'message.delta' && event.content === 'x')).toBe(true);
+    const assembled = deltas.map((event) => (event.type === 'assistant.delta' ? event.text : '')).join('');
+    expect(assembled).toBe('x'.repeat(chunkCount));
+    expect(stream.find((event) => event.type === 'assistant.completed')).toMatchObject({ text: assembled });
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe(assembled);
+    expect(savePayloads.length).toBeLessThan(Math.ceil(chunkCount / STREAM_PERSIST_CHECKPOINT_BYTES) + 2);
+    const persistedChars = savePayloads.reduce((sum, text) => sum + text.length, 0);
+    expect(persistedChars).toBeLessThan(chunkCount * 3);
+    expect(persistedChars).toBeGreaterThanOrEqual(chunkCount);
+  });
+
+  it('does not persist every prefix while still checkpointing a long stream', async () => {
+    const stores = memoryStores();
+    let saveCalls = 0;
+    const originalSave = stores.messages.save.bind(stores.messages);
+    stores.messages.save = async (message) => {
+      saveCalls += 1;
+      return originalSave(message);
+    };
+    const bytes = STREAM_PERSIST_CHECKPOINT_BYTES * 3 + 10;
+    const runtime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events: new MemoryEventBus(),
+      router: fakeRouter(() => decision('nexus/fast', ['openai/gpt-4o'])),
+      executor: fakeExecutor(async function* () {
+        for (let i = 0; i < bytes; i += 1) yield { type: 'text', text: 'y' };
+      }),
+    });
+    const conversation = await runtime.createConversation();
+    await collect(runtime, conversation.id, 'checkpoint');
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe('y'.repeat(bytes));
+    expect(saveCalls).toBeGreaterThanOrEqual(3);
+    expect(saveCalls).toBeLessThan(bytes / 10);
+  });
+
+  it('keeps cumulative persistence linear for a near-limit stream of thousands of tiny chunks', async () => {
+    const stores = memoryStores();
+    const persistPayloads: string[] = [];
+    const persistCalls = { append: 0, save: 0 };
+    const originalAppend = stores.messages.append.bind(stores.messages);
+    const originalSave = stores.messages.save.bind(stores.messages);
+    stores.messages.append = async (input) => {
+      persistCalls.append += 1;
+      persistPayloads.push(input.content);
+      return originalAppend(input);
+    };
+    stores.messages.save = async (message) => {
+      persistCalls.save += 1;
+      persistPayloads.push(message.content);
+      return originalSave(message);
+    };
+    const limit = 128 * 1024;
+    const byteCount = limit - 64;
+    const runtime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events: new MemoryEventBus(),
+      router: fakeRouter(() => decision('nexus/fast', ['openai/gpt-4o'])),
+      executor: fakeExecutor(async function* () {
+        for (let i = 0; i < byteCount; i += 1) yield { type: 'text', text: 'x' };
+      }),
+      maxGeneratedBytes: limit,
+    });
+    const conversation = await runtime.createConversation();
+    const stream = await collect(runtime, conversation.id, 'near-limit tiny');
+    const assembled = stream
+      .filter((event) => event.type === 'assistant.delta')
+      .map((event) => (event.type === 'assistant.delta' ? event.text : ''))
+      .join('');
+    expect(assembled).toBe('x'.repeat(byteCount));
+    expect(Buffer.byteLength(assembled, 'utf8')).toBe(byteCount);
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe(assembled);
+    const persistedBytes = persistPayloads.reduce((sum, text) => sum + Buffer.byteLength(text, 'utf8'), 0);
+    // Fixed 8 KiB prefix checkpoints would write 8+16+...+N ≈ N²/(2·8KiB) bytes
+    // (~1 MiB here). Geometric checkpoints stay within a small linear multiple of N.
+    expect(persistedBytes).toBeLessThan(byteCount * 3);
+    expect(persistedBytes).toBeGreaterThanOrEqual(byteCount);
+    expect(persistCalls.append + persistCalls.save).toBeLessThan(
+      Math.log2(byteCount / STREAM_PERSIST_CHECKPOINT_BYTES) + 6,
+    );
+    expect(nextStreamPersistCheckpoint(STREAM_PERSIST_CHECKPOINT_BYTES)).toBe(STREAM_PERSIST_CHECKPOINT_BYTES * 2);
+  });
+
+  it('treats cancellation after visible output as terminal and does not fail over', async () => {
+    const providers: string[] = [];
+    const { runtime, stores } = harness({
+      router: fakeRouter(() => decision('nexus/fast', ['openai/gpt-4o', 'ollama/llama3.2'])),
+      executor: {
+        async *execute(routed, context, observer) {
+          providers.push(routed.provider);
+          observer?.onAttempt({
+            index: 1,
+            provider: routed.provider,
+            model: routed.model,
+            outcome: 'started',
+            error: null,
+            emittedVisibleOutput: false,
+          });
+          yield { type: 'text', text: 'first tokens' };
+          await new Promise<void>((resolve, reject) => {
+            if (context.signal?.aborted) {
+              reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+              return;
+            }
+            context.signal?.addEventListener('abort', () => resolve(), { once: true });
+          });
+          observer?.onAttempt({
+            index: 2,
+            provider: 'ollama',
+            model: 'llama3.2',
+            outcome: 'started',
+            error: null,
+            emittedVisibleOutput: false,
+          });
+          providers.push('ollama');
+          yield { type: 'text', text: 'switched' };
+        },
+      },
+    });
+    const conversation = await runtime.createConversation();
+    const gen = runtime.sendMessage(conversation.id, { content: 'cancel after visible' });
+    let executionId: string | undefined;
+    for (;;) {
+      const { value, done } = await gen.next();
+      if (done || !value) break;
+      if (value.type === 'execution' && value.execution.id) executionId = value.execution.id;
+      if (value.type === 'assistant.delta') break;
+    }
+    await runtime.cancel(executionId!);
+    const rest = [];
+    for (;;) {
+      const { value, done } = await gen.next();
+      if (done) break;
+      if (value) rest.push(value);
+    }
+    expect(providers).toEqual(['openai']);
+    expect((await runtime.getSnapshot(conversation.id))?.executions[0]?.status).toBe('cancelled');
+    expect((await stores.messages.list(conversation.id)).at(-1)?.content).toBe('first tokens');
+    expect(rest.some((event) => event.type === 'assistant.delta' && event.text === 'switched')).toBe(false);
   });
 });
 

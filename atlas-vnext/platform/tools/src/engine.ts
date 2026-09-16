@@ -15,7 +15,7 @@ import type { DurableJobEngine } from '@atlas-vnext/jobs';
 import { logPlatform } from '@atlas-vnext/observability';
 import { AuthorityDeniedError, AuthorityEngine } from '@atlas-vnext/permissions';
 import { defaultAdapters, type CommandRunner, type ToolAdapter, type ToolAdapterResult } from './adapters.ts';
-import { DuplicateSideEffectError, IncompleteToolCallError, ToolCancelUnconfirmedError, ToolError, UnknownToolError } from './errors.ts';
+import { DuplicateSideEffectError, IncompleteToolCallError, ToolCancelUnconfirmedError, ToolError, UnknownToolError, createAbortError, isAbortError } from './errors.ts';
 import { sha256Stable } from './hash.ts';
 import { ToolRegistry } from './registry.ts';
 import { assertObjectSchema, validateAgainstSchema, type JsonSchema } from './schema.ts';
@@ -49,6 +49,16 @@ export interface InvokeRequest {
   pluginId?: string | null;
   provider?: string | null;
   model?: string | null;
+}
+
+export interface InvokeOptions {
+  signal?: AbortSignal;
+}
+
+export interface CallableToolDefinition {
+  id: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
 }
 
 export interface InvokeResult {
@@ -98,6 +108,8 @@ export class ToolEngine {
   private readonly jailRoot: string;
   private accepting = true;
   private inFlight = 0;
+  private readonly quotaHits = new Map<string, number[]>();
+  private readonly approvalMutex = new Map<string, Promise<void>>();
 
   constructor(private readonly options: ToolEngineOptions) {
     this.limits = options.limits ?? DEFAULT_OPERATIONAL_LIMITS;
@@ -112,11 +124,20 @@ export class ToolEngine {
     this.accepting = false;
   }
 
-  async invoke(actor: ToolActor, request: InvokeRequest): Promise<InvokeResult> {
+  /** Occupied concurrency slots, including children that have not yet exited. */
+  inFlightCount(): number {
+    return this.inFlight;
+  }
+
+  async invoke(actor: ToolActor, request: InvokeRequest, options: InvokeOptions = {}): Promise<InvokeResult> {
     this.assertAccepting();
     this.assertActor(actor);
     if (!isPlainObject(request.arguments) || !request.toolId?.trim()) {
       throw new IncompleteToolCallError();
+    }
+    const argBytes = Buffer.byteLength(JSON.stringify(request.arguments));
+    if (argBytes > this.limits.maxToolArgBytes) {
+      throw new ToolError('payload_too_large', 'Fail-closed: tool arguments exceed the configured limit.', false);
     }
     const definition = this.lookupTool(request.toolId, request.pluginId);
     const argumentHash = sha256Stable(request.arguments);
@@ -127,17 +148,95 @@ export class ToolEngine {
       if (existing) return this.reuse(existing);
     }
 
+    if (needsApproval(definition)) {
+      return this.withApprovalMutex(actor.tenantId, () =>
+        this.invokeNew(actor, request, definition, argumentHash, idempotencyKey, options.signal),
+      );
+    }
+    return this.invokeNew(actor, request, definition, argumentHash, idempotencyKey, options.signal);
+  }
+
+  listCallable(actor: ToolActor): CallableToolDefinition[] {
+    this.assertActor(actor);
+    const out: CallableToolDefinition[] = [];
+    for (const definition of this.options.registry.list()) {
+      if (definition.pluginId) {
+        const enabled = this.options.pluginEnabled?.(definition.pluginId) ?? true;
+        if (!enabled) continue;
+      }
+      const allowed = definition.requiredCapabilities.every((capability) => {
+        const verdict = this.options.authority.decide({
+          principal: {
+            principalId: actor.principalId,
+            kind: 'user',
+            tenantId: actor.tenantId,
+            workspaceId: actor.workspaceId ?? null,
+          },
+          capability,
+          resource: {
+            type: 'tool',
+            id: definition.id,
+            tenantId: actor.tenantId,
+            workspaceId: actor.workspaceId ?? null,
+          },
+          fromPlugin: Boolean(definition.pluginId),
+        });
+        return verdict.decision === 'ALLOW';
+      });
+      if (!allowed) continue;
+      out.push({
+        id: definition.id,
+        description: definition.description,
+        inputSchema: definition.inputSchema,
+      });
+    }
+    return out;
+  }
+
+  private async invokeNew(
+    actor: ToolActor,
+    request: InvokeRequest,
+    definition: ToolDefinition,
+    argumentHash: string,
+    idempotencyKey: string | null,
+    signal?: AbortSignal,
+  ): Promise<InvokeResult> {
+    this.assertNotAborted(signal);
+    if (needsApproval(definition)) {
+      const pending = await this.countActivePendingApprovals(actor.tenantId);
+      if (pending >= this.limits.maxPendingApprovals) {
+        throw new ToolError('rate_limit', 'Fail-closed: pending approval ceiling reached.', true);
+      }
+    }
+
     let invocation = await this.createProposed(actor, request, definition, argumentHash, idempotencyKey);
-    invocation = await this.validate(invocation, definition);
-    invocation = await this.authorise(actor, invocation, definition);
-    if (invocation.status === 'failed' || invocation.status === 'denied' || invocation.status === 'cancelled') {
-      return { invocation, provenance: this.provenance(invocation) };
+    try {
+      this.assertNotAborted(signal);
+      invocation = await this.validate(invocation, definition);
+      this.assertNotAborted(signal);
+      invocation = await this.authorise(actor, invocation, definition);
+      if (invocation.status === 'failed' || invocation.status === 'denied' || invocation.status === 'cancelled') {
+        return { invocation, provenance: this.provenance(invocation) };
+      }
+      if (needsApproval(definition) && invocation.status === 'authorised') {
+        const pending = await this.countActivePendingApprovals(actor.tenantId);
+        if (pending >= this.limits.maxPendingApprovals) {
+          const failed = await this.transition(invocation, 'failed', {
+            failureReason: failure('rate_limit', 'Fail-closed: pending approval ceiling reached.', true),
+          });
+          invocation = failed;
+          throw new ToolError('rate_limit', 'Fail-closed: pending approval ceiling reached.', true);
+        }
+        invocation = await this.suspendForApproval(invocation);
+        return { invocation, provenance: this.provenance(invocation) };
+      }
+      return this.executeAuthorised(actor, invocation, definition, signal);
+    } catch (err) {
+      if (isAbortError(err) && !isTerminalToolStatus(invocation.status)) {
+        return this.terminaliseAbort(invocation, definition);
+      }
+      throw err;
     }
-    if (needsApproval(definition) && invocation.status === 'authorised') {
-      invocation = await this.suspendForApproval(invocation);
-      return { invocation, provenance: this.provenance(invocation) };
-    }
-    return this.executeAuthorised(actor, invocation, definition);
   }
 
   async approve(actor: ToolActor, invocationId: string, decision: 'approved' | 'denied', reason?: string): Promise<InvokeResult> {
@@ -271,6 +370,7 @@ export class ToolEngine {
   }
 
   async reconcile(): Promise<ToolInvocation[]> {
+    const out: ToolInvocation[] = await this.expireStaleApprovals(null);
     const pending = await this.options.invocations.listByStatus(null, [
       'proposed',
       'validated',
@@ -278,7 +378,6 @@ export class ToolEngine {
       'queued',
       'running',
     ]);
-    const out: ToolInvocation[] = [];
     for (const invocation of pending) {
       if (invocation.status === 'running') {
         if (invocation.sideEffectClass === 'uncertain_external') {
@@ -315,10 +414,12 @@ export class ToolEngine {
     actor: ToolActor,
     invocation: ToolInvocation,
     definition: ToolDefinition,
+    signal?: AbortSignal,
   ): Promise<InvokeResult> {
     if (this.inFlight >= this.limits.maxToolConcurrency) {
       throw new ToolError('tool_concurrency', 'Fail-closed: tool concurrency ceiling reached.', true);
     }
+    this.assertTenantQuota(actor.tenantId);
     const adapter = this.adapters.get(definition.adapter);
     if (!adapter) {
       const failed = await this.transition(invocation, 'failed', {
@@ -326,18 +427,33 @@ export class ToolEngine {
       });
       return { invocation: failed, provenance: this.provenance(failed) };
     }
+    if (signal?.aborted) {
+      return this.terminaliseAbort(invocation, definition);
+    }
     let current = invocation.status === 'queued' ? invocation : await this.transition(invocation, 'queued');
+    if (signal?.aborted) {
+      return this.terminaliseAbort(current, definition);
+    }
     const attemptId = `tat_${randomUUID()}`;
     current = await this.transition(
       { ...current, attemptId, attemptCount: current.attemptCount + 1 },
       'running',
     );
     const controller = new AbortController();
+    const unlinkParent = linkAbort(signal, controller);
     this.controllers.set(current.id, controller);
     this.inFlight += 1;
-    const timeout = setTimeout(() => controller.abort(), definition.timeoutMs);
+    const timeoutMs = effectiveToolTimeoutMs(definition, this.limits);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    let childOwnsOccupancy = false;
+    let occupancyReleased = false;
+    const releaseOccupancy = (): void => {
+      if (occupancyReleased) return;
+      occupancyReleased = true;
+      this.inFlight -= 1;
+    };
     try {
-      const result = await adapter.execute(current.arguments, {
+      const executePromise = adapter.execute(current.arguments, {
         actor,
         invocation: current,
         definition,
@@ -350,9 +466,16 @@ export class ToolEngine {
         recordEffect: (key, value) => this.recordEffect(actor.tenantId, key, value, current),
         lookupEffect: async () => null,
       });
-      if (controller.signal.aborted && !current.cancelConfirmed) {
-        throw new ToolCancelUnconfirmedError();
+      childOwnsOccupancy = true;
+      void executePromise.then(releaseOccupancy, releaseOccupancy);
+      const raced = await awaitOrAbort(executePromise, controller.signal);
+      if (raced.status === 'aborted' || controller.signal.aborted) {
+        if (signal?.aborted) {
+          return this.terminaliseAbort(current, definition);
+        }
+        return this.terminaliseTimeout(current, definition);
       }
+      const result = raced.value;
       const succeeded = await this.transition(current, 'succeeded', {
         resultRef: result.resultRef ?? `toolres:${current.id}`,
         artefactIds: result.artefactIds ?? [],
@@ -371,12 +494,11 @@ export class ToolEngine {
         });
         return { invocation: uncertain, provenance: this.provenance(uncertain) };
       }
-      if (err instanceof ToolCancelUnconfirmedError) {
-        const running = await this.options.invocations.save(
-          { ...current, cancelRequested: true, cancelConfirmed: false, updatedAt: this.clock() },
-          ['running'],
-        );
-        return { invocation: running, provenance: this.provenance(running) };
+      if (err instanceof ToolCancelUnconfirmedError || isAbortError(err) || controller.signal.aborted) {
+        if (signal?.aborted) {
+          return this.terminaliseAbort(current, definition);
+        }
+        return this.terminaliseTimeout(current, definition);
       }
       const message = err instanceof Error ? err.message : String(err);
       const failed = await this.transition(current, 'failed', {
@@ -384,10 +506,90 @@ export class ToolEngine {
       });
       return { invocation: failed, provenance: this.provenance(failed) };
     } finally {
+      unlinkParent();
       clearTimeout(timeout);
       this.controllers.delete(current.id);
-      this.inFlight -= 1;
+      if (!childOwnsOccupancy) releaseOccupancy();
     }
+  }
+
+  private async terminaliseAbort(
+    invocation: ToolInvocation,
+    definition: ToolDefinition,
+  ): Promise<InvokeResult> {
+    if (isTerminalToolStatus(invocation.status)) {
+      return { invocation, provenance: this.provenance(invocation) };
+    }
+    if (isMutatingRunning(definition, invocation)) {
+      const uncertain = await this.transition(invocation, 'uncertain', {
+        cancelRequested: true,
+        cancelConfirmed: false,
+        failureReason: failure(
+          'interrupted_uncertain',
+          'Cancellation interrupted a mutating tool; completion is uncertain and requires reconciliation.',
+          false,
+        ),
+      });
+      return { invocation: uncertain, provenance: this.provenance(uncertain) };
+    }
+    const cancelled = await this.transition(invocation, 'cancelled', {
+      cancelRequested: true,
+      cancelConfirmed: true,
+      failureReason: failure('cancelled', 'Invocation cancelled.', false),
+    });
+    return { invocation: cancelled, provenance: this.provenance(cancelled) };
+  }
+
+  private async terminaliseTimeout(
+    invocation: ToolInvocation,
+    definition: ToolDefinition,
+  ): Promise<InvokeResult> {
+    if (isTerminalToolStatus(invocation.status)) {
+      return { invocation, provenance: this.provenance(invocation) };
+    }
+    if (isMutatingRunning(definition, invocation)) {
+      const uncertain = await this.transition(invocation, 'uncertain', {
+        failureReason: failure(
+          'interrupted_uncertain',
+          'Tool execution timed out during a mutating side effect; completion is uncertain and requires reconciliation.',
+          false,
+        ),
+      });
+      return { invocation: uncertain, provenance: this.provenance(uncertain) };
+    }
+    const timedOut = await this.transition(invocation, 'failed', {
+      failureReason: failure('timeout', 'Tool execution timed out.', false),
+    });
+    return { invocation: timedOut, provenance: this.provenance(timedOut) };
+  }
+
+  private async countActivePendingApprovals(tenantId: string): Promise<number> {
+    await this.expireStaleApprovals(tenantId);
+    const pending = await this.options.invocations.listByStatus(tenantId, ['awaiting_approval']);
+    return pending.length;
+  }
+
+  private async expireStaleApprovals(tenantId: string | null): Promise<ToolInvocation[]> {
+    const pending = await this.options.invocations.listByStatus(tenantId, ['awaiting_approval']);
+    const expired: ToolInvocation[] = [];
+    const now = Date.now();
+    for (const invocation of pending) {
+      const approval = await this.options.approvals.getByInvocation(invocation.tenantId, invocation.id);
+      if (!approval?.expiresAt) continue;
+      const expiresAt = Date.parse(approval.expiresAt);
+      if (!Number.isFinite(expiresAt) || expiresAt > now) continue;
+      if (isTerminalToolStatus(invocation.status)) continue;
+      expired.push(
+        await this.transition(invocation, 'denied', {
+          failureReason: failure('approval_expired', 'Approval expired.', false),
+        }),
+      );
+    }
+    return expired;
+  }
+
+  private assertNotAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) throw createAbortError();
   }
 
   private async recordEffect(
@@ -628,6 +830,41 @@ export class ToolEngine {
   private assertAccepting(): void {
     if (!this.accepting) throw new ToolError('shutting_down', 'Process is shutting down; new tool work is not accepted.', true);
   }
+
+  private assertTenantQuota(tenantId: string): void {
+    const quota = this.limits.perTenantToolInvocationsPerMinute;
+    const now = Date.now();
+    const hits = (this.quotaHits.get(tenantId) ?? []).filter((ts) => now - ts < 60_000);
+    if (hits.length >= quota) {
+      throw new ToolError('rate_limit', 'Fail-closed: tenant tool invocation quota exceeded.', true);
+    }
+    hits.push(now);
+    this.quotaHits.set(tenantId, hits);
+  }
+
+  private async withApprovalMutex<T>(tenantId: string, fn: () => Promise<T>): Promise<T> {
+    const prior = this.approvalMutex.get(tenantId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.approvalMutex.set(
+      tenantId,
+      prior.then(
+        () => gate,
+        () => gate,
+      ),
+    );
+    await prior.then(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
 }
 
 export function presentTool(
@@ -707,6 +944,18 @@ function resourceFromArguments(args: Record<string, unknown>): string | null {
   return null;
 }
 
+function isMutatingRunning(definition: ToolDefinition, invocation: ToolInvocation): boolean {
+  return definition.sideEffectClass !== 'none' && invocation.status === 'running';
+}
+
+/**
+ * Catalogue timeouts are an upper bound per tool. ATLAS_TOOL_TIMEOUT_MS is a
+ * process ceiling: it may shorten a definition, never lengthen one.
+ */
+export function effectiveToolTimeoutMs(definition: Pick<ToolDefinition, 'timeoutMs'>, limits: Pick<OperationalLimits, 'defaultToolTimeoutMs'>): number {
+  return Math.min(definition.timeoutMs, limits.defaultToolTimeoutMs);
+}
+
 function needsApproval(definition: ToolDefinition): boolean {
   if (definition.approvalPolicy === 'required') return true;
   if (definition.approvalPolicy === 'required_if_external') {
@@ -725,4 +974,51 @@ function failure(code: string, message: string, retryable: boolean) {
 
 export function hashOpaque(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function linkAbort(parent: AbortSignal | undefined, child: AbortController): () => void {
+  if (!parent) return () => undefined;
+  if (parent.aborted) {
+    child.abort();
+    return () => undefined;
+  }
+  const onAbort = () => child.abort();
+  parent.addEventListener('abort', onAbort, { once: true });
+  return () => parent.removeEventListener('abort', onAbort);
+}
+
+/**
+ * Bound an adapter promise against AbortSignal so a non-settling execute()
+ * cannot strand ToolEngine.invoke. The adapter may keep running; callers must
+ * record a terminal invocation state before returning.
+ */
+function awaitOrAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<{ status: 'fulfilled'; value: T } | { status: 'aborted' }> {
+  void promise.then(
+    () => undefined,
+    () => undefined,
+  );
+  if (signal.aborted) return Promise.resolve({ status: 'aborted' });
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (result: { status: 'fulfilled'; value: T } | { status: 'aborted' }) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      resolve(result);
+    };
+    const onAbort = () => finish({ status: 'aborted' });
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => finish({ status: 'fulfilled', value }),
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
 }

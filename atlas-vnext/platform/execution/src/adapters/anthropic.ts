@@ -5,6 +5,7 @@ import type { SecretStore } from '../secrets.ts';
 import { parseSse } from '../stream-parse.ts';
 import { AnthropicToolCallAssembler } from '../tool-call-buffer.ts';
 import { readAllText, type HttpTransport } from '../transport.ts';
+import { anthropicMessagesFrom, anthropicToolsFrom, knownProviderToolIds, remapProviderToolChunks } from '../tool-transcript.ts';
 import type { ExecutionContext, ProviderAdapter } from '../types.ts';
 
 export class AnthropicAdapter implements ProviderAdapter {
@@ -31,15 +32,10 @@ export class AnthropicAdapter implements ProviderAdapter {
       max_tokens: 4096,
       stream: true,
       system: context.systemPrompt,
-      messages: [{ role: 'user', content: context.prompt }],
+      messages: anthropicMessagesFrom(context),
     };
-    if (context.tools?.length) {
-      body.tools = context.tools.map((tool) => ({
-        name: tool.id,
-        description: tool.description,
-        input_schema: tool.inputSchema,
-      }));
-    }
+    const toolDeclarations = anthropicToolsFrom(context);
+    if (toolDeclarations) body.tools = toolDeclarations;
     let response;
     try {
       response = await this.options.transport.send({
@@ -94,7 +90,7 @@ export class AnthropicAdapter implements ProviderAdapter {
         tools.ingestDelta(parsed.index ?? 0, parsed.delta);
       }
       if (type === 'content_block_stop') {
-        yield* tools.finishBlock(parsed.index ?? 0, this.providerId);
+        yield* remapProviderToolChunks(tools.finishBlock(parsed.index ?? 0, this.providerId), knownProviderToolIds(context));
       }
       if (type === 'message_start' && parsed.message?.usage) {
         inputTokens = parsed.message.usage.input_tokens;
@@ -104,7 +100,7 @@ export class AnthropicAdapter implements ProviderAdapter {
         if (parsed.usage.input_tokens != null) inputTokens = parsed.usage.input_tokens;
       }
     }
-    yield* tools.finish(this.providerId);
+    yield* remapProviderToolChunks(tools.finish(this.providerId), knownProviderToolIds(context));
     const usage = usageFromCounts(inputTokens, outputTokens);
     if (usage) yield { type: 'usage', usage };
   }

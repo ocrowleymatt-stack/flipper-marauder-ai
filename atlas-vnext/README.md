@@ -32,6 +32,7 @@ Default runtime is **live** adapters. Missing keys mark that provider unavailabl
 - Projects/files/CAS/context foundation (`docs/FILES-AND-CONTEXT.md`)
 - Workbench UI (`apps/web`) over host HTTP/SSE (`apps/host`) — session, projects, runs, files, tools, Authority approval (`docs/WORKBENCH.md`)
 - Caspa Writing dungeon (`dungeons/writing`) — durable documents, versions, selected-file context (`docs/CASPA-WRITING.md`)
+- Production-readiness gate (`docs/PRODUCTION.md`, `docs/RUNBOOKS.md`) — config contract, health, limits, failure drills, GO/NO-GO. Cutover is human-gated.
 - Import-graph architecture tests
 
 ## What this does not ship
@@ -52,6 +53,9 @@ npm run test:persistence
 npm run test:files
 npm run test:tools
 npm run test:caspa
+npm run test:production
+npm run config:validate
+npm run advisories:classify
 npm run test:runtime
 npm run test:compat
 npm run build

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { AuthenticationError } from '@atlas-vnext/auth';
-import { CASPA_WRITING_DUNGEON, WritingError, WritingService, type WritingActor } from '@atlas-vnext/dungeon-writing';
-import { DEFAULT_OPERATIONAL_LIMITS, writingOperationSchema } from '@atlas-vnext/contracts';
+import { WritingError, WritingService, type WritingActor } from '@atlas-vnext/dungeon-writing';
+import { DEFAULT_OPERATIONAL_LIMITS, writingOperationSchema, type DungeonRegistration } from '@atlas-vnext/contracts';
 import { CasMissingError, FilesAccessError } from '@atlas-vnext/files';
 import { ConflictError, OwnershipError, PersistenceClosedError, PersistenceUnavailableError, isPersistenceConnectionLoss } from '@atlas-vnext/persistence';
 import { AuthorityDeniedError } from '@atlas-vnext/permissions';
@@ -11,12 +11,14 @@ import { normalizeContextFileIds, type ResourceGuard } from './limits.ts';
 import type { TimeoutContract } from './production-config.ts';
 import { acquireRunAndStreamPermits, pipeSse } from './sse.ts';
 import { resolveActor, type WorkbenchHostOptions } from './workbench.ts';
+import { dungeonCatalogue } from './dungeon-catalogue.ts';
 
 export interface CaspaHostOptions extends WorkbenchHostOptions {
   writing?: WritingService | null;
   resources?: ResourceGuard;
   timeouts?: TimeoutContract;
   allowedOrigins?: string[];
+  dungeons?: DungeonRegistration[];
 }
 
 export async function handleCaspa(
@@ -32,7 +34,7 @@ export async function handleCaspa(
       json(res, 401, { error: 'Authentication required.' });
       return true;
     }
-    json(res, 200, [CASPA_WRITING_DUNGEON]);
+    json(res, 200, dungeonCatalogue(options.dungeons));
     return true;
   }
 

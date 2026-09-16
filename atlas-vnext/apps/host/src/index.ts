@@ -4,7 +4,7 @@ export { bootSpine, withStartupDeadline, StartupTimeoutError } from './startup.t
 export { createHost, listen, applyInboundHttpTimeouts } from './server.ts';
 export type { HostOptions } from './server.ts';
 export { resolveActor } from './workbench.ts';
-export { DEV_CATALOGUE, MODEL_CATALOGUE } from './catalogue.ts';
+export { dungeonCatalogue } from './dungeon-catalogue.ts';
 export { readOperationalLimits, readiness, ShutdownController, SECURITY_HEADERS, securityHeaders } from './ops.ts';
 export {
   readProductionHostConfig,

@@ -229,52 +229,6 @@ export const provenanceRecordSchema = z.object({
 });
 export type ProvenanceRecord = z.infer<typeof provenanceRecordSchema>;
 
-export const dungeonIdSchema = z.enum([
-  'writing',
-  'investigation',
-  'research',
-  'website',
-  'osint',
-  'music',
-]);
-export type DungeonId = z.infer<typeof dungeonIdSchema>;
-
-export const osintTargetKindSchema = z.enum([
-  'person',
-  'username',
-  'email',
-  'domain',
-  'ip',
-  'organisation',
-  'other',
-]);
-export type OsintTargetKind = z.infer<typeof osintTargetKindSchema>;
-
-export const osintConfidenceSchema = z.enum(['confirmed', 'likely', 'possible']);
-export type OsintConfidence = z.infer<typeof osintConfidenceSchema>;
-
-export const osintTargetSchema = z.object({
-  id: z.string(),
-  kind: osintTargetKindSchema,
-  value: z.string().min(1),
-  projectId: z.string(),
-});
-export type OsintTarget = z.infer<typeof osintTargetSchema>;
-
-export const osintFindingSchema = z.object({
-  id: z.string(),
-  targetId: z.string(),
-  jobId: z.string(),
-  confidence: osintConfidenceSchema,
-  source: z.string(),
-  summary: z.string(),
-  evidenceBlobHash: z.string().length(64).nullable(),
-  provenance: z.array(z.string()),
-  timestamp: z.string(),
-  error: structuredFailureSchema.nullable(),
-});
-export type OsintFinding = z.infer<typeof osintFindingSchema>;
-
 export const bookProjectPartSchema = z.enum([
   'manuscript',
   'chapters',
@@ -531,6 +485,9 @@ export const conversationSnapshotSchema = z.object({
 });
 export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema>;
 
+export * from './dungeon-ids.ts';
 export * from './mountain-compat.ts';
 export * from './tools-auth.ts';
 export * from './writing.ts';
+export * from './privacy.ts';
+export * from './estate.ts';

@@ -26,8 +26,8 @@ describe('schema bootstrap and migrations', () => {
     const versions = await second.kernel.tx.query<{ version: number }>(
       'SELECT version FROM schema_migrations ORDER BY version',
     );
-    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
-    expect(CURRENT_SCHEMA_VERSION).toBe(7);
+    expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(CURRENT_SCHEMA_VERSION).toBe(8);
     const tenant = await second.kernel.tx.query('SELECT id FROM tenants WHERE id = $1', ['tenant_a']);
     expect(tenant.rows).toHaveLength(1);
     const artefact = await second.kernel.tx.query('SELECT COUNT(*)::int AS n FROM artefact_metadata');
@@ -113,7 +113,7 @@ describe('schema bootstrap and migrations', () => {
       await client.query(`SET search_path TO ${assertIdent(handle.schema)}`);
       const again = await migrate(client, loadMigrations());
       expect(again.applied).toEqual([]);
-      expect(again.skipped).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(again.skipped).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     } finally {
       client.release();
     }
@@ -133,7 +133,7 @@ describe('schema bootstrap and migrations', () => {
       await client.query(`SET search_path TO ${assertIdent(handle.schema)}`);
       await expect(migrate(client, loadMigrations(dir))).rejects.toThrow(/Migration 8/);
       const versions = await client.query('SELECT version FROM schema_migrations ORDER BY version');
-      expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
       const tenant = await client.query('SELECT id FROM tenants WHERE id = $1', ['tenant_a']);
       expect(tenant.rows).toHaveLength(1);
     } finally {
@@ -171,7 +171,7 @@ describe('schema bootstrap and migrations', () => {
       await client.query(`SET search_path TO ${assertIdent(handle.schema)}`);
       await expect(migrate(client, loadMigrations(dir))).rejects.toThrow(/Migration 8/);
       const versions = await client.query('SELECT version FROM schema_migrations ORDER BY version');
-      expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(versions.rows.map((row) => Number(row.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
       const probe = await client.query(
         `SELECT EXISTS (
            SELECT 1 FROM information_schema.tables

@@ -27,6 +27,7 @@ import { createAuthStores } from './auth.ts';
 import { createToolStores, recoverToolInvocations } from './tools.ts';
 import { createSiteStores } from './sites.ts';
 import { createDocumentStore } from './documents.ts';
+import { createDungeonRecordStore, createPrivacyStore } from './dungeon-records.ts';
 import { mapArtefact, mapExecution, mapLease, sqlRow, type ExecutionRow } from './mappers.ts';
 import { CURRENT_SCHEMA_VERSION, ensureSchema, loadMigrations, migrate } from './migrate.ts';
 import { PgTx, createPool, isTransientDbError } from './tx.ts';
@@ -91,6 +92,8 @@ export class PostgresPersistence implements PlatformPersistence {
       toolInvocations: toolStores.invocations,
       toolApprovals: toolStores.approvals,
       documents: createDocumentStore(this.tx, this.clock),
+      dungeonRecords: createDungeonRecordStore(this.tx, this.clock),
+      privacy: createPrivacyStore(this.tx, this.clock),
     };
   }
 

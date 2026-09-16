@@ -27,6 +27,8 @@ export function writingOperationInstruction(operation: WritingOperation, instruc
     continue: 'Continue the current document as a revision, not as a chat reply.',
     transform: 'Transform the current document according to the instruction.',
     restore: 'Restore the selected prior revision as a new version.',
+    edit: 'Commit the supplied editor text as a new user-authored revision.',
+    outline: 'Produce a structured outline for the current document or instruction.',
   };
   return `${verbs[operation]}\n\nUser instruction:\n${instruction.trim()}`;
 }
@@ -76,6 +78,7 @@ export function writingRouteRequirements(input: {
     input.operation === 'correct' ||
     input.operation === 'transform' ||
     input.operation === 'create' ||
+    input.operation === 'outline' ||
     longContext;
   const privacy = input.privacy ?? 'any';
   const latency = input.operation === 'shorten' || input.operation === 'tone' ? 'fast' : 'medium';

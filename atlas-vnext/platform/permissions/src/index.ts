@@ -58,3 +58,5 @@ export type { AuthorityGate } from './behaviour.ts';
 export type { PermissionGate } from './gate-types.ts';
 export { AuthorityDeniedError, AuthorityEngine } from './authority.ts';
 export type { AuthorityGrant, AuthorityPrincipal, AuthorityRequest } from './authority.ts';
+export { EffectivePolicyEngine } from './policy.ts';
+export type { PolicyDecision } from './policy.ts';

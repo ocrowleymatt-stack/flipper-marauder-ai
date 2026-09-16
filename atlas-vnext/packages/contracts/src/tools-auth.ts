@@ -69,6 +69,8 @@ export const resourceTypeSchema = z.enum([
   'job',
   'invocation',
   'secret',
+  'policy',
+  'dungeon',
 ]);
 export type ResourceType = z.infer<typeof resourceTypeSchema>;
 
@@ -94,6 +96,9 @@ export const authorityDenialCodeSchema = z.enum([
   'cross_tenant',
   'session_revoked',
   'fail_closed',
+  'owner_only',
+  'policy_denied',
+  'step_up_required',
 ]);
 export type AuthorityDenialCode = z.infer<typeof authorityDenialCodeSchema>;
 

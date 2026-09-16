@@ -15,7 +15,7 @@ export interface MigrationFile {
   checksum: string;
 }
 
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 /**
  * Session-level lock shared by every Atlas process on this database.

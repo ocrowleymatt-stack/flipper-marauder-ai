@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { GeneratedOutputLimitError, type ConversationRuntime } from '@atlas-vnext/conversation';
-import type { ProviderHealth } from '@atlas-vnext/contracts';
+import type { DungeonRegistration, ProviderHealth } from '@atlas-vnext/contracts';
 import { sanitizeText, type RuntimeSnapshot } from '@atlas-vnext/execution';
 import type { AuthService } from '@atlas-vnext/auth';
 import { CsrfError, OriginError, AuthenticationError } from '@atlas-vnext/auth';
@@ -79,6 +79,7 @@ export interface HostOptions {
   context?: ContextService | null;
   persistence?: PlatformPersistence | null;
   writing?: WritingService | null;
+  dungeons?: DungeonRegistration[];
   tenantId?: string;
   principalId?: string;
   production?: boolean;

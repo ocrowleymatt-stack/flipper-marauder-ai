@@ -21,6 +21,7 @@ import { assertActor, sameWorkspace, type PersistenceActor } from '../actor.ts';
 import { createMemoryFileStores } from './files.ts';
 import { createMemorySiteStores } from './sites.ts';
 import { createMemoryDocumentStore } from './documents.ts';
+import { createMemoryDungeonStores } from './dungeon-records.ts';
 import { OwnershipError, PersistenceClosedError, ConflictError } from '../errors.ts';
 import type {
   ActorBoundPersistence,
@@ -81,6 +82,7 @@ export class MemoryPersistence implements PlatformPersistence {
   private readonly toolInvocations = new MemoryToolInvocationStore();
   private readonly toolApprovals = new MemoryToolApprovalStore();
   private readonly documentStore = createMemoryDocumentStore(() => this.clock());
+  private readonly dungeonStores = createMemoryDungeonStores(() => this.clock());
 
   constructor(private readonly clock: () => string = () => new Date().toISOString()) {
     this.jobs = createJobEngine({
@@ -138,6 +140,8 @@ export class MemoryPersistence implements PlatformPersistence {
       toolInvocations: this.toolInvocations,
       toolApprovals: this.toolApprovals,
       documents: this.documentStore,
+      dungeonRecords: this.dungeonStores.dungeonRecords,
+      privacy: this.dungeonStores.privacy,
     };
   }
 

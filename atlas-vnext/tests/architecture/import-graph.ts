@@ -81,6 +81,7 @@ const DUNGEON_PACKAGES: Record<string, string> = {
   '@atlas-vnext/dungeon-website': 'website',
   '@atlas-vnext/dungeon-osint': 'osint',
   '@atlas-vnext/dungeon-music': 'music',
+  '@atlas-vnext/dungeon-privacy': 'privacy',
 };
 
 const TRANSPORT_MODULES = new Set([

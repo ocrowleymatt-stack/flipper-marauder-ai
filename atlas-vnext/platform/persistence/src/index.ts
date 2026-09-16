@@ -56,6 +56,14 @@ export type {
   SiteStore,
 } from './site-types.ts';
 export type { DocumentRecord, DocumentStatus, DocumentStore, DocumentVersionRecord } from './document-types.ts';
+export type {
+  DungeonRecordRow,
+  DungeonRecordStore,
+  PrivacyAuditRow,
+  PrivacyPolicyRow,
+  PrivacyProposalRow,
+  PrivacyStore,
+} from './dungeon-types.ts';
 export { openPlatformPersistence } from './open.ts';
 export { openMemoryPersistence, MemoryPersistence } from './memory/kernel.ts';
 export { openPostgresPersistence, PostgresPersistence } from './postgres/kernel.ts';

@@ -29,6 +29,7 @@ import type { DocumentStore } from './document-types.ts';
 import type { SiteStore } from './site-types.ts';
 import type { DirectoryStore, SessionStore } from '@atlas-vnext/auth';
 import type { ToolApprovalStore, ToolInvocationStore } from '@atlas-vnext/tools';
+import type { DungeonRecordStore, PrivacyStore } from './dungeon-types.ts';
 
 export type {
   AttachmentRecord,
@@ -218,6 +219,8 @@ export interface ActorBoundPersistence {
   toolInvocations: ToolInvocationStore;
   toolApprovals: ToolApprovalStore;
   documents: DocumentStore;
+  dungeonRecords: DungeonRecordStore;
+  privacy: PrivacyStore;
 }
 
 export interface RestartRecoveryResult {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { dungeonIdSchema } from './dungeon-ids.ts';
 
 export const writingOperationSchema = z.enum([
   'create',
@@ -11,6 +12,8 @@ export const writingOperationSchema = z.enum([
   'continue',
   'transform',
   'restore',
+  'edit',
+  'outline',
 ]);
 export type WritingOperation = z.infer<typeof writingOperationSchema>;
 
@@ -67,26 +70,20 @@ export const writingRouteRequirementsSchema = z.object({
 export type WritingRouteRequirements = z.infer<typeof writingRouteRequirementsSchema>;
 
 export const dungeonRegistrationSchema = z.object({
-  id: z.literal('writing'),
-  slug: z.literal('caspa'),
+  id: dungeonIdSchema,
+  slug: z.string().min(1),
   title: z.string().min(1),
   navLabel: z.string().min(1),
   description: z.string().min(1),
-  surface: z.literal('caspa-writing'),
-  routes: z.object({
-    list: z.string().min(1),
-    item: z.string().min(1),
-    generate: z.string().min(1),
-    versions: z.string().min(1),
-    restore: z.string().min(1),
-    provenance: z.string().min(1),
-  }),
+  surface: z.string().min(1),
+  routes: z.record(z.string(), z.string().min(1)),
   capabilities: z.array(z.string().min(1)).min(1),
   permissions: z.object({
     read: z.string().min(1),
     write: z.string().min(1),
   }),
   featureAvailable: z.boolean(),
+  ownerOnly: z.boolean().optional(),
 });
 export type DungeonRegistration = z.infer<typeof dungeonRegistrationSchema>;
 

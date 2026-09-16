@@ -35,6 +35,9 @@ export const CAPABILITY_SCOPES = [
   'compute.allocate',
   'runtime.use_paid',
   'admin.configure',
+  'privacy.view',
+  'privacy.configure',
+  'privacy.audit',
 ] as const;
 
 export const capabilityScopeSchema = z.enum(CAPABILITY_SCOPES);
@@ -64,6 +67,7 @@ export const DANGEROUS_CAPABILITY_SCOPES: readonly CapabilityScope[] = [
   'compute.allocate',
   'runtime.use_paid',
   'admin.configure',
+  'privacy.configure',
 ];
 
 export const READONLY_TOOL_CAPABILITIES: readonly CapabilityScope[] = [
@@ -75,4 +79,6 @@ export const READONLY_TOOL_CAPABILITIES: readonly CapabilityScope[] = [
   'filesystem.read',
   'browser.read',
   'repo.read',
+  'privacy.view',
+  'privacy.audit',
 ];

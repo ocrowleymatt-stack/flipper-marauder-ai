@@ -1,6 +1,7 @@
 export type AtlasCue = 'activate' | 'complete' | 'approval' | 'tool' | 'warn';
 
 const SOUND_KEY = 'atlas.sound';
+let memoryEnabled = false;
 
 export function prefersReducedMotion(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
@@ -8,12 +9,13 @@ export function prefersReducedMotion(): boolean {
 }
 
 export function soundEnabled(): boolean {
-  if (typeof window === 'undefined') return false;
+  if (typeof window === 'undefined' || !window.localStorage) return memoryEnabled;
   return window.localStorage.getItem(SOUND_KEY) === 'on';
 }
 
 export function setSoundEnabled(enabled: boolean): void {
-  if (typeof window === 'undefined') return;
+  memoryEnabled = enabled;
+  if (typeof window === 'undefined' || !window.localStorage) return;
   window.localStorage.setItem(SOUND_KEY, enabled ? 'on' : 'off');
 }
 

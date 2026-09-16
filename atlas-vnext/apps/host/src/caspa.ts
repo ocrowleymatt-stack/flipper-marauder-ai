@@ -44,8 +44,23 @@ export async function handleCaspa(
   const versionsMatch = pathname.match(/^\/api\/documents\/([^/]+)\/versions$/);
   const restoreMatch = pathname.match(/^\/api\/documents\/([^/]+)\/restore$/);
   const provenanceMatch = pathname.match(/^\/api\/documents\/([^/]+)\/provenance$/);
+  const cancelMatch = pathname.match(/^\/api\/documents\/([^/]+)\/cancel$/);
+  const editMatch = pathname.match(/^\/api\/documents\/([^/]+)\/edit$/);
+  const companionsMatch = pathname.match(/^\/api\/documents\/([^/]+)\/companions$/);
+  const commissionMatch = pathname.match(/^\/api\/documents\/([^/]+)\/commission$/);
 
-  if (!projectDocs && !documentMatch && !generateMatch && !versionsMatch && !restoreMatch && !provenanceMatch) {
+  if (
+    !projectDocs &&
+    !documentMatch &&
+    !generateMatch &&
+    !versionsMatch &&
+    !restoreMatch &&
+    !provenanceMatch &&
+    !cancelMatch &&
+    !editMatch &&
+    !companionsMatch &&
+    !commissionMatch
+  ) {
     return false;
   }
 
@@ -116,6 +131,62 @@ export async function handleCaspa(
         await writing.restore(writingActor, decodeURIComponent(restoreMatch[1]!), {
           version: Number(body.version),
           expectedRevision: Number(body.expectedRevision),
+        }),
+      );
+      return true;
+    }
+    if (req.method === 'POST' && cancelMatch) {
+      json(res, 200, await writing.cancel(writingActor, decodeURIComponent(cancelMatch[1]!)));
+      return true;
+    }
+    if (req.method === 'POST' && editMatch) {
+      const body = await readJson(req, options.maxRequestBytes);
+      json(
+        res,
+        200,
+        await writing.edit(writingActor, decodeURIComponent(editMatch[1]!), {
+          text: typeof body.text === 'string' ? body.text : '',
+          expectedRevision: Number(body.expectedRevision),
+          title: typeof body.title === 'string' ? body.title : undefined,
+        }),
+      );
+      return true;
+    }
+    if (req.method === 'GET' && companionsMatch) {
+      json(res, 200, await writing.listCompanions(writingActor, decodeURIComponent(companionsMatch[1]!)));
+      return true;
+    }
+    if (req.method === 'POST' && companionsMatch) {
+      const body = await readJson(req, options.maxRequestBytes);
+      const kind = body.kind === 'canon' || body.kind === 'claims' || body.kind === 'quality' ? body.kind : 'outline';
+      json(
+        res,
+        201,
+        await writing.saveCompanion(writingActor, decodeURIComponent(companionsMatch[1]!), {
+          kind,
+          title: typeof body.title === 'string' ? body.title : kind,
+          text: typeof body.text === 'string' ? body.text : '',
+        }),
+      );
+      return true;
+    }
+    if (req.method === 'POST' && commissionMatch) {
+      const body = await readJson(req, options.maxRequestBytes);
+      const parsed = writingOperationSchema.safeParse(body.operation ?? 'create');
+      if (!parsed.success) {
+        json(res, 400, { error: 'Malformed writing operation.', code: 'malformed' });
+        return true;
+      }
+      json(
+        res,
+        202,
+        await writing.commission(writingActor, decodeURIComponent(commissionMatch[1]!), {
+          operation: parsed.data,
+          instruction: typeof body.instruction === 'string' ? body.instruction : '',
+          fileIds: normalizeContextFileIds(body.fileIds),
+          expectedRevision: Number(body.expectedRevision),
+          privacy: body.privacy === 'local_only' ? 'local_only' : 'any',
+          tools: body.tools === true,
         }),
       );
       return true;

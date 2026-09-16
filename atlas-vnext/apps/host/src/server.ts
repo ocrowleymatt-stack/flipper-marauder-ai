@@ -50,7 +50,14 @@ import {
   resolveActor,
 } from './workbench.ts';
 import { handleCaspa } from './caspa.ts';
+import { handleEstate } from './estate.ts';
 import type { WritingService } from '@atlas-vnext/dungeon-writing';
+import type { OsintService } from '@atlas-vnext/dungeon-osint';
+import type { InvestigationService } from '@atlas-vnext/dungeon-investigation';
+import type { ResearchService } from '@atlas-vnext/dungeon-research';
+import type { WebsiteStudioService } from '@atlas-vnext/dungeon-website';
+import type { MusicService } from '@atlas-vnext/dungeon-music';
+import type { PrivacyService } from '@atlas-vnext/dungeon-privacy';
 import { PlatformHttpError, GENERIC_DENIED, httpStatusFor, type PlatformErrorCode } from './errors.ts';
 import {
   PlatformRateLimiter,
@@ -79,6 +86,12 @@ export interface HostOptions {
   context?: ContextService | null;
   persistence?: PlatformPersistence | null;
   writing?: WritingService | null;
+  osint?: OsintService | null;
+  investigation?: InvestigationService | null;
+  research?: ResearchService | null;
+  websiteStudio?: WebsiteStudioService | null;
+  music?: MusicService | null;
+  privacy?: PrivacyService | null;
   dungeons?: DungeonRegistration[];
   tenantId?: string;
   principalId?: string;
@@ -214,6 +227,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
 
     if (await handleWorkbench(req, res, options)) return;
     if (await handleCaspa(req, res, options)) return;
+    if (await handleEstate(req, res, options)) return;
 
     const conversationActor = await resolveActor(req, options);
     if (conversationActor) {

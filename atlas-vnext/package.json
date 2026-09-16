@@ -25,6 +25,7 @@
     "test:files": "vitest run platform/storage/tests platform/files/tests platform/context/tests platform/projects/tests",
     "test:tools": "vitest run platform/tools/tests platform/auth/tests platform/permissions/tests platform/plugins/tests platform/secrets/tests",
     "test:caspa": "vitest run dungeons/writing apps/host/tests/caspa.test.ts tests/architecture/caspa.test.ts",
+    "test:estate": "vitest run dungeons apps/host/tests/estate.test.ts apps/host/tests/privacy.test.ts",
     "test:production": "vitest run tests/production apps/host/tests/ops.test.ts platform/flags platform/observability/tests",
     "config:validate": "tsx scripts/validate-config.ts",
     "advisories:classify": "node scripts/classify-advisories.mjs",

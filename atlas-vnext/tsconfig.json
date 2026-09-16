@@ -34,7 +34,13 @@
       "@atlas-vnext/tools": ["./platform/tools/src/index.ts"],
       "@atlas-vnext/plugins": ["./platform/plugins/src/index.ts"],
       "@atlas-vnext/secrets": ["./platform/secrets/src/index.ts"],
-      "@atlas-vnext/dungeon-writing": ["./dungeons/writing/src/index.ts"]
+      "@atlas-vnext/dungeon-writing": ["./dungeons/writing/src/index.ts"],
+      "@atlas-vnext/dungeon-osint": ["./dungeons/osint/src/index.ts"],
+      "@atlas-vnext/dungeon-investigation": ["./dungeons/investigation/src/index.ts"],
+      "@atlas-vnext/dungeon-research": ["./dungeons/research/src/index.ts"],
+      "@atlas-vnext/dungeon-website": ["./dungeons/website/src/index.ts"],
+      "@atlas-vnext/dungeon-music": ["./dungeons/music/src/index.ts"],
+      "@atlas-vnext/dungeon-privacy": ["./dungeons/privacy/src/index.ts"]
     }
   },
   "include": [

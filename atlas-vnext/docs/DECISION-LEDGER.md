@@ -16,3 +16,9 @@ Owner Delegate is the decision authority for this programme. Entries are develop
 | D10 | Stacked PRs; human merge of protected main | Force-push main; one mega-PR | Focused `cursor/vnext-*` PRs, merge order documented | Branch protection; no production cutover | GitHub PR settings | n/a | integration |
 | D11 | Website preview via host, never Nexus | Nexus static server | Host GET preview from CAS/site revisions | Frozen Website Studio split | WEBSITE-STUDIO.md | Reversible | website, host |
 | D12 | Workbench motion/sound are presentation-only | Encode state only in animation | CSS/Web Audio + reduced-motion + captions | A11y; no Nexus/Execution/Authority change | workbench experience | Reversible | apps/web |
+| D13 | Sound default off | Default on | localStorage `atlas.sound`, explicit control | Conservative; critical state stays visual | experience.ts | Reversible | apps/web |
+| D14 | Research empty file selection retrieves project-wide | Empty = no files like Caspa | omit restrictFileIds when none selected | Research specialist workflow needs retrieval | ResearchService.run | Reversible | research |
+| D15 | Combine dungeon HTTP in host `estate.ts` | One router per dungeon file | Single host dispatcher, exclusive dungeon packages | Avoids conflicting compose/server PRs | estate.ts | Reversible | host |
+| D16 | Website promote stays `deployment.promote` | Soft UI confirm only | Authority grant + SiteStore retentionClass published | Frozen Website Studio split | website tests | Reversible | website |
+| D17 | Privacy owner is bootstrap host principal | Separate owner account | `ownerPrincipalId` + 404 generic deny | No OIDC yet; UI hiding is not security | privacy tests | Reversible | privacy |
+| D18 | Stacked product PRs from seams | One mega-PR | caspa → estate → workbench | Focused review; human merge of main | branching | n/a | integration |

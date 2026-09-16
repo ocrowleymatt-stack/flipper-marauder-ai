@@ -89,8 +89,8 @@ Acceptance is a useful durable secure platform-native Writing dungeon E2E, **not
 | Caspa product UI / Shakespeare Gemini studio | **DROPPED** | Workbench mount + Caspa surface, not a Word clone |
 | Parallel writing DBs (Caspa PG + Shakespeare + AM folders + commons literary) | **DROPPED** | one documents table + CAS |
 | GoldPipeline / PlotArchitect / ChapterStructure as copied services | **DROPPED** | behavioural lessons only |
-| StoryBible / claim ledger / stylometry | **DEFERRED** | not required for first-slice E2E |
-| Long-running commission job runner | **DEFERRED** | this slice uses conversation/execution spine |
+| StoryBible / claim ledger / stylometry | **RESTORED** | companion `dungeon_records` (outline/canon/claims/quality) |
+| Long-running commission job runner | **RESTORED** | `writing.commission` uses platform jobs wait/resume |
 | Google Docs-style live collab | **DROPPED** | optimistic concurrency, not OT/CRDT |
 | Embeddings as primary retriever | **DEFERRED** | lexical `platform/context` |
 | Historical Caspa nginx/Authentik/Firebase identity | **SUPERSEDED** | platform auth + Authority |

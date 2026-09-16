@@ -28,7 +28,6 @@ import {
   type PersistenceConfig,
   type PlatformPersistence,
 } from '@atlas-vnext/persistence';
-import { AuthorityEngine } from '@atlas-vnext/permissions';
 import { FilesService } from '@atlas-vnext/files';
 import { ContextService } from '@atlas-vnext/context';
 import { ProjectService } from '@atlas-vnext/projects';
@@ -42,13 +41,21 @@ import {
   ToolRegistry,
 } from '@atlas-vnext/tools';
 import { WritingService } from '@atlas-vnext/dungeon-writing';
+import { OsintService } from '@atlas-vnext/dungeon-osint';
+import { InvestigationService } from '@atlas-vnext/dungeon-investigation';
+import { ResearchService } from '@atlas-vnext/dungeon-research';
+import { WebsiteStudioService } from '@atlas-vnext/dungeon-website';
+import { MusicService } from '@atlas-vnext/dungeon-music';
+import { PrivacyService } from '@atlas-vnext/dungeon-privacy';
 import { EnvFlagStore, type KillSwitchState } from '@atlas-vnext/flags';
+import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import { logPlatform } from '@atlas-vnext/observability';
 import { MODEL_CATALOGUE } from './catalogue.ts';
 import { ShutdownController, readOperationalLimits, type HealthProbe } from './ops.ts';
 import { PlatformRateLimiter, ResourceGuard } from './limits.ts';
 import { readTimeoutContract, type TimeoutContract } from './production-config.ts';
 import { raceStartup, raceStartupCloseable, throwIfStartupAborted } from './startup-deadline.ts';
+import { NodePublicLookup } from './collectors.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
@@ -58,6 +65,12 @@ export interface Spine {
   projects: ProjectService | null;
   context: ContextService | null;
   writing: WritingService | null;
+  osint: OsintService | null;
+  investigation: InvestigationService | null;
+  research: ResearchService | null;
+  websiteStudio: WebsiteStudioService | null;
+  music: MusicService | null;
+  privacy: PrivacyService | null;
   cas: CasStore | null;
   router: NexusRouter;
   registry: NexusRegistry;
@@ -174,6 +187,12 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   let projects: ProjectService | null = null;
   let context: ContextService | null = null;
   let writing: WritingService | null = null;
+  let osint: OsintService | null = null;
+  let investigation: InvestigationService | null = null;
+  let research: ResearchService | null = null;
+  let websiteStudio: WebsiteStudioService | null = null;
+  let music: MusicService | null = null;
+  let privacy: PrivacyService | null = null;
   let cas: CasStore | null = null;
   let runtime: ConversationRuntime;
   const tenantId = persistenceConfig.defaultTenantId ?? (persistenceConfig.production ? '' : 'tenant_local');
@@ -191,6 +210,11 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     'project.write',
     'tool.invoke.readonly',
     'tool.invoke',
+    'network.public',
+    'privacy.view',
+    'privacy.configure',
+    'privacy.audit',
+    'deployment.promote',
   ] as const) {
     authority.grantTo({ principalId, tenantId, capability: cap });
   }
@@ -210,7 +234,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   await directory.putTenantMembership({
     principalId,
     tenantId: tenantId || 'tenant_local',
-    role: 'member',
+    role: 'owner',
     capabilities: [],
     createdAt: new Date().toISOString(),
   });
@@ -280,7 +304,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     await bound.directory.putTenantMembership({
       principalId,
       tenantId,
-      role: 'member',
+      role: 'owner',
       capabilities: [],
       createdAt: new Date().toISOString(),
     });
@@ -332,6 +356,21 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     projects = new ProjectService(persistence);
     context = new ContextService(persistence);
     writing = new WritingService({ persistence, projects, files, context, runtime, authority });
+    const policy = new EffectivePolicyEngine(authority);
+    osint = new OsintService({
+      persistence,
+      projects,
+      files,
+      runtime,
+      authority,
+      policy,
+      collector: new NodePublicLookup(),
+    });
+    investigation = new InvestigationService({ persistence, projects, files, runtime, authority });
+    research = new ResearchService({ persistence, projects, files, context, runtime, authority });
+    websiteStudio = new WebsiteStudioService({ persistence, projects, files, runtime, authority });
+    music = new MusicService({ persistence, projects, files, runtime, authority });
+    privacy = new PrivacyService({ persistence, authority, policy, ownerPrincipalId: principalId });
   } else {
     store = openDurableStore(options.dataPath);
     tools = new ToolEngine({
@@ -403,6 +442,12 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     projects,
     context,
     writing,
+    osint,
+    investigation,
+    research,
+    websiteStudio,
+    music,
+    privacy,
     cas,
     router,
     registry,
@@ -456,6 +501,10 @@ export function grantSideEffects(authority: AuthorityEngine, principalId: string
     'admin.configure',
     'project.write',
     'artifact.write',
+    'deployment.promote',
+    'privacy.view',
+    'privacy.configure',
+    'privacy.audit',
   ] as const) {
     authority.grantTo({ principalId, tenantId, capability: cap });
   }

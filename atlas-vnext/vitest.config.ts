@@ -44,6 +44,12 @@ export default defineConfig({
       '@atlas-vnext/plugins': resolve(root, 'platform/plugins/src/index.ts'),
       '@atlas-vnext/secrets': resolve(root, 'platform/secrets/src/index.ts'),
       '@atlas-vnext/dungeon-writing': resolve(root, 'dungeons/writing/src/index.ts'),
+      '@atlas-vnext/dungeon-osint': resolve(root, 'dungeons/osint/src/index.ts'),
+      '@atlas-vnext/dungeon-investigation': resolve(root, 'dungeons/investigation/src/index.ts'),
+      '@atlas-vnext/dungeon-research': resolve(root, 'dungeons/research/src/index.ts'),
+      '@atlas-vnext/dungeon-website': resolve(root, 'dungeons/website/src/index.ts'),
+      '@atlas-vnext/dungeon-music': resolve(root, 'dungeons/music/src/index.ts'),
+      '@atlas-vnext/dungeon-privacy': resolve(root, 'dungeons/privacy/src/index.ts'),
     },
   },
 });

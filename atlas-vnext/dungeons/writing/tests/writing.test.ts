@@ -681,4 +681,37 @@ describe('Caspa writing service', () => {
     expect(after.draft).toBe(assembled);
     expect(after.status).toBe('candidate');
   });
+
+  it('commits an editor revision, stores companions, and commissions through jobs', async () => {
+    const { writing, actor, project, persistence } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'Commissioned chapter about a copper kettle.' };
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'Chapter' });
+    const edited = await writing.edit(actor, created.id, {
+      text: 'Hand-edited complete draft.',
+      expectedRevision: created.revision,
+    });
+    expect(edited.content).toBe('Hand-edited complete draft.');
+    expect(edited.currentVersion).toBe(1);
+    const companion = await writing.saveCompanion(actor, edited.id, {
+      kind: 'outline',
+      title: 'Outline',
+      text: 'I. Kettle\nII. Steam',
+    });
+    expect(companion.kind).toBe('outline');
+    expect(companion.parentId).toBe(edited.id);
+    const companions = await writing.listCompanions(actor, edited.id);
+    expect(companions).toHaveLength(1);
+    const commissioned = await writing.commission(actor, edited.id, {
+      operation: 'expand',
+      instruction: 'Expand the draft into a short chapter.',
+      expectedRevision: edited.revision,
+    });
+    expect(commissioned.jobId).toMatch(/^job_/);
+    const job = await persistence.forActor(actor).jobs.get(actor, commissioned.jobId);
+    expect(job?.status).toBe('completed');
+    expect(commissioned.document.status).toBe('committed');
+    const cancelled = await writing.cancel(actor, commissioned.document.id);
+    expect(cancelled.id).toBe(commissioned.document.id);
+  });
 });

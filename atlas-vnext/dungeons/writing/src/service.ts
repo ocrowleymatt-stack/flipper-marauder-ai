@@ -155,6 +155,123 @@ export class WritingService {
     });
   }
 
+  async cancel(actor: WritingActor, id: string): Promise<WritingDocument> {
+    const record = await this.requireDocument(actor, id, 'artifact.write');
+    if (record.originatingRunId) {
+      try {
+        await this.deps.runtime.cancel(record.originatingRunId);
+      } catch {
+        // Cancel is idempotent; document seal happens via generate teardown or reconcile.
+      }
+    }
+    return this.present(actor, await this.store(actor).get(actor, id) ?? record);
+  }
+
+  async edit(
+    actor: WritingActor,
+    id: string,
+    input: { text: string; expectedRevision: number; title?: string },
+  ): Promise<WritingDocument> {
+    const record = await this.requireDocument(actor, id, 'artifact.write');
+    if (record.revision !== input.expectedRevision) {
+      throw new WritingError('stale_revision', 'Document was updated; reload and retry.', 409);
+    }
+    const text = input.text.trim();
+    if (!text) throw new WritingError('malformed', 'Edited text is required.');
+    if (input.title?.trim()) {
+      await this.store(actor).update(actor, id, { title: input.title.trim(), expectedRevision: record.revision });
+    }
+    const latest = await this.requireDocument(actor, id, 'artifact.write');
+    return this.commitRevision(actor, latest, {
+      text,
+      operation: 'edit',
+      expectedRevision: latest.revision,
+      executionId: null,
+      fileIds: [],
+    });
+  }
+
+  async saveCompanion(
+    actor: WritingActor,
+    documentId: string,
+    input: { kind: 'outline' | 'canon' | 'claims' | 'quality'; title: string; text: string },
+  ) {
+    const record = await this.requireDocument(actor, documentId, 'artifact.write');
+    const artefact = await this.deps.files.createTextArtefact(actor, {
+      projectId: record.workspaceId,
+      text: input.text,
+      type: `writing.${input.kind}`,
+    });
+    const bound = this.deps.persistence.forActor(actor);
+    const row = await bound.dungeonRecords.create(actor, {
+      workspaceId: record.workspaceId,
+      dungeon: 'writing',
+      kind: input.kind,
+      title: input.title,
+      status: 'completed',
+      payload: { documentId: record.id },
+      artefactId: artefact.id,
+      contentHash: artefact.contentHash,
+      parentId: record.id,
+    });
+    await bound.provenance.record({
+      artefactId: artefact.id,
+      projectId: record.workspaceId,
+      sourceInputs: [record.id, record.currentContentHash ?? record.id],
+      inputManifestHash: null,
+      provider: 'atlas.writing',
+      model: `caspa.${input.kind}`,
+      toolCalls: [],
+      jobId: null,
+      timestamp: new Date().toISOString(),
+      traceId: `writing:${record.id}:${input.kind}:${row.id}`,
+      capability: 'writing',
+    });
+    return row;
+  }
+
+  async listCompanions(actor: WritingActor, documentId: string) {
+    await this.requireDocument(actor, documentId, 'artifact.read');
+    return this.deps.persistence.forActor(actor).dungeonRecords.list(actor, {
+      dungeon: 'writing',
+      parentId: documentId,
+    });
+  }
+
+  async commission(
+    actor: WritingActor,
+    id: string,
+    input: WritingGenerateInput,
+  ): Promise<{ jobId: string; document: WritingDocument }> {
+    const record = await this.requireDocument(actor, id, 'artifact.write');
+    const jobs = this.deps.persistence.forActor(actor).jobs;
+    const job = await jobs.enqueue(actor, {
+      projectId: record.workspaceId,
+      workspaceId: record.workspaceId,
+      dungeon: 'writing',
+      type: 'writing.commission',
+      checkpoint: { documentId: record.id, operation: input.operation },
+      idempotencyKey: `writing:${record.id}:commission:${record.revision}`,
+    });
+    await jobs.waitForRuntime(actor, job.id);
+    const claimed = await jobs.resumeFromRuntime(actor, job.id);
+    try {
+      let presented = await this.present(actor, record);
+      for await (const event of this.generate(actor, id, input)) {
+        if (event.type === 'document') presented = event.document;
+        if (event.type === 'error') {
+          await jobs.fail(actor, claimed.id, event.failure);
+          return { jobId: claimed.id, document: presented };
+        }
+      }
+      await jobs.complete(actor, claimed.id);
+      return { jobId: claimed.id, document: presented };
+    } catch (err) {
+      await jobs.fail(actor, claimed.id, this.failureFrom(err));
+      throw err;
+    }
+  }
+
   async *generate(actor: WritingActor, id: string, input: WritingGenerateInput): AsyncGenerator<WritingStreamEvent> {
     const operation = writingOperationSchema.parse(input.operation);
     const instruction = input.instruction.trim();

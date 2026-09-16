@@ -55,6 +55,12 @@ async function startCaspa(env: Record<string, string | undefined> = {}) {
     context: spine.context,
     persistence: spine.persistence,
     writing: spine.writing,
+    osint: spine.osint,
+    investigation: spine.investigation,
+    research: spine.research,
+    websiteStudio: spine.websiteStudio,
+    music: spine.music,
+    privacy: spine.privacy,
     tenantId: spine.tenantId,
     principalId: spine.principalId,
     flags: spine.flags,
@@ -606,5 +612,63 @@ describe('Caspa writing dungeon host', () => {
     expect(empty.status).toBe(200);
     expect(generateCalls).toBe(1);
     await readSse(empty);
+  });
+
+  it('edits, companions, cancels, and commissions a durable writing job', async () => {
+    const { url } = await startCaspa();
+    const session = await bootstrap(url);
+    const project = (await (
+      await fetch(`${url}/api/projects`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({ name: 'Commission book', dungeon: 'writing' }),
+      })
+    ).json()) as { id: string };
+    const created = (await (
+      await fetch(`${url}/api/projects/${project.id}/documents`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({ title: 'Draft' }),
+      })
+    ).json()) as { id: string; revision: number };
+    const edited = await fetch(`${url}/api/documents/${created.id}/edit`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ text: 'Complete user draft.', expectedRevision: created.revision }),
+    });
+    expect(edited.status).toBe(200);
+    const document = (await edited.json()) as { id: string; revision: number; content: string; currentVersion: number };
+    expect(document.content).toBe('Complete user draft.');
+    expect(document.currentVersion).toBe(1);
+    const companion = await fetch(`${url}/api/documents/${document.id}/companions`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ kind: 'canon', title: 'Canon', text: 'The kettle is copper.' }),
+    });
+    expect(companion.status).toBe(201);
+    const listed = (await (
+      await fetch(`${url}/api/documents/${document.id}/companions`, { headers: { cookie: session.cookie } })
+    ).json()) as Array<{ kind: string }>;
+    expect(listed.some((item) => item.kind === 'canon')).toBe(true);
+    const commissioned = await fetch(`${url}/api/documents/${document.id}/commission`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({
+        operation: 'expand',
+        instruction: 'Expand into a chapter.',
+        expectedRevision: document.revision,
+        fileIds: [],
+      }),
+    });
+    expect(commissioned.status).toBe(202);
+    const body = (await commissioned.json()) as { jobId: string; document: { status: string } };
+    expect(body.jobId).toMatch(/^job_/);
+    expect(body.document.status).toBe('committed');
+    const cancelled = await fetch(`${url}/api/documents/${document.id}/cancel`, {
+      method: 'POST',
+      headers: auth(session),
+      body: '{}',
+    });
+    expect(cancelled.status).toBe(200);
   });
 });

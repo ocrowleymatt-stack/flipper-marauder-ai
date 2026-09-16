@@ -55,4 +55,29 @@ describe('EffectivePolicyEngine', () => {
     const after = engine.parse('tenant_a', null, { ...defaultEffectivePolicy('tenant_a'), repoWrite: true });
     expect(engine.isConsequential(before, after)).toBe(true);
   });
+
+  it('loads stored overlays without widening Authority and scopes model instructions', async () => {
+    const authority = new AuthorityEngine();
+    authority.grantMembership('user_a', 'tenant_a');
+    authority.grantTo({ principalId: 'user_a', tenantId: 'tenant_a', capability: 'artifact.write' });
+    const engine = new EffectivePolicyEngine(authority);
+    const policy = await engine.loadForDungeon('tenant_a', 'research', async (dungeonId) => {
+      if (dungeonId === null) return { payload: { ...defaultEffectivePolicy('tenant_a'), autonomyCeiling: 'suggest' } };
+      return { payload: { ...defaultEffectivePolicy('tenant_a', 'research'), autonomyCeiling: 'act' } };
+    });
+    expect(policy.autonomyCeiling).toBe('suggest');
+    const denied = engine.authorize({
+      principal: { principalId: 'user_a', kind: 'user', tenantId: 'tenant_a' },
+      capability: 'artifact.write',
+      dungeonId: 'research',
+      policy,
+    });
+    expect(denied.allowed).toBe(false);
+    expect(denied.reasonCode).toBe('policy_denied');
+    expect(engine.runtimePrivacy(policy, 'any')).toBe('any');
+    const local = engine.parse('tenant_a', null, { ...defaultEffectivePolicy('tenant_a'), processing: 'local_only' });
+    expect(engine.runtimePrivacy(local, 'any')).toBe('local_only');
+    expect(engine.toolsAllowed(policy, true)).toBe(true);
+    expect(engine.scopedModelInstructions(policy)).not.toMatch(/secret|password|api[_-]?key/i);
+  });
 });

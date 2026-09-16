@@ -210,4 +210,41 @@ describe('Dungeon estate host', () => {
     });
     expect(created.status).toBe(201);
   });
+
+  it('enforces stored effective policy on OSINT network and music autonomy', async () => {
+    const { url } = await startEstate();
+    const session = await bootstrap(url);
+    const project = (await (
+      await fetch(`${url}/api/projects`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({ name: 'Policy' }),
+      })
+    ).json()) as { id: string };
+    const locked = await fetch(`${url}/api/privacy/policy`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ patch: { networkAccess: 'none', autonomyCeiling: 'suggest' }, confirm: 'CONFIRM' }),
+    });
+    expect(locked.status).toBe(200);
+    const scan = await fetch(`${url}/api/projects/${project.id}/osint/scans`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ kind: 'username', value: 'atlas-owner', synthesize: false }),
+    });
+    expect(scan.status).toBe(404);
+    const composition = await fetch(`${url}/api/projects/${project.id}/compositions`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ title: 'Copper', brief: 'Restrained theme' }),
+    });
+    expect(composition.status).toBe(201);
+    const music = (await composition.json()) as { id: string };
+    const composed = await fetch(`${url}/api/compositions/${music.id}/compose`, {
+      method: 'POST',
+      headers: auth(session),
+      body: '{}',
+    });
+    expect(composed.status).toBe(404);
+  });
 });

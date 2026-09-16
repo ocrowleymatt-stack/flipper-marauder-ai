@@ -77,6 +77,17 @@ export async function openDungeonStack(text?: string) {
   };
 }
 
+export async function storeTenantPolicy(
+  stack: Awaited<ReturnType<typeof openDungeonStack>>,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  await stack.persistence.forActor(stack.actor).privacy.upsertPolicy(stack.actor, {
+    dungeonId: null,
+    payload: stack.policy.parse(stack.actor.tenantId, null, patch),
+    updatedBy: stack.actor.principalId,
+  });
+}
+
 export async function closePersistence(persistence: PlatformPersistence): Promise<void> {
   await persistence.close();
 }

@@ -2,7 +2,7 @@ import type { DungeonId, DungeonRegistration } from '@atlas-vnext/contracts';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { FilesService } from '@atlas-vnext/files';
 import type { DungeonRecordRow, PersistenceActor, PlatformPersistence } from '@atlas-vnext/persistence';
-import { AuthorityEngine } from '@atlas-vnext/permissions';
+import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import type { ProjectService } from '@atlas-vnext/projects';
 
 export const dungeonId: DungeonId = 'music';
@@ -56,6 +56,7 @@ export class MusicService {
       files: FilesService;
       runtime: ConversationRuntime;
       authority: AuthorityEngine;
+      policy: EffectivePolicyEngine;
     },
   ) {}
 
@@ -88,17 +89,21 @@ export class MusicService {
     this.authorize(actor, 'artifact.write', record.workspaceId ?? record.id, record.tenantId);
     const projectId = record.workspaceId;
     if (!projectId) throw new MusicError('malformed', 'Composition is missing a project.');
+    const policy = await this.boundPolicy(actor);
+    this.assertPolicy(actor, 'artifact.write', policy, projectId, record.tenantId);
     const conversation = await this.deps.runtime.createConversation({ title: record.title, projectId });
     let text = '';
     let executionId: string | null = null;
     for await (const event of this.deps.runtime.sendMessage(conversation.id, {
       content: [
+        this.deps.policy.scopedModelInstructions(policy),
         'Produce a composition packet: tempo, structure, lyrics or motifs, and release notes.',
         'Do not mention GPU providers, RunPod, or infrastructure.',
         `Title: ${record.title}`,
         `Brief: ${String(record.payload.brief ?? '')}`,
       ].join('\n'),
       capability: 'nexus/reason',
+      privacy: this.deps.policy.runtimePrivacy(policy),
     })) {
       if (event.type === 'execution') executionId = event.execution.id;
       if (event.type === 'assistant.delta' && event.text) text += event.text;
@@ -152,5 +157,28 @@ export class MusicService {
       resource: { type: 'artifact', id: workspaceId, tenantId, workspaceId },
     });
     if (verdict.decision !== 'ALLOW') throw new MusicError('permission_denied', GENERIC_DENY, 404);
+  }
+
+  private async boundPolicy(actor: MusicActor) {
+    return this.deps.policy.loadForDungeon(actor.tenantId, 'music', (dungeonId) =>
+      this.deps.persistence.forActor(actor).privacy.getPolicy(actor, dungeonId),
+    );
+  }
+
+  private assertPolicy(
+    actor: MusicActor,
+    capability: string,
+    policy: Awaited<ReturnType<MusicService['boundPolicy']>>,
+    workspaceId: string,
+    tenantId: string,
+  ) {
+    const decision = this.deps.policy.authorize({
+      principal: { principalId: actor.principalId, kind: 'user', tenantId: actor.tenantId, workspaceId },
+      capability,
+      dungeonId: 'music',
+      policy,
+      resource: { type: 'artifact', id: workspaceId, tenantId, workspaceId },
+    });
+    if (!decision.allowed) throw new MusicError('permission_denied', GENERIC_DENY, 404);
   }
 }

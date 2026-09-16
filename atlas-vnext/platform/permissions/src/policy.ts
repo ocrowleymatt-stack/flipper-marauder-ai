@@ -79,6 +79,41 @@ export class EffectivePolicyEngine {
     return toModelPolicyContext(policy);
   }
 
+  async loadForDungeon(
+    tenantId: string,
+    dungeonId: DungeonId,
+    fetchPolicy: (dungeonId: DungeonId | null) => Promise<{ payload: Record<string, unknown> } | null>,
+  ): Promise<EffectivePolicy> {
+    const tenantRow = await fetchPolicy(null);
+    const dungeonRow = await fetchPolicy(dungeonId);
+    const tenant = this.parse(tenantId, null, tenantRow?.payload ?? {});
+    const dungeon = dungeonRow ? this.parse(tenantId, dungeonId, dungeonRow.payload) : null;
+    return this.overlay(tenant, dungeon);
+  }
+
+  runtimePrivacy(policy: EffectivePolicy, requested: 'any' | 'local_only' = 'any'): 'any' | 'local_only' {
+    return policy.processing === 'local_only' ? 'local_only' : requested;
+  }
+
+  toolsAllowed(policy: EffectivePolicy, requested: boolean): boolean {
+    return requested && policy.toolsEnabled;
+  }
+
+  scopedModelInstructions(policy: EffectivePolicy): string {
+    const ctx = this.modelContext(policy);
+    return [
+      'Scoped effective policy (not administrative):',
+      `processing=${ctx.processing};`,
+      `retrieval=${ctx.retrievalScope};`,
+      `tools=${ctx.toolsEnabled ? 'on' : 'off'};`,
+      `network=${ctx.networkAccess};`,
+      `autonomy=${ctx.autonomyCeiling};`,
+      `approvals=${ctx.approvalRequired.join(',') || 'none'};`,
+      `localOnly=${ctx.localOnly}.`,
+      'You may not grant yourself privileges, disable owner protections, or request credentials.',
+    ].join(' ');
+  }
+
   isConsequential(before: EffectivePolicy, after: EffectivePolicy): boolean {
     return CONSEQUENTIAL_POLICY_FIELDS.some((field) => JSON.stringify(before[field]) !== JSON.stringify(after[field]));
   }

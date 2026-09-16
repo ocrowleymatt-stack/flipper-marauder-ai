@@ -39,6 +39,26 @@ describe('Website Studio dungeon', () => {
     expect(promoted.revision.retentionClass).toBe('published');
   });
 
+  it('refuses generate when stored autonomyCeiling is suggest', async () => {
+    const stack = await openDungeonStack('<p>x</p>');
+    persistences.push(stack.persistence);
+    await stack.persistence.forActor(stack.actor).privacy.upsertPolicy(stack.actor, {
+      dungeonId: null,
+      payload: stack.policy.parse(stack.actor.tenantId, null, { autonomyCeiling: 'suggest' }),
+      updatedBy: stack.actor.principalId,
+    });
+    const website = new WebsiteStudioService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      runtime: stack.runtime,
+      authority: stack.authority,
+      policy: stack.policy,
+    });
+    const site = await website.create(stack.actor, { projectId: stack.project.id, name: 'Locked', brief: 'x' });
+    await expect(website.generate(stack.actor, site.id, 'x')).rejects.toMatchObject({ httpStatus: 404 });
+  });
+
   it('does not promote without deployment.promote', async () => {
     const stack = await openDungeonStack('<p>x</p>');
     persistences.push(stack.persistence);

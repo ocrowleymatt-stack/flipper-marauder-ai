@@ -360,10 +360,13 @@ function WebsitePanel({
   const [brief, setBrief] = useState('');
   const [sites, setSites] = useState<Array<{ id: string; name: string; currentRevisionId: string | null }>>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [repoWrite, setRepoWrite] = useState(false);
 
   const reload = useCallback(async () => {
     const items = await listSites(projectId);
     setSites(items);
+    const policy = await getEffectivePolicy('website').catch(() => null);
+    setRepoWrite(Boolean(policy?.policy.repoWrite));
     return items;
   }, [projectId]);
 
@@ -407,10 +410,16 @@ function WebsitePanel({
       playCue('approval');
       await promoteSite(activeId);
       playCue('complete');
-      onStatus('Promote requested. Authority checked deployment.promote on the server.');
+      onStatus('Promote requested. Authority checked deployment.promote; effective policy repoWrite must also be true.');
     } catch (err) {
       playCue('warn');
-      onError(err instanceof Error ? err.message : String(err));
+      onError(
+        repoWrite
+          ? err instanceof Error
+            ? err.message
+            : String(err)
+          : 'Promote is blocked until the owner enables repository write in Privacy & Safety with CONFIRM. Authority still decides deployment.promote.',
+      );
     } finally {
       setBusy(false);
     }
@@ -421,7 +430,10 @@ function WebsitePanel({
       <header className="thread-header">
         <div>
           <h2>Website Studio</h2>
-          <p className="hint">One canonical site per project. Preview is ephemeral. Promote is Authority-gated.</p>
+          <p className="hint">
+            One canonical site per project. Preview is ephemeral. Promote needs Authority <code>deployment.promote</code> and stored
+            effective policy <code>repoWrite</code>. Default is no repo write; enable it in Privacy &amp; Safety with CONFIRM.
+          </p>
         </div>
       </header>
       <section className="estate-body">
@@ -449,7 +461,7 @@ function WebsitePanel({
             Generate preview
           </button>
           <button type="button" className="ghost" disabled={!activeId || busy} onClick={() => void onPromote()}>
-            Promote
+            Promote{repoWrite ? '' : ' (repo write off)'}
           </button>
         </div>
         {activeId ? (
@@ -542,25 +554,58 @@ function PrivacyPanel({
   const [view, setView] = useState<EffectivePolicyView | null>(null);
   const [explanation, setExplanation] = useState<PolicyExplanation | null>(null);
   const [confirm, setConfirm] = useState('');
-  const [network, setNetwork] = useState('public');
+  const [dungeonId, setDungeonId] = useState('');
+  const [draft, setDraft] = useState({
+    processing: 'any',
+    networkAccess: 'public',
+    retrievalScope: 'selected_files',
+    projectFileAccess: 'selected_files',
+    autonomyCeiling: 'act_with_approval',
+    telemetry: 'minimal',
+    tenantSharing: 'none',
+    secretsExposure: 'none',
+    sensitiveData: 'redact',
+    sandboxing: 'strict',
+    toolsEnabled: true,
+    pluginsEnabled: true,
+    repoWrite: false,
+    memoryEnabled: true,
+    childProcesses: false,
+  });
   const [audit, setAudit] = useState<Array<{ id: string; action: string; reasonCode: string; stepUp: boolean; at: string }>>([]);
   const [proposals, setProposals] = useState<Array<{ id: string; status: string; patch: Record<string, unknown> }>>([]);
 
   const reload = useCallback(async () => {
-    const next = await getEffectivePolicy();
+    const next = await getEffectivePolicy(dungeonId || undefined);
     setView(next);
-    setNetwork(next.policy.networkAccess);
+    setDraft({
+      processing: next.policy.processing,
+      networkAccess: next.policy.networkAccess,
+      retrievalScope: next.policy.retrievalScope,
+      projectFileAccess: next.policy.projectFileAccess,
+      autonomyCeiling: next.policy.autonomyCeiling,
+      telemetry: next.policy.telemetry,
+      tenantSharing: next.policy.tenantSharing,
+      secretsExposure: next.policy.secretsExposure,
+      sensitiveData: next.policy.sensitiveData,
+      sandboxing: next.policy.sandboxing,
+      toolsEnabled: next.policy.toolsEnabled,
+      pluginsEnabled: next.policy.pluginsEnabled,
+      repoWrite: next.policy.repoWrite,
+      memoryEnabled: next.policy.memoryEnabled,
+      childProcesses: next.policy.childProcesses,
+    });
     setAudit(await listPrivacyAudit().catch(() => []));
     setProposals(await listPrivacyProposals().catch(() => []));
-  }, []);
+  }, [dungeonId]);
 
   useEffect(() => {
     void reload().catch((err) => onError(err instanceof Error ? err.message : String(err)));
   }, [reload, onError]);
 
-  async function onExplain() {
+  async function onExplain(action: string, capability: string, target: string | null) {
     try {
-      setExplanation(await explainPolicy({ action: 'inspect network egress', capability: 'network.public', dungeonId: 'osint' }));
+      setExplanation(await explainPolicy({ action, capability, dungeonId: target }));
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     }
@@ -573,14 +618,15 @@ function PrivacyPanel({
     try {
       playCue('approval');
       await updatePolicy({
-        patch: { networkAccess: network },
+        dungeonId: dungeonId || null,
+        patch: draft,
         confirm: confirm.trim() || undefined,
         expectedRevision: view?.policy.revision,
       });
       setConfirm('');
       await reload();
       playCue('complete');
-      onStatus('Effective policy updated. Authority still decides grants.');
+      onStatus('Effective policy updated. Authority still decides grants. Models cannot self-grant.');
     } catch (err) {
       playCue('warn');
       onError(err instanceof Error ? err.message : String(err));
@@ -641,8 +687,11 @@ function PrivacyPanel({
                 </dd>
               </div>
             </dl>
-            <button type="button" className="ghost" onClick={() => void onExplain()}>
+            <button type="button" className="ghost" onClick={() => void onExplain('inspect network egress', 'network.public', 'osint')}>
               Explain OSINT network.public
+            </button>
+            <button type="button" className="ghost" onClick={() => void onExplain('promote a site', 'deployment.promote', 'website')}>
+              Explain website promote
             </button>
             {explanation ? (
               <section className="stack">
@@ -655,12 +704,90 @@ function PrivacyPanel({
               </section>
             ) : null}
             <form className="stack" onSubmit={(event) => void onUpdate(event)}>
+              <label htmlFor="policy-dungeon">Scope</label>
+              <select id="policy-dungeon" value={dungeonId} onChange={(event) => setDungeonId(event.target.value)}>
+                <option value="">tenant default</option>
+                <option value="writing">writing</option>
+                <option value="osint">osint</option>
+                <option value="investigation">investigation</option>
+                <option value="research">research</option>
+                <option value="website">website</option>
+                <option value="music">music</option>
+              </select>
+              <label htmlFor="policy-processing">Processing</label>
+              <select id="policy-processing" value={draft.processing} onChange={(event) => setDraft({ ...draft, processing: event.target.value })}>
+                <option value="local_only">local_only</option>
+                <option value="private_cloud">private_cloud</option>
+                <option value="any">any</option>
+              </select>
               <label htmlFor="network-access">Network access</label>
-              <select id="network-access" value={network} onChange={(event) => setNetwork(event.target.value)}>
+              <select id="network-access" value={draft.networkAccess} onChange={(event) => setDraft({ ...draft, networkAccess: event.target.value })}>
                 <option value="none">none</option>
                 <option value="public">public</option>
                 <option value="private">private</option>
               </select>
+              <label htmlFor="policy-retrieval">Retrieval</label>
+              <select id="policy-retrieval" value={draft.retrievalScope} onChange={(event) => setDraft({ ...draft, retrievalScope: event.target.value })}>
+                <option value="none">none</option>
+                <option value="selected_files">selected_files</option>
+                <option value="project">project</option>
+              </select>
+              <label htmlFor="policy-files">Project file access</label>
+              <select id="policy-files" value={draft.projectFileAccess} onChange={(event) => setDraft({ ...draft, projectFileAccess: event.target.value })}>
+                <option value="none">none</option>
+                <option value="selected_files">selected_files</option>
+                <option value="project">project</option>
+              </select>
+              <label htmlFor="policy-autonomy">Autonomy ceiling</label>
+              <select id="policy-autonomy" value={draft.autonomyCeiling} onChange={(event) => setDraft({ ...draft, autonomyCeiling: event.target.value })}>
+                <option value="suggest">suggest</option>
+                <option value="assist">assist</option>
+                <option value="act_with_approval">act_with_approval</option>
+                <option value="act">act</option>
+              </select>
+              <label htmlFor="policy-telemetry">Telemetry</label>
+              <select id="policy-telemetry" value={draft.telemetry} onChange={(event) => setDraft({ ...draft, telemetry: event.target.value })}>
+                <option value="off">off</option>
+                <option value="minimal">minimal</option>
+                <option value="standard">standard</option>
+              </select>
+              <label htmlFor="policy-sharing">Tenant sharing</label>
+              <select id="policy-sharing" value={draft.tenantSharing} onChange={(event) => setDraft({ ...draft, tenantSharing: event.target.value })}>
+                <option value="none">none</option>
+                <option value="workspace">workspace</option>
+                <option value="tenant">tenant</option>
+              </select>
+              <label htmlFor="policy-secrets">Secrets exposure to models</label>
+              <select id="policy-secrets" value={draft.secretsExposure} onChange={(event) => setDraft({ ...draft, secretsExposure: event.target.value })}>
+                <option value="none">none</option>
+                <option value="named">named</option>
+              </select>
+              <label htmlFor="policy-sensitive">Sensitive data</label>
+              <select id="policy-sensitive" value={draft.sensitiveData} onChange={(event) => setDraft({ ...draft, sensitiveData: event.target.value })}>
+                <option value="block">block</option>
+                <option value="redact">redact</option>
+                <option value="allow_local">allow_local</option>
+              </select>
+              <label htmlFor="policy-sandbox">Sandboxing</label>
+              <select id="policy-sandbox" value={draft.sandboxing} onChange={(event) => setDraft({ ...draft, sandboxing: event.target.value })}>
+                <option value="strict">strict</option>
+                <option value="standard">standard</option>
+              </select>
+              <label>
+                <input type="checkbox" checked={draft.toolsEnabled} onChange={(event) => setDraft({ ...draft, toolsEnabled: event.target.checked })} /> Tools
+              </label>
+              <label>
+                <input type="checkbox" checked={draft.pluginsEnabled} onChange={(event) => setDraft({ ...draft, pluginsEnabled: event.target.checked })} /> Plugins
+              </label>
+              <label>
+                <input type="checkbox" checked={draft.repoWrite} onChange={(event) => setDraft({ ...draft, repoWrite: event.target.checked })} /> Repository write / promote
+              </label>
+              <label>
+                <input type="checkbox" checked={draft.memoryEnabled} onChange={(event) => setDraft({ ...draft, memoryEnabled: event.target.checked })} /> Memory
+              </label>
+              <label>
+                <input type="checkbox" checked={draft.childProcesses} onChange={(event) => setDraft({ ...draft, childProcesses: event.target.checked })} /> Child processes
+              </label>
               <label htmlFor="policy-confirm">Type CONFIRM for consequential changes</label>
               <input id="policy-confirm" value={confirm} onChange={(event) => setConfirm(event.target.value)} autoComplete="off" />
               <button type="submit" className="primary" disabled={busy}>

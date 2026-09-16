@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { InvestigationService } from '../src/index.ts';
-import { closePersistence, openDungeonStack } from '../../../tests/helpers/dungeon-stack.ts';
+import { closePersistence, openDungeonStack, storeTenantPolicy } from '../../../tests/helpers/dungeon-stack.ts';
 import type { PlatformPersistence } from '@atlas-vnext/persistence';
 
 const persistences: PlatformPersistence[] = [];
@@ -30,6 +30,7 @@ describe('Investigation dungeon', () => {
       files: stack.files,
       runtime: stack.runtime,
       authority: stack.authority,
+      policy: stack.policy,
     });
     const created = await investigation.createCase(stack.actor, {
       projectId: stack.project.id,
@@ -52,6 +53,7 @@ describe('Investigation dungeon', () => {
       files: stack.files,
       runtime: stack.runtime,
       authority: stack.authority,
+      policy: stack.policy,
     });
     const decoy = await stack.persistence.forActor(stack.actor).dungeonRecords.create(stack.actor, {
       workspaceId: stack.project.id,
@@ -69,5 +71,34 @@ describe('Investigation dungeon', () => {
         findingIds: [decoy.id],
       }),
     ).rejects.toMatchObject({ code: 'malformed' });
+  });
+
+  it('refuses challenge when stored autonomyCeiling is suggest', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const finding = await stack.persistence.forActor(stack.actor).dungeonRecords.create(stack.actor, {
+      workspaceId: stack.project.id,
+      dungeon: 'osint',
+      kind: 'finding',
+      title: 'username atlas',
+      status: 'completed',
+      payload: { source: 'pattern.username', confidence: 'possible', summary: 'Username pattern recorded' },
+    });
+    await storeTenantPolicy(stack, { autonomyCeiling: 'suggest' });
+    const investigation = new InvestigationService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      runtime: stack.runtime,
+      authority: stack.authority,
+      policy: stack.policy,
+    });
+    const created = await investigation.createCase(stack.actor, {
+      projectId: stack.project.id,
+      title: 'Blocked',
+      question: 'q',
+      findingIds: [finding.id],
+    });
+    await expect(investigation.challenge(stack.actor, created.id, 'challenger')).rejects.toMatchObject({ httpStatus: 404 });
   });
 });

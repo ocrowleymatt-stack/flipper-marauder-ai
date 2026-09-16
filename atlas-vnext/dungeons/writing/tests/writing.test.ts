@@ -10,7 +10,7 @@ import { ProjectService } from '@atlas-vnext/projects';
 import { FilesService } from '@atlas-vnext/files';
 import { ContextService } from '@atlas-vnext/context';
 import { openFilesystemCas } from '@atlas-vnext/storage';
-import { AuthorityEngine } from '@atlas-vnext/permissions';
+import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import type { ProvenanceRecord, RouteDecision, StreamChunk } from '@atlas-vnext/contracts';
 import type { WritingStreamEvent } from '../src/service.ts';
 
@@ -142,9 +142,10 @@ async function makeWriting(
   for (const cap of ['artifact.read', 'artifact.write', 'project.read', 'file.read', 'conversation.write'] as const) {
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: cap });
   }
-  const writing = new WritingService({ persistence, projects, files, context, runtime, authority });
+  const policy = new EffectivePolicyEngine(authority);
+  const writing = new WritingService({ persistence, projects, files, context, runtime, authority, policy });
   const project = await projects.create(actor, { name: 'Book', dungeon: 'writing' });
-  return { writing, actor, project, files, persistence, authority, runtime, context, projects };
+  return { writing, actor, project, files, persistence, authority, policy, runtime, context, projects };
 }
 
 async function collect(events: AsyncGenerator<WritingStreamEvent>): Promise<WritingStreamEvent[]> {
@@ -631,6 +632,7 @@ describe('Caspa writing service', () => {
       context: base.context,
       runtime: base.runtime,
       authority: base.authority,
+      policy: new EffectivePolicyEngine(base.authority),
     });
     const created = await writing.create(base.actor, { projectId: base.project.id, title: 'Provenance fail' });
     const events = await collect(
@@ -713,5 +715,28 @@ describe('Caspa writing service', () => {
     expect(commissioned.document.status).toBe('committed');
     const cancelled = await writing.cancel(actor, commissioned.document.id);
     expect(cancelled.id).toBe(commissioned.document.id);
+  });
+
+  it('refuses generate when stored autonomyCeiling is suggest', async () => {
+    const { writing, actor, project, persistence, policy } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'should not emit' };
+    });
+    await persistence.forActor(actor).privacy.upsertPolicy(actor, {
+      dungeonId: null,
+      payload: policy.parse(actor.tenantId, null, { autonomyCeiling: 'suggest' }),
+      updatedBy: actor.principalId,
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'Blocked' });
+    const events = await collect(
+      writing.generate(actor, created.id, {
+        operation: 'create',
+        instruction: 'Write a chapter.',
+        expectedRevision: created.revision,
+      }),
+    );
+    expect(events.some((event) => event.type === 'error' && event.failure.code === 'permission_denied')).toBe(true);
+    const after = await writing.get(actor, created.id);
+    expect(after.content).toBe('');
+    expect(after.currentVersion).toBe(0);
   });
 });

@@ -172,6 +172,14 @@ describe('Dungeon estate host', () => {
     expect(generated.status).toBe(200);
     const preview = await fetch(`${url}/api/sites/${site.id}/preview`, { headers: { cookie: session.cookie } });
     expect(preview.headers.get('content-type')).toMatch(/text\/html/);
+    const blocked = await fetch(`${url}/api/sites/${site.id}/promote`, { method: 'POST', headers: auth(session), body: '{}' });
+    expect(blocked.status).toBe(404);
+    const enabled = await fetch(`${url}/api/privacy/policy`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ patch: { repoWrite: true }, confirm: 'CONFIRM' }),
+    });
+    expect(enabled.status).toBe(200);
     const promoted = await fetch(`${url}/api/sites/${site.id}/promote`, { method: 'POST', headers: auth(session), body: '{}' });
     expect(promoted.status).toBe(200);
 

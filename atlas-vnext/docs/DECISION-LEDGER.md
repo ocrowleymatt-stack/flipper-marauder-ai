@@ -21,4 +21,4 @@ Owner Delegate is the decision authority for this programme. Entries are develop
 | D15 | Combine dungeon HTTP in host `estate.ts` | One router per dungeon file | Single host dispatcher, exclusive dungeon packages | Avoids conflicting compose/server PRs | estate.ts | Reversible | host |
 | D16 | Website promote stays `deployment.promote` | Soft UI confirm only | Authority grant + SiteStore retentionClass published | Frozen Website Studio split | website tests | Reversible | website |
 | D17 | Privacy owner is bootstrap host principal | Separate owner account | `ownerPrincipalId` + 404 generic deny | No OIDC yet; UI hiding is not security | privacy tests | Reversible | privacy |
-| D18 | Stacked product PRs from seams | One mega-PR | caspa → estate → workbench | Focused review; human merge of main | branching | n/a | integration |
+| D19 | Website promote consults stored EffectivePolicy | Authority-only promote | Overlay after Authority; default repoWrite=false blocks promote | Privacy controls must bind dungeons | website + estate tests | Reversible | website, osint |

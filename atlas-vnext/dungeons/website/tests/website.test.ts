@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 describe('Website Studio dungeon', () => {
-  it('generates a CAS-backed preview and requires Authority for promote', async () => {
+  it('generates a CAS-backed preview and requires Authority plus effective policy for promote', async () => {
     const stack = await openDungeonStack('<!doctype html><html lang="en"><title>Studio</title><p>Hello</p></html>');
     persistences.push(stack.persistence);
     const website = new WebsiteStudioService({
@@ -22,12 +22,19 @@ describe('Website Studio dungeon', () => {
       files: stack.files,
       runtime: stack.runtime,
       authority: stack.authority,
+      policy: stack.policy,
     });
     const site = await website.create(stack.actor, { projectId: stack.project.id, name: 'Studio', brief: 'Hello site' });
     const generated = await website.generate(stack.actor, site.id, 'A small accessible studio page.');
     expect(generated.revision.manifestHash).toMatch(/^[a-f0-9]{64}$/);
     const preview = await website.preview(stack.actor, site.id);
     expect(preview.html.length).toBeGreaterThan(0);
+    await expect(website.promote(stack.actor, site.id)).rejects.toMatchObject({ httpStatus: 404 });
+    await stack.persistence.forActor(stack.actor).privacy.upsertPolicy(stack.actor, {
+      dungeonId: null,
+      payload: stack.policy.parse(stack.actor.tenantId, null, { repoWrite: true }),
+      updatedBy: stack.actor.principalId,
+    });
     const promoted = await website.promote(stack.actor, site.id);
     expect(promoted.revision.retentionClass).toBe('published');
   });
@@ -45,6 +52,7 @@ describe('Website Studio dungeon', () => {
       files: stack.files,
       runtime: stack.runtime,
       authority: stack.authority,
+      policy: stack.policy,
     });
     const site = await website.create(stack.actor, { projectId: stack.project.id, name: 'Locked', brief: 'x' });
     await website.generate(stack.actor, site.id, 'x');

@@ -3,7 +3,7 @@ import type { DungeonId, DungeonRegistration } from '@atlas-vnext/contracts';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { FilesService } from '@atlas-vnext/files';
 import type { PersistenceActor, PlatformPersistence, SiteRecord, SiteRevisionRecord } from '@atlas-vnext/persistence';
-import { AuthorityEngine } from '@atlas-vnext/permissions';
+import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import type { ProjectService } from '@atlas-vnext/projects';
 
 export const dungeonId: DungeonId = 'website';
@@ -59,6 +59,7 @@ export class WebsiteStudioService {
       files: FilesService;
       runtime: ConversationRuntime;
       authority: AuthorityEngine;
+      policy: EffectivePolicyEngine;
     },
   ) {}
 
@@ -156,12 +157,15 @@ export class WebsiteStudioService {
 
   async promote(actor: WebsiteActor, id: string) {
     const site = await this.get(actor, id);
-    const verdict = this.deps.authority.decide({
+    const policy = await this.effectivePolicy(actor);
+    const verdict = this.deps.policy.authorize({
       principal: { principalId: actor.principalId, kind: 'user', tenantId: actor.tenantId, workspaceId: site.workspaceId },
       capability: 'deployment.promote',
+      dungeonId: 'website',
+      policy,
       resource: { type: 'artifact', id: site.id, tenantId: site.tenantId, workspaceId: site.workspaceId },
     });
-    if (verdict.decision !== 'ALLOW') throw new WebsiteError('permission_denied', GENERIC_DENY, 404);
+    if (!verdict.allowed) throw new WebsiteError('permission_denied', GENERIC_DENY, 404);
     if (!site.currentRevisionId) throw new WebsiteError('malformed', 'Nothing to promote.');
     const revision = await this.deps.persistence.forActor(actor).sites.setRetentionClass(
       actor,
@@ -170,6 +174,15 @@ export class WebsiteStudioService {
       'production-promote',
     );
     return { site, revision };
+  }
+
+  private async effectivePolicy(actor: WebsiteActor) {
+    const bound = this.deps.persistence.forActor(actor).privacy;
+    const tenantRow = await bound.getPolicy(actor, null);
+    const dungeonRow = await bound.getPolicy(actor, 'website');
+    const tenant = this.deps.policy.parse(actor.tenantId, null, tenantRow?.payload ?? {});
+    const dungeon = dungeonRow ? this.deps.policy.parse(actor.tenantId, 'website', dungeonRow.payload) : null;
+    return this.deps.policy.overlay(tenant, dungeon);
   }
 
   private async requireProject(actor: WebsiteActor, projectId: string, capability: 'artifact.read' | 'artifact.write') {

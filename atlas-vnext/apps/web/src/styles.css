@@ -10,6 +10,8 @@
   --copper-2: #f0b27a;
   --danger: #d46a5c;
   --ok: #8faf7a;
+  --atlas-ease: cubic-bezier(0.22, 1.15, 0.36, 1);
+  --atlas-duration: 280ms;
 }
 
 * {
@@ -75,6 +77,97 @@ input {
   height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+.atlas-motion .workspace,
+.atlas-motion .nav,
+.atlas-motion .inspector,
+.atlas-motion .message,
+.atlas-motion .pill,
+.atlas-motion .approval,
+.atlas-motion .palette {
+  transition:
+    opacity var(--atlas-duration, 280ms) var(--atlas-ease, cubic-bezier(0.22, 1.15, 0.36, 1)),
+    transform var(--atlas-duration, 280ms) var(--atlas-ease, cubic-bezier(0.22, 1.15, 0.36, 1)),
+    box-shadow var(--atlas-duration, 280ms) var(--atlas-ease, cubic-bezier(0.22, 1.15, 0.36, 1));
+}
+
+.atlas-motion .workspace {
+  animation: atlas-enter 280ms var(--atlas-ease, cubic-bezier(0.22, 1.15, 0.36, 1));
+}
+
+.drop-active {
+  outline: 2px dashed var(--copper);
+  outline-offset: -8px;
+}
+
+.palette-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 8, 6, 0.55);
+  display: grid;
+  place-items: start center;
+  padding-top: 12vh;
+  z-index: 20;
+}
+
+.palette {
+  width: min(520px, calc(100% - 32px));
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+}
+
+.estate-body {
+  overflow: auto;
+  padding: 20px 24px 32px;
+  display: grid;
+  gap: 16px;
+}
+
+.site-preview {
+  width: 100%;
+  min-height: 280px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.waiting .body,
+.pill.running,
+.pill.streaming {
+  position: relative;
+}
+
+.atlas-motion .pill.running,
+.atlas-motion .pill.streaming {
+  box-shadow: 0 0 0 1px rgba(212, 137, 74, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .atlas-motion .workspace,
+  .atlas-motion .nav,
+  .atlas-motion .inspector,
+  .atlas-motion .message,
+  .atlas-motion .pill,
+  .atlas-motion .approval,
+  .atlas-motion .palette {
+    animation: none;
+    transition: none;
+  }
+}
+
+@keyframes atlas-enter {
+  from {
+    opacity: 0.72;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .topbar {

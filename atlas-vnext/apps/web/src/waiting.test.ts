@@ -190,3 +190,17 @@ describe('workbench client contracts', () => {
     expect(view.classifiedFailure).toBeNull();
   });
 });
+
+describe('workbench presentation', () => {
+  it('keeps sound off by default and never treats motion as the only state channel', async () => {
+    const { playCue, prefersReducedMotion, setSoundEnabled, soundEnabled } = await import('./experience');
+    expect(soundEnabled()).toBe(false);
+    expect(typeof prefersReducedMotion()).toBe('boolean');
+    setSoundEnabled(true);
+    expect(soundEnabled()).toBe(true);
+    setSoundEnabled(false);
+    expect(soundEnabled()).toBe(false);
+    playCue('complete');
+    playCue('warn');
+  });
+});

@@ -409,6 +409,56 @@ export interface DungeonRegistration {
   description: string;
   surface: string;
   featureAvailable: boolean;
+  ownerOnly?: boolean;
+}
+
+export interface DungeonRecord {
+  id: string;
+  dungeon: string;
+  kind: string;
+  title: string;
+  status: string;
+  payload: Record<string, unknown>;
+  artefactId: string | null;
+  contentHash: string | null;
+  jobId: string | null;
+  parentId: string | null;
+  revision: number;
+}
+
+export interface EffectivePolicyView {
+  policy: {
+    processing: string;
+    networkAccess: string;
+    retrievalScope: string;
+    projectFileAccess: string;
+    toolsEnabled: boolean;
+    pluginsEnabled: boolean;
+    memoryEnabled: boolean;
+    repoWrite: boolean;
+    autonomyCeiling: string;
+    approvalRequired: string[];
+    telemetry: string;
+    sandboxing: string;
+    childProcesses: boolean;
+    secretsExposure: string;
+    sensitiveData: string;
+    retentionDays: number | null;
+    tenantSharing: string;
+    revision: number;
+  };
+  modelContext: Record<string, unknown>;
+}
+
+export interface PolicyExplanation {
+  action: string;
+  allowed: boolean;
+  reasonCode: string;
+  authorityRule: string;
+  policyRule: string;
+  modelAccess: string[];
+  canLeaveEnvironment: string[];
+  canExecuteWithoutApproval: string[];
 }
 
 export interface WritingDocument {
@@ -531,6 +581,249 @@ export async function* generateDocument(
     throw new Error(await readError(response));
   }
   yield* parseSse(response.body);
+}
+
+export async function editDocument(id: string, text: string, expectedRevision: number, title?: string): Promise<WritingDocument> {
+  return parseJson(
+    await fetch(`/api/documents/${encodeURIComponent(id)}/edit`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify({ text, expectedRevision, title }),
+    }),
+  );
+}
+
+export async function cancelDocument(id: string): Promise<WritingDocument> {
+  return parseJson(
+    await fetch(`/api/documents/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: '{}',
+    }),
+  );
+}
+
+export async function listCompanions(id: string): Promise<DungeonRecord[]> {
+  return parseJson(await fetch(`/api/documents/${encodeURIComponent(id)}/companions`, { credentials: 'include' }));
+}
+
+export async function saveCompanion(
+  id: string,
+  input: { kind: 'outline' | 'canon' | 'claims' | 'quality'; title: string; text: string },
+): Promise<DungeonRecord> {
+  return parseJson(
+    await fetch(`/api/documents/${encodeURIComponent(id)}/companions`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function commissionDocument(
+  id: string,
+  input: { operation: string; instruction: string; fileIds: string[]; expectedRevision: number },
+): Promise<{ jobId: string; document: WritingDocument }> {
+  return parseJson(
+    await fetch(`/api/documents/${encodeURIComponent(id)}/commission`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function scanOsint(projectId: string, kind: string, value: string): Promise<{
+  target: DungeonRecord;
+  findings: DungeonRecord[];
+  dossier?: DungeonRecord;
+}> {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/osint/scans`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify({ kind, value }),
+    }),
+  );
+}
+
+export async function listOsintTargets(projectId: string): Promise<DungeonRecord[]> {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/osint/targets`, { credentials: 'include' }),
+  );
+}
+
+export async function listCases(projectId: string): Promise<DungeonRecord[]> {
+  return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/cases`, { credentials: 'include' }));
+}
+
+export async function createCase(projectId: string, input: { title: string; question: string; findingIds: string[] }): Promise<DungeonRecord> {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/cases`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function challengeCase(id: string, stance: 'advocate' | 'challenger' | 'arbiter'): Promise<DungeonRecord> {
+  return parseJson(
+    await fetch(`/api/cases/${encodeURIComponent(id)}/challenge`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify({ stance }),
+    }),
+  );
+}
+
+export async function listResearch(projectId: string): Promise<DungeonRecord[]> {
+  return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/research`, { credentials: 'include' }));
+}
+
+export async function createResearch(projectId: string, question: string, fileIds: string[]): Promise<DungeonRecord> {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/research`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify({ question, fileIds }),
+    }),
+  );
+}
+
+export async function runResearch(id: string): Promise<{ brief: DungeonRecord; synthesis: DungeonRecord }> {
+  return parseJson(
+    await fetch(`/api/research/${encodeURIComponent(id)}/run`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: '{}',
+    }),
+  );
+}
+
+export async function listSites(projectId: string): Promise<Array<{ id: string; name: string; currentRevisionId: string | null }>> {
+  return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/sites`, { credentials: 'include' }));
+}
+
+export async function createSite(projectId: string, name: string, brief: string): Promise<{ id: string; name: string }> {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/sites`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify({ name, brief }),
+    }),
+  );
+}
+
+export async function generateSite(id: string, brief: string): Promise<{ site: { id: string }; html: string }> {
+  return parseJson(
+    await fetch(`/api/sites/${encodeURIComponent(id)}/generate`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify({ brief }),
+    }),
+  );
+}
+
+export async function promoteSite(id: string): Promise<unknown> {
+  return parseJson(
+    await fetch(`/api/sites/${encodeURIComponent(id)}/promote`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: '{}',
+    }),
+  );
+}
+
+export async function listCompositions(projectId: string): Promise<DungeonRecord[]> {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/compositions`, { credentials: 'include' }),
+  );
+}
+
+export async function createComposition(projectId: string, title: string, brief: string): Promise<DungeonRecord> {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/compositions`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify({ title, brief }),
+    }),
+  );
+}
+
+export async function composeMusic(id: string): Promise<DungeonRecord> {
+  return parseJson(
+    await fetch(`/api/compositions/${encodeURIComponent(id)}/compose`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: '{}',
+    }),
+  );
+}
+
+export async function getEffectivePolicy(dungeon?: string): Promise<EffectivePolicyView> {
+  const suffix = dungeon ? `?dungeon=${encodeURIComponent(dungeon)}` : '';
+  return parseJson(await fetch(`/api/privacy/effective${suffix}`, { credentials: 'include' }));
+}
+
+export async function explainPolicy(input: { action: string; capability: string; dungeonId?: string | null }): Promise<PolicyExplanation> {
+  return parseJson(
+    await fetch('/api/privacy/explain', {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function updatePolicy(input: {
+  dungeonId?: string | null;
+  patch: Record<string, unknown>;
+  confirm?: string;
+  expectedRevision?: number;
+}): Promise<EffectivePolicyView['policy']> {
+  return parseJson(
+    await fetch('/api/privacy/policy', {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function listPrivacyAudit(): Promise<Array<{ id: string; action: string; reasonCode: string; stepUp: boolean; at: string }>> {
+  return parseJson(await fetch('/api/privacy/audit', { credentials: 'include' }));
+}
+
+export async function listPrivacyProposals(): Promise<Array<{ id: string; status: string; patch: Record<string, unknown> }>> {
+  return parseJson(await fetch('/api/privacy/proposals', { credentials: 'include' }));
+}
+
+export async function decidePrivacyProposal(id: string, status: 'approved' | 'denied'): Promise<unknown> {
+  return parseJson(
+    await fetch(`/api/privacy/proposals/${encodeURIComponent(id)}/decide`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify({ status }),
+    }),
+  );
 }
 
 async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<StreamEvent> {

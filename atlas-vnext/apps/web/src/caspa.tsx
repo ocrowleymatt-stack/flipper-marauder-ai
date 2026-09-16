@@ -1,17 +1,24 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
+  cancelDocument,
+  commissionDocument,
   createDocument,
+  editDocument,
   generateDocument,
   getDocument,
   getDocumentProvenance,
+  listCompanions,
   listDocuments,
   listDocumentVersions,
   restoreDocument,
+  saveCompanion,
+  type DungeonRecord,
   type ProjectFile,
   type WritingDocument,
   type WritingDocumentVersion,
   type WritingProvenance,
 } from './api';
+import { playCue } from './experience';
 
 const OPERATIONS = [
   'create',
@@ -23,6 +30,7 @@ const OPERATIONS = [
   'correct',
   'continue',
   'transform',
+  'outline',
 ] as const;
 
 export function CaspaPanel({
@@ -48,6 +56,9 @@ export function CaspaPanel({
   const [operation, setOperation] = useState<(typeof OPERATIONS)[number]>('create');
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [title, setTitle] = useState('');
+  const [editor, setEditor] = useState('');
+  const [companions, setCompanions] = useState<DungeonRecord[]>([]);
+  const [companionText, setCompanionText] = useState('');
 
   const loadList = useCallback(async () => {
     const items = await listDocuments(projectId);
@@ -58,12 +69,15 @@ export function CaspaPanel({
   const openDocument = useCallback(async (id: string) => {
     const document = await getDocument(id);
     setActive(document);
-    const [nextVersions, nextProvenance] = await Promise.all([
+    const [nextVersions, nextProvenance, nextCompanions] = await Promise.all([
       listDocumentVersions(id).catch(() => []),
       getDocumentProvenance(id).catch(() => []),
+      listCompanions(id).catch(() => []),
     ]);
     setVersions(nextVersions);
     setProvenance(nextProvenance);
+    setCompanions(nextCompanions);
+    setEditor(document.content || document.draft || '');
   }, []);
 
   useEffect(() => {
@@ -101,6 +115,7 @@ export function CaspaPanel({
     setBusy(true);
     onError(null);
     onStatus('Writing run requested.');
+    playCue('activate');
     try {
       let latest = active;
       for await (const event of generateDocument(active.id, {
@@ -127,8 +142,10 @@ export function CaspaPanel({
       }
       await loadList();
       await openDocument(latest.id);
+      playCue(latest.status === 'committed' ? 'complete' : 'warn');
       onStatus(latest.status === 'committed' ? 'Revision committed.' : 'Writing run finished.');
     } catch (err) {
+      playCue('warn');
       onError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
@@ -147,7 +164,72 @@ export function CaspaPanel({
     }
   }
 
-  const body = active?.status === 'streaming' || active?.status === 'candidate' ? (active.draft ?? active.content) : (active?.content ?? '');
+  async function onSaveEdit() {
+    if (!active || !editor.trim() || busy) return;
+    setBusy(true);
+    try {
+      const saved = await editDocument(active.id, editor, active.revision, active.title);
+      await loadList();
+      await openDocument(saved.id);
+      onStatus('Editor revision committed.');
+      playCue('complete');
+    } catch (err) {
+      playCue('warn');
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onCancel() {
+    if (!active) return;
+    try {
+      const cancelled = await cancelDocument(active.id);
+      await openDocument(cancelled.id);
+      onStatus('Cancel requested. The run is sealed on the server.');
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function onCommission() {
+    if (!active || !instruction.trim() || busy) return;
+    setBusy(true);
+    try {
+      playCue('activate');
+      const result = await commissionDocument(active.id, {
+        operation,
+        instruction: instruction.trim(),
+        fileIds: selectedFiles,
+        expectedRevision: active.revision,
+      });
+      await loadList();
+      await openDocument(result.document.id);
+      playCue('complete');
+      onStatus(`Commission job ${result.jobId} finished.`);
+    } catch (err) {
+      playCue('warn');
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onCompanion(event: FormEvent) {
+    event.preventDefault();
+    if (!active || !companionText.trim()) return;
+    try {
+      await saveCompanion(active.id, { kind: 'outline', title: 'Outline', text: companionText.trim() });
+      setCompanionText('');
+      setCompanions(await listCompanions(active.id));
+      onStatus('Companion artefact stored.');
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  const streaming = active?.status === 'streaming' || active?.status === 'candidate';
+  const body = streaming ? (active?.draft ?? active?.content ?? '') : editor;
 
   return (
     <main className="workspace caspa" aria-label="Caspa writing">
@@ -194,7 +276,21 @@ export function CaspaPanel({
           ) : (
             <>
               <label htmlFor="doc-body">Current revision</label>
-              <textarea id="doc-body" readOnly value={body} rows={16} />
+              <textarea
+                id="doc-body"
+                value={body}
+                readOnly={streaming || busy}
+                onChange={(event) => setEditor(event.target.value)}
+                rows={16}
+              />
+              <div className="row">
+                <button type="button" className="ghost" disabled={busy || streaming || !editor.trim()} onClick={() => void onSaveEdit()}>
+                  Save revision
+                </button>
+                <button type="button" className="ghost" disabled={!active} onClick={() => void onCancel()}>
+                  Cancel run
+                </button>
+              </div>
               {active.failure ? (
                 <p className="error" role="alert">
                   {active.failure.code}: {active.failure.message}
@@ -236,11 +332,36 @@ export function CaspaPanel({
                 <button type="submit" className="primary" disabled={busy || !instruction.trim()}>
                   {busy ? 'Writing' : 'Generate'}
                 </button>
+                <button type="button" className="ghost" disabled={busy || !instruction.trim()} onClick={() => void onCommission()}>
+                  Commission job
+                </button>
               </form>
             </>
           )}
         </section>
         <aside className="caspa-meta">
+          <h3>Companions</h3>
+          {companions.length === 0 ? (
+            <p className="muted">No outline, canon, claims, or quality artefacts yet.</p>
+          ) : (
+            <ul className="plain">
+              {companions.map((item) => (
+                <li key={item.id}>
+                  <strong>{item.kind}</strong>
+                  <span className="meta">{item.title}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {active ? (
+            <form className="stack" onSubmit={(event) => void onCompanion(event)}>
+              <label htmlFor="companion-text">Outline / canon note</label>
+              <textarea id="companion-text" value={companionText} onChange={(event) => setCompanionText(event.target.value)} rows={3} />
+              <button type="submit" className="ghost" disabled={!companionText.trim()}>
+                Store companion
+              </button>
+            </form>
+          ) : null}
           <h3>Versions</h3>
           {versions.length === 0 ? (
             <p className="muted">No committed revisions yet.</p>

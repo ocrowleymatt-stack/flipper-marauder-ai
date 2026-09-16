@@ -51,13 +51,12 @@ Reload calls the same GET endpoints. Remounting the SPA does not reset PostgreSQ
 
 ## Dungeon extension point
 
-The shell is generic: project nav, conversation/run, files/context, tools/approval, run inspection. Caspa/Writing mounts as a project-scoped surface (`Writing`) via dungeon registration (`GET /api/dungeons`). Workbench is not forked; manuscript types are not baked into the generic conversation thread. See [CASPA-WRITING.md](./CASPA-WRITING.md).
+The shell is generic: project nav, conversation/run, files/context, tools/approval, run inspection, command palette, and presentation-only motion/sound. Caspa/Writing and the migrated specialist dungeons mount as project-scoped surfaces via dungeon registration (`GET /api/dungeons`). Privacy & Safety is owner-only and still enforced by Authority. Workbench is not forked. See [CASPA-WRITING.md](./CASPA-WRITING.md) and [CASPA-PARITY.md](./CASPA-PARITY.md).
 
 ## Non-goals (this slice)
 
-- Broad Dungeon migration or Investigation product UI
 - A second Nexus, Execution, frontend tool runtime, frontend permission gate, or parallel file store
 - Copying Mountain's layout as a template
 - Production password/OIDC login (local bootstrap only; production fails closed)
 - Per-request multi-tenant conversation runtime in one process (the conversation spine is bound at compose time; a mismatched session tenant is fail-closed)
-- OCR, embeddings-as-primary-retriever, or exposing RunPod/keys/raw infra in the inspector
+- OCR, embeddings-as-primary-retriever, or exposing GPU vendor/keys/raw infra in the inspector

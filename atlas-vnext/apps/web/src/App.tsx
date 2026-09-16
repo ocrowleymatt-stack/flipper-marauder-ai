@@ -32,10 +32,12 @@ import {
   type ToolPresentation,
 } from './api';
 import { CaspaPanel } from './caspa';
+import { EstatePanel } from './estate';
+import { playCue, prefersReducedMotion, setSoundEnabled, soundEnabled } from './experience';
 import { applyStream, emptyView, runStatusLabel, viewFromSnapshot, type StreamView } from './stream';
 
 type InspectorTab = 'run' | 'files' | 'context' | 'tools';
-type Surface = 'conversation' | 'caspa';
+type Surface = 'conversation' | 'writing' | 'osint' | 'investigation' | 'research' | 'website' | 'music' | 'privacy';
 
 export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
@@ -63,6 +65,10 @@ export function App() {
   const [surface, setSurface] = useState<Surface>('conversation');
   const [dungeons, setDungeons] = useState<DungeonRegistration[]>([]);
   const [navOpen, setNavOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState('');
+  const [soundOn, setSoundOn] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
   const composerId = useId();
   const liveId = useId();
@@ -137,6 +143,7 @@ export function App() {
         }
         const registered = await listDungeons().catch(() => []);
         setDungeons(registered);
+        setSoundOn(soundEnabled());
         if (projectItems) {
           setProjectsAvailable(true);
           const first = projectItems[0]?.id ?? null;
@@ -165,6 +172,19 @@ export function App() {
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' });
   }, [snapshot?.messages, snapshot?.executions, view?.waitLabel]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+        playCue('activate');
+      }
+      if (event.key === 'Escape') setPaletteOpen(false);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   async function refreshAll() {
     setError(null);
@@ -264,8 +284,10 @@ export function App() {
       }
       await loadConversation(conversationId);
       setConversations(projectId ? await listProjectConversations(projectId) : await listConversations());
+      playCue('complete');
       setStatus('Run finished.');
     } catch (err) {
+      playCue('warn');
       setError(err instanceof Error ? err.message : String(err));
       setStatus('Request failed.');
     } finally {
@@ -313,12 +335,36 @@ export function App() {
     }
   }
 
+  async function ingestDroppedFiles(fileList: FileList | null) {
+    if (!projectId || !fileList?.length) return;
+    try {
+      for (const file of Array.from(fileList)) {
+        const text = await file.text();
+        await uploadTextFile(projectId, file.name, text);
+      }
+      setFiles(await listFiles(projectId));
+      playCue('complete');
+      setStatus('Dropped files stored in CAS.');
+    } catch (err) {
+      playCue('warn');
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function openSurface(next: Surface) {
+    setSurface(next);
+    setNavOpen(false);
+    setPaletteOpen(false);
+    playCue('activate');
+  }
+
   async function onDecide(id: string, decision: 'approve' | 'deny') {
     try {
       await decideTool(id, decision);
       if (activeConversationId) await loadConversation(activeConversationId);
       setApprovals(await listApprovals());
       setStatus(decision === 'approve' ? 'Approval recorded on the server.' : 'Denial recorded on the server.');
+      playCue(decision === 'approve' ? 'complete' : 'warn');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -326,6 +372,19 @@ export function App() {
 
   const citations = useMemo(() => citationsFromBackend(context), [context]);
   const currentProject = projects.find((item) => item.id === projectId) ?? null;
+  const paletteItems = useMemo(() => {
+    const q = paletteQuery.trim().toLowerCase();
+    const surfaces: Array<{ id: Surface; label: string }> = [
+      { id: 'conversation', label: 'Conversation' },
+      ...dungeons.filter((item) => item.featureAvailable).map((item) => ({ id: item.id as Surface, label: item.navLabel })),
+    ];
+    return [
+      ...surfaces.filter((item) => !q || item.label.toLowerCase().includes(q)),
+      ...projects
+        .filter((item) => !q || item.name.toLowerCase().includes(q))
+        .map((item) => ({ id: `project:${item.id}` as const, label: `Project ${item.name}` })),
+    ];
+  }, [dungeons, paletteQuery, projects]);
 
   if (loading) {
     return (
@@ -345,7 +404,19 @@ export function App() {
   }
 
   return (
-    <div className="shell">
+    <div
+      className={`shell ${dropActive ? 'drop-active' : ''} ${prefersReducedMotion() ? 'reduced-motion' : 'atlas-motion'}`}
+      onDragOver={(event) => {
+        event.preventDefault();
+        setDropActive(true);
+      }}
+      onDragLeave={() => setDropActive(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDropActive(false);
+        void ingestDroppedFiles(event.dataTransfer.files);
+      }}
+    >
       <a className="skip" href={`#${composerId}`}>
         Skip to composer
       </a>
@@ -358,6 +429,22 @@ export function App() {
           <p id={liveId} className="status" aria-live="polite">
             {status}
           </p>
+          <button
+            type="button"
+            className="ghost"
+            aria-pressed={soundOn}
+            onClick={() => {
+              const next = !soundOn;
+              setSoundEnabled(next);
+              setSoundOn(next);
+              if (next) playCue('activate');
+            }}
+          >
+            {soundOn ? 'Sound on' : 'Sound off'}
+          </button>
+          <button type="button" className="ghost" onClick={() => setPaletteOpen(true)}>
+            Command palette
+          </button>
           <button type="button" className="ghost nav-toggle" onClick={() => setNavOpen((open) => !open)} aria-expanded={navOpen}>
             {navOpen ? 'Close navigation' : 'Open navigation'}
           </button>
@@ -406,17 +493,24 @@ export function App() {
           </div>
           <ul className="plain">
             <li>
-              <button type="button" className={surface === 'conversation' ? 'active' : ''} onClick={() => setSurface('conversation')} disabled={projectsAvailable && !projectId}>
+              <button type="button" className={surface === 'conversation' ? 'active' : ''} onClick={() => openSurface('conversation')} disabled={projectsAvailable && !projectId}>
                 Conversation
               </button>
             </li>
-            {dungeons.some((item) => item.id === 'writing' && item.featureAvailable) ? (
-              <li>
-                <button type="button" className={surface === 'caspa' ? 'active' : ''} onClick={() => setSurface('caspa')} disabled={!projectId}>
-                  Writing
-                </button>
-              </li>
-            ) : null}
+            {dungeons
+              .filter((item) => item.featureAvailable)
+              .map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className={surface === item.id ? 'active' : ''}
+                    onClick={() => openSurface(item.id as Surface)}
+                    disabled={item.id !== 'privacy' && !projectId}
+                  >
+                    {item.navLabel}
+                  </button>
+                </li>
+              ))}
           </ul>
           <div className="row">
             <h2>Conversations</h2>
@@ -444,8 +538,18 @@ export function App() {
             </ul>
           )}
         </nav>
-        {surface === 'caspa' && projectId ? (
+        {surface === 'writing' && projectId ? (
           <CaspaPanel
+            projectId={projectId}
+            files={files}
+            busy={busy}
+            setBusy={setBusy}
+            onStatus={setStatus}
+            onError={setError}
+          />
+        ) : surface !== 'conversation' ? (
+          <EstatePanel
+            dungeonId={surface}
             projectId={projectId}
             files={files}
             busy={busy}
@@ -647,6 +751,46 @@ export function App() {
           ) : null}
         </aside>
       </div>
+      {paletteOpen ? (
+        <div className="palette-scrim" role="presentation" onClick={() => setPaletteOpen(false)}>
+          <div
+            className="palette"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Command palette"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <label htmlFor="palette-query">Jump</label>
+            <input
+              id="palette-query"
+              autoFocus
+              value={paletteQuery}
+              onChange={(event) => setPaletteQuery(event.target.value)}
+              placeholder="Dungeon, conversation, or project"
+            />
+            <ul className="plain">
+              {paletteItems.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (item.id.startsWith('project:')) {
+                        void onSelectProject(item.id.slice('project:'.length));
+                        setPaletteOpen(false);
+                        return;
+                      }
+                      openSurface(item.id as Surface);
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="muted">Ctrl/Cmd+K. Presentation only; Authority still decides on the server.</p>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -677,7 +821,7 @@ function ApprovalCard({
 }) {
   const desc = `${tool.title} ${tool.argumentSummary} risk ${tool.risk}`;
   return (
-    <section className="approval" aria-label={`Approval required for ${tool.title}`}>
+    <section className="approval atlas-motion" aria-label={`Approval required for ${tool.title}`}>
       <h3>Approval required</h3>
       <p>
         <strong>{tool.title}</strong> wants to run <code>{tool.toolId}</code> on {tool.resource ?? 'this project'}.

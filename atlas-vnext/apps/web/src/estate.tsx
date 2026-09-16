@@ -17,6 +17,7 @@ import {
   listPrivacyProposals,
   listResearch,
   listSites,
+  previewSiteHtml,
   promoteSite,
   runResearch,
   scanOsint,
@@ -361,6 +362,7 @@ function WebsitePanel({
   const [sites, setSites] = useState<Array<{ id: string; name: string; currentRevisionId: string | null }>>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [repoWrite, setRepoWrite] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState('');
 
   const reload = useCallback(async () => {
     const items = await listSites(projectId);
@@ -373,6 +375,16 @@ function WebsitePanel({
   useEffect(() => {
     void reload().catch((err) => onError(err instanceof Error ? err.message : String(err)));
   }, [reload, onError]);
+
+  useEffect(() => {
+    if (!activeId) {
+      setPreviewHtml('');
+      return;
+    }
+    void previewSiteHtml(activeId)
+      .then((html) => setPreviewHtml(html))
+      .catch((err) => onError(err instanceof Error ? err.message : String(err)));
+  }, [activeId, onError]);
 
   async function onCreate(event: FormEvent) {
     event.preventDefault();
@@ -393,6 +405,7 @@ function WebsitePanel({
       playCue('tool');
       await generateSite(activeId, brief.trim());
       await reload();
+      setPreviewHtml(await previewSiteHtml(activeId));
       playCue('complete');
       onStatus('Preview revision stored in CAS.');
     } catch (err) {
@@ -464,8 +477,8 @@ function WebsitePanel({
             Promote{repoWrite ? '' : ' (repo write off)'}
           </button>
         </div>
-        {activeId ? (
-          <iframe className="site-preview" title="Site preview" src={`/api/sites/${encodeURIComponent(activeId)}/preview`} />
+        {previewHtml ? (
+          <iframe className="site-preview" title="Site preview" sandbox="" srcDoc={previewHtml} />
         ) : null}
       </section>
     </main>

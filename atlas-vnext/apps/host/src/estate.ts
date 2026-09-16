@@ -360,10 +360,13 @@ async function handlePrivacy(
   const decide = pathname.match(/^\/api\/privacy\/proposals\/([^/]+)\/decide$/);
   if (req.method === 'POST' && decide) {
     const body = await readJson(req, options.maxRequestBytes);
+    if (body.status !== 'approved' && body.status !== 'denied') {
+      throw new PrivacyError('malformed', 'Proposal decision must be approved or denied.', 400);
+    }
     json(
       res,
       200,
-      await service.decideProposal(writingActor, decodeURIComponent(decide[1]!), body.status === 'denied' ? 'denied' : 'approved'),
+      await service.decideProposal(writingActor, decodeURIComponent(decide[1]!), body.status),
     );
     return true;
   }

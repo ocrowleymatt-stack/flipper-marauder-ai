@@ -736,6 +736,16 @@ export async function generateSite(id: string, brief: string): Promise<{ site: {
   );
 }
 
+export async function previewSiteHtml(id: string): Promise<string> {
+  const response = await fetch(`/api/sites/${encodeURIComponent(id)}/preview`, { credentials: 'include' });
+  if (!response.ok) {
+    const error = new Error(await readError(response)) as Error & { status: number };
+    error.status = response.status;
+    throw error;
+  }
+  return response.text();
+}
+
 export async function promoteSite(id: string): Promise<unknown> {
   return parseJson(
     await fetch(`/api/sites/${encodeURIComponent(id)}/promote`, {

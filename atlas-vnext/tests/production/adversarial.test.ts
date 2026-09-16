@@ -218,7 +218,8 @@ describe('release-candidate adversarial drills', () => {
       { toolId: 'hang.probe', arguments: {} },
     );
     expect(result.invocation.status).toBe('failed');
-    expect(result.invocation.failureReason?.message).toMatch(/aborted/i);
+    expect(result.invocation.failureReason?.code).toBe('timeout');
+    expect(result.invocation.failureReason?.message).toMatch(/timed out/i);
     expect(result.output).toBeUndefined();
   });
 });

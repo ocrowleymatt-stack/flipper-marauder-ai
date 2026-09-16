@@ -40,7 +40,7 @@ function openaiToolCallSse(id: string, query: string): string {
               {
                 index: 0,
                 id,
-                function: { name: 'retrieval.search', arguments: JSON.stringify({ query }) },
+                function: { name: 'retrieval__search', arguments: JSON.stringify({ query }) },
               },
             ],
           },
@@ -105,7 +105,8 @@ describe('live provider tool orchestration', () => {
     const chatBodies = bodies.filter((body) => Array.isArray(body.messages));
     expect(chatBodies).toHaveLength(3);
     const advertised = JSON.stringify(chatBodies[0]?.tools);
-    expect(advertised).toContain('retrieval.search');
+    expect(advertised).toContain('retrieval__search');
+    expect(advertised).not.toContain('retrieval.search');
     expect(advertised).not.toContain('fs.write');
     expect(advertised).not.toContain('admin.configure');
     expect(advertised).not.toMatch(/"name":"runpod"/i);

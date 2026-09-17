@@ -63,7 +63,8 @@ describe('RepairExecutor', () => {
   it('applies harmless recoverExpiredLeases when Authority ALLOWs', async () => {
     const recover = vi.fn(async () => [{ id: 'job_stuck' }]);
     const authority = new AuthorityEngine();
-    allowAdmin(authority);
+    const system: AuthorityPrincipal = { principalId: 'host', kind: 'system', tenantId: '*' };
+    authority.grantTo({ principalId: 'host', tenantId: '*', capability: 'admin.configure' });
     let stuck = [{ id: 'job_stuck' }];
     const jobs = jobsStub(recover);
     const doctor = new OperationsDoctor({
@@ -72,12 +73,12 @@ describe('RepairExecutor', () => {
       listStuckJobs: async () => stuck,
     });
     const executor = new RepairExecutor({ doctor, authority, jobs });
-    const applied = await executor.apply(actor, recoverExpiredLeasesProposal());
+    const applied = await executor.apply(system, recoverExpiredLeasesProposal());
     expect(applied.status).toBe('applied');
     expect(applied.authorityDecision).toBe('ALLOW');
     expect(recover).toHaveBeenCalledTimes(1);
     stuck = [];
-    const verified = await executor.verify(actor, applied);
+    const verified = await executor.verify(system, applied);
     expect(verified.report.checks.find((item) => item.id === 'stuck_jobs')?.state).toBe('ok');
     expect(verified.execution?.status).toBe('verified');
   });
@@ -178,4 +179,16 @@ describe('RepairExecutor', () => {
     expect(verified.report.checks.find((item) => item.id === 'disk')?.state).toBe('warn');
     expect(unlink).not.toHaveBeenCalled();
   });
+  it('denies global recovery to a tenant administrator and rejects fabricated execution results', async () => {
+    const authority = new AuthorityEngine(); allowAdmin(authority);
+    const recover = vi.fn(async () => []);
+    const jobs = jobsStub(recover);
+    const doctor = new OperationsDoctor({ authority, jobs, listStuckJobs: async () => [] });
+    const executor = new RepairExecutor({ authority, doctor, jobs });
+    expect((await executor.apply(actor, recoverExpiredLeasesProposal())).status).toBe('denied');
+    expect(recover).not.toHaveBeenCalled();
+    const result = await executor.verify(actor, { proposalId: 'repair.recover_expired_leases', status: 'applied', authorityDecision: 'ALLOW' });
+    expect(result.execution?.status).toBe('denied');
+  });
+
 });

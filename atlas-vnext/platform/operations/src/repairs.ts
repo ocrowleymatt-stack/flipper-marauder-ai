@@ -103,7 +103,12 @@ export interface RepairExecutorDeps {
  * Consequential proposals stay `proposed` even when ALLOW — a human must apply them.
  */
 export class RepairExecutor {
+  private readonly issued = new WeakMap<RepairExecution, string>();
   constructor(private readonly deps: RepairExecutorDeps) {}
+
+  private actorKey(actor: AuthorityPrincipal): string {
+    return JSON.stringify([actor.principalId, actor.kind, actor.tenantId, actor.workspaceId ?? null, actor.sessionId ?? null]);
+  }
 
   async apply(actor: AuthorityPrincipal, proposal: RepairProposal): Promise<RepairExecution> {
     const canonical = canonicalProposal(proposal.id);
@@ -142,12 +147,18 @@ export class RepairExecutor {
           authorityDecision: 'ALLOW',
         };
       }
+      // This engine operation scans all tenants: only a host-derived global system actor may invoke it.
+      if (actor.kind !== 'system' || actor.tenantId !== '*' || actor.workspaceId) {
+        return { proposalId: canonical.id, status: 'denied', authorityDecision: 'DENY' };
+      }
       await this.deps.jobs.recoverExpiredLeases();
-      return {
+      const execution: RepairExecution = Object.freeze({
         proposalId: canonical.id,
         status: 'applied',
         authorityDecision: 'ALLOW',
-      };
+      });
+      this.issued.set(execution, this.actorKey(actor));
+      return execution;
     }
 
     return {
@@ -167,6 +178,11 @@ export class RepairExecutor {
     }
     if (previous.status !== 'applied') {
       return { report, execution: previous };
+    }
+    const canonical = canonicalProposal(previous.proposalId);
+    if (this.issued.get(previous) !== this.actorKey(actor) || !canonical ||
+      this.deps.authority.decide({ principal: actor, capability: canonical.requiresCapability }).decision !== 'ALLOW') {
+      return { report, execution: { proposalId: previous.proposalId, status: 'denied', authorityDecision: 'DENY' } };
     }
     const related = relatedCheckId(previous.proposalId);
     const check = related ? report.checks.find((item) => item.id === related) : undefined;

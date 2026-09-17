@@ -1,4 +1,4 @@
-import type { EpistemicClass } from '@atlas-vnext/contracts';
+import { epistemicClassSchema, type EpistemicClass } from '@atlas-vnext/contracts';
 import { InvestigationError } from './errors.ts';
 
 export const EPISTEMIC_IMMUTABLE = 'epistemic_immutable';
@@ -36,4 +36,11 @@ export function kindToEpistemicClass(kind: string): EpistemicClass | null {
     return kind;
   }
   return null;
+}
+
+export function resolveEpistemicClass(kind: string, payload: Record<string, unknown>): EpistemicClass | null {
+  const fromKind = kindToEpistemicClass(kind);
+  if (fromKind) return fromKind;
+  const parsed = epistemicClassSchema.safeParse(payload.epistemicClass);
+  return parsed.success ? parsed.data : null;
 }

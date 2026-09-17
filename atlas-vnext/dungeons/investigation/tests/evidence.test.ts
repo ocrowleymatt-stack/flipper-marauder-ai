@@ -182,6 +182,8 @@ describe('Investigation evidential substrate', () => {
     expect(staleIds.length).toBeGreaterThan(0);
     expect(staleIds).toContain(fixture.objectIds.swipe);
     expect(staleIds).toContain(fixture.assertionIds.swipe);
+    expect(staleIds).toContain(fixture.factId);
+    expect(staleIds).toContain(fixture.findingIds.presence);
     const after = await ledger.listCase(stack.actor, fixture.caseId);
     expect(after).toHaveLength(before.length);
     const swipeObject = after.find((row) => row.id === fixture.objectIds.swipe);
@@ -206,5 +208,85 @@ describe('Investigation evidential substrate', () => {
     await stack.persistence.ensurePrincipal({ id: 'principal_b', displayName: 'B' });
     const other = { tenantId: 'tenant_b', principalId: 'principal_b' };
     await expect(ledger.chronology(other, fixture.caseId)).rejects.toBeInstanceOf(InvestigationError);
+  });
+
+  it('rejects facts corroborated by another case or by a hidden inference', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const { investigation, ledger } = stackService(stack);
+    const alpha = await investigation.createCase(stack.actor, {
+      projectId: stack.project.id,
+      title: 'Alpha',
+      question: 'q',
+    });
+    const beta = await investigation.createCase(stack.actor, {
+      projectId: stack.project.id,
+      title: 'Beta',
+      question: 'q',
+    });
+    const inference = await ledger.recordInference(stack.actor, {
+      caseId: alpha.id,
+      statement: 'A model guess.',
+      producer: 'model',
+      dependsOn: [],
+    });
+    const cloaked = await ledger.recordFinding(stack.actor, {
+      caseId: alpha.id,
+      statement: 'Cloaked inference.',
+      epistemicClass: 'inference',
+      linkedIds: [inference.id],
+    });
+    await expect(
+      ledger.recordFact(stack.actor, {
+        caseId: alpha.id,
+        statement: 'Must not become a fact.',
+        producer: 'deterministic',
+        corroboratedBy: [cloaked.id],
+      }),
+    ).rejects.toMatchObject({ code: EPISTEMIC_BOUNDARY });
+
+    const betaInference = await ledger.recordInference(stack.actor, {
+      caseId: beta.id,
+      statement: 'Other case guess.',
+      producer: 'human',
+      dependsOn: [],
+    });
+    await expect(
+      ledger.recordFact(stack.actor, {
+        caseId: alpha.id,
+        statement: 'Cross-case fact.',
+        producer: 'deterministic',
+        corroboratedBy: [betaInference.id],
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('orders chronology by parsed instants, not lexicographic offsets', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const { investigation, ledger } = stackService(stack);
+    const created = await investigation.createCase(stack.actor, {
+      projectId: stack.project.id,
+      title: 'Time',
+      question: 'when',
+    });
+    const later = await ledger.addEvent(stack.actor, {
+      caseId: created.id,
+      description: 'Pacific morning',
+      occurredAt: '2026-03-12T10:00:00-08:00',
+      occurredAtPrecision: 'datetime',
+      epistemicClass: 'source_assertion',
+      evidenceObjectIds: [],
+    });
+    const earlier = await ledger.addEvent(stack.actor, {
+      caseId: created.id,
+      description: 'UTC afternoon',
+      occurredAt: '2026-03-12T16:00:00Z',
+      occurredAtPrecision: 'datetime',
+      epistemicClass: 'source_assertion',
+      evidenceObjectIds: [],
+    });
+    const chronology = await ledger.chronology(stack.actor, created.id);
+    expect(chronology.map((event) => event.id)).toEqual([earlier.id, later.id]);
   });
 });

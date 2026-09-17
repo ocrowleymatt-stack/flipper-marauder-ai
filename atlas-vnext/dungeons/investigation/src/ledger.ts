@@ -42,6 +42,7 @@ import {
   assertFactLineage,
   assertFactProducer,
   kindToEpistemicClass,
+  resolveEpistemicClass,
 } from './epistemic.ts';
 
 export const EVIDENCE_KINDS = {
@@ -214,7 +215,8 @@ export class EvidenceLedger {
       throw new InvestigationError('malformed', 'A fact requires at least one corroborating record.');
     }
     const sources = await Promise.all(input.corroboratedBy.map((id) => this.requireAny(actor, id, 'artifact.read')));
-    const classes = sources.map((row) => kindToEpistemicClass(row.kind)).filter((item): item is EpistemicClass => item !== null);
+    for (const row of sources) this.assertSameCase(row, input.caseId);
+    const classes = await this.collectLineageClasses(actor, input.corroboratedBy);
     assertFactLineage(classes);
     const dependsOn = unique([
       ...input.corroboratedBy,
@@ -474,9 +476,8 @@ export class EvidenceLedger {
   ): Promise<EvidenceFinding> {
     if (input.epistemicClass === 'fact') {
       const linked = await Promise.all(input.linkedIds.map((id) => this.requireAny(actor, id, 'artifact.read')));
-      assertFactLineage(
-        linked.map((row) => kindToEpistemicClass(row.kind)).filter((item): item is EpistemicClass => item !== null),
-      );
+      for (const row of linked) this.assertSameCase(row, input.caseId);
+      assertFactLineage(await this.collectLineageClasses(actor, input.linkedIds));
     }
     const caseRow = await this.requireCase(actor, input.caseId, 'artifact.write');
     const finding: EvidenceFinding = {
@@ -514,14 +515,27 @@ export class EvidenceLedger {
     const derived = await this.listCase(actor, caseRow.id);
     const staleIds: string[] = [];
     const frontier = new Set<string>([source.id]);
-    for (const object of derived.filter((row) => row.kind === EVIDENCE_KINDS.object)) {
-      const payload = object.payload;
-      if (payload.sourceId === source.id) frontier.add(object.id);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const row of derived) {
+        if (row.id === source.id || frontier.has(row.id)) continue;
+        const payload = row.payload;
+        const dependsOn = asStringArray(payload.dependsOn);
+        const payloadSourceId = typeof payload.sourceId === 'string' ? payload.sourceId : null;
+        if (payloadSourceId && frontier.has(payloadSourceId)) {
+          frontier.add(row.id);
+          grew = true;
+          continue;
+        }
+        if (dependsOn.some((id) => frontier.has(id))) {
+          frontier.add(row.id);
+          grew = true;
+        }
+      }
     }
     for (const row of derived) {
-      if (row.id === source.id) continue;
-      const dependsOn = asStringArray(row.payload.dependsOn);
-      if (!dependsOn.some((id) => frontier.has(id) || id === source.id)) continue;
+      if (row.id === source.id || !frontier.has(row.id)) continue;
       const currentClass = kindToEpistemicClass(row.kind);
       if (currentClass && typeof row.payload.epistemicClass === 'string') {
         assertEpistemicClassImmutable(currentClass, row.payload.epistemicClass as EpistemicClass);
@@ -559,9 +573,11 @@ export class EvidenceLedger {
       evidenceEventSchema.parse(row.payload),
     );
     return events.sort((a, b) => {
-      if (a.occurredAt && b.occurredAt) return a.occurredAt.localeCompare(b.occurredAt);
-      if (a.occurredAt) return -1;
-      if (b.occurredAt) return 1;
+      const aAt = timestampMs(a.occurredAt);
+      const bAt = timestampMs(b.occurredAt);
+      if (aAt !== null && bAt !== null && aAt !== bAt) return aAt - bAt;
+      if (aAt !== null && bAt === null) return -1;
+      if (aAt === null && bAt !== null) return 1;
       return a.id.localeCompare(b.id);
     });
   }
@@ -659,6 +675,31 @@ export class EvidenceLedger {
     return row;
   }
 
+  private assertSameCase(row: DungeonRecordRow, caseId: string): void {
+    const rowCaseId = typeof row.payload.caseId === 'string' ? row.payload.caseId : row.id;
+    if (rowCaseId !== caseId) {
+      throw new InvestigationError('not_found', GENERIC_DENY, 404);
+    }
+  }
+
+  private async collectLineageClasses(actor: InvestigationActor, ids: string[]): Promise<EpistemicClass[]> {
+    const classes: EpistemicClass[] = [];
+    const seen = new Set<string>();
+    const queue = [...ids];
+    while (queue.length > 0) {
+      const id = queue.shift();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const row = await this.requireAny(actor, id, 'artifact.read');
+      const resolved = resolveEpistemicClass(row.kind, row.payload);
+      if (resolved) classes.push(resolved);
+      for (const dep of asStringArray(row.payload.dependsOn)) {
+        if (!seen.has(dep)) queue.push(dep);
+      }
+    }
+    return classes;
+  }
+
   private store(actor: PersistenceActor) {
     return this.deps.persistence.forActor(actor).dungeonRecords;
   }
@@ -697,4 +738,10 @@ function maxGeneration(rows: DungeonRecordRow[]): number {
 
 function unique(ids: string[]): string[] {
   return [...new Set(ids)];
+}
+
+function timestampMs(value: string | null): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
 }

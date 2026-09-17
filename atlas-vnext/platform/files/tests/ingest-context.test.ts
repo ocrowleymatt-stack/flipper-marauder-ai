@@ -5,6 +5,7 @@ import {
   FilesService,
   buildSimplePdf,
   FilesAccessError,
+  IngestionError,
   PathSafetyError,
   UnsupportedMediaError,
 } from '@atlas-vnext/files';
@@ -136,5 +137,52 @@ describe('files ingest, retrieval, context, artefacts', () => {
     );
     expect(lines[0]).not.toContain('should not appear');
     expect(lines[0]).toContain(notes.id);
+  });
+
+  it('reserves acquisition/ from ordinary ingest and never updates an accepted original', async () => {
+    const persistence = openMemoryPersistence();
+    const cas = new MemoryCas();
+    const files = new FilesService(persistence, cas);
+    const projects = new ProjectService(persistence);
+    const actor = { tenantId: 'tenant_a' };
+    await persistence.ensureTenant({ id: 'tenant_a', name: 'A' });
+    const project = await projects.create(actor, { name: 'Reserved', dungeon: 'research' });
+    const original = new TextEncoder().encode('harbour original');
+    const overwrite = new TextEncoder().encode('tampered original');
+    const path = 'acquisition/acq_reserved/originals/watch.txt';
+
+    await expect(
+      files.ingest(actor, { projectId: project.id, path, bytes: original }),
+    ).rejects.toBeInstanceOf(IngestionError);
+    await expect(
+      files.ingestRawOriginal(actor, { projectId: project.id, path, bytes: original }),
+    ).rejects.toBeInstanceOf(IngestionError);
+
+    const stored = await files.ingestAcquisitionOriginal(
+      actor,
+      { projectId: project.id, path, bytes: original },
+      true,
+    );
+    expect(stored.contentHash).toHaveLength(64);
+    await expect(
+      files.ingest(actor, { projectId: project.id, path, bytes: overwrite }),
+    ).rejects.toBeInstanceOf(IngestionError);
+    await expect(
+      files.ingestAcquisitionOriginal(actor, { projectId: project.id, path, bytes: overwrite }, true),
+    ).rejects.toMatchObject({ name: 'IngestionError', message: /append-only/ });
+    await expect(
+      files.ingestAcquisitionOriginal(
+        actor,
+        { projectId: project.id, path: 'notes/not-reserved.txt', bytes: original },
+        true,
+      ),
+    ).rejects.toMatchObject({ name: 'IngestionError', message: /acquisition\// });
+
+    const listed = await files.list(actor, project.id);
+    expect(listed.find((file) => file.path === path)?.contentHash).toBe(stored.contentHash);
+    expect(new TextDecoder().decode(await files.readBytes(actor, stored.id))).toBe('harbour original');
+    await files.gcUnreferenced();
+    expect(new TextDecoder().decode(await files.readBytes(actor, stored.id))).toBe('harbour original');
+    await persistence.close();
   });
 });

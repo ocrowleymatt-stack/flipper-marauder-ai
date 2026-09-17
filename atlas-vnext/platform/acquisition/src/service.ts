@@ -43,7 +43,7 @@ export interface BeginAcquisitionInput {
 type MutableManifest = AcquisitionManifest & { manifestHash?: string; fileIds: string[] };
 
 /**
- * Authorised local-data acquisition. Originals go to FilesService.ingest / CAS.
+ * Authorised local-data acquisition. Originals go to FilesService.ingestAcquisitionOriginal / CAS.
  * Extraction reuses the files.ingest worker (`extractAndChunk`); this service
  * never calls an LLM and never walks the host filesystem.
  */
@@ -108,13 +108,16 @@ export class AcquisitionService {
 
     for (const item of hashed) {
       try {
-        const ingest = item.kind === 'archive' ? this.deps.files.ingestRawOriginal.bind(this.deps.files) : this.deps.files.ingest.bind(this.deps.files);
-        const file = await ingest(actor, {
-          projectId: project.id,
-          path: item.storedPath,
-          bytes: item.bytes,
-          declaredMime: item.mime,
-        });
+        const file = await this.deps.files.ingestAcquisitionOriginal(
+          actor,
+          {
+            projectId: project.id,
+            path: item.storedPath,
+            bytes: item.bytes,
+            declaredMime: item.mime,
+          },
+          item.kind !== 'archive',
+        );
         if (file.contentHash !== item.sha256) {
           throw new AcquisitionError('hash_mismatch', 'CAS hash diverged from pre-ingest sha256.');
         }
@@ -183,12 +186,16 @@ export class AcquisitionService {
     let manifestFile: FileRecord | undefined;
     try {
       const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
-      manifestFile = await this.deps.files.ingest(actor, {
-        projectId: project.id,
-        path: sanitiseRelPath(manifestStoredPath(id)),
-        bytes: manifestBytes,
-        declaredMime: 'application/json',
-      });
+      manifestFile = await this.deps.files.ingestAcquisitionOriginal(
+        actor,
+        {
+          projectId: project.id,
+          path: sanitiseRelPath(manifestStoredPath(id)),
+          bytes: manifestBytes,
+          declaredMime: 'application/json',
+        },
+        true,
+      );
       manifestHash = manifestFile.contentHash;
     } catch (err) {
       if (accepted) {

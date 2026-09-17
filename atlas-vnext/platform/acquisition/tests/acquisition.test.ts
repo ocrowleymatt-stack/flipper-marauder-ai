@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { EXTRACTOR_ID, EXTRACTOR_VERSION, FilesService } from '@atlas-vnext/files';
+import { EXTRACTOR_ID, EXTRACTOR_VERSION, FilesService, IngestionError } from '@atlas-vnext/files';
 import { openMemoryPersistence } from '@atlas-vnext/persistence';
 import { AuthorityEngine } from '@atlas-vnext/permissions';
 import { ProjectService } from '@atlas-vnext/projects';
@@ -408,6 +408,53 @@ describe('local data acquisition substrate', () => {
     expect(await bound.extractions.getByHash(stack.actor, original.contentHash, EXTRACTOR_ID, EXTRACTOR_VERSION)).toBeNull();
     await stack.files.gcUnreferenced();
     expect(new Uint8Array(await stack.files.readBytes(stack.actor, original.id))).toEqual(bytes);
+    await stack.persistence.close();
+  });
+
+  it('refuses ordinary files.ingest into reserved acquisition paths and keeps originals through GC', async () => {
+    const stack = await openAcquisitionStack();
+    const payload = new TextEncoder().encode('authorised notes from the quay watch');
+    const begun = await stack.acquisition.begin(stack.actor, {
+      projectId: stack.project.id,
+      sourceKind: 'documents',
+      title: 'Immutable pack',
+      acquiredFrom: 'caller',
+      items: [{ path: 'watch.txt', bytes: payload }],
+    });
+    expect(begun.status).toBe('accepted');
+    const originalPath = `acquisition/${begun.id}/originals/watch.txt`;
+    const manifestPath = `acquisition/${begun.id}/manifest.json`;
+    const listed = await stack.files.list(stack.actor, stack.project.id);
+    const original = listed.find((file) => file.path === originalPath)!;
+    const manifest = listed.find((file) => file.path === manifestPath)!;
+    const overwrite = new TextEncoder().encode('tampered after accept');
+
+    await expect(
+      stack.files.ingest(stack.actor, { projectId: stack.project.id, path: originalPath, bytes: overwrite }),
+    ).rejects.toBeInstanceOf(IngestionError);
+    await expect(
+      stack.files.ingest(stack.actor, { projectId: stack.project.id, path: manifestPath, bytes: overwrite }),
+    ).rejects.toBeInstanceOf(IngestionError);
+    await expect(
+      stack.files.ingestRawOriginal(stack.actor, {
+        projectId: stack.project.id,
+        path: originalPath,
+        bytes: overwrite,
+      }),
+    ).rejects.toBeInstanceOf(IngestionError);
+
+    const after = await stack.files.list(stack.actor, stack.project.id);
+    expect(after.find((file) => file.path === originalPath)?.contentHash).toBe(original.contentHash);
+    expect(after.find((file) => file.path === manifestPath)?.contentHash).toBe(manifest.contentHash);
+    expect(new TextDecoder().decode(await stack.files.readBytes(stack.actor, original.id))).toBe(
+      'authorised notes from the quay watch',
+    );
+
+    await stack.files.gcUnreferenced();
+    expect(await stack.cas.has(original.contentHash)).toBe(true);
+    expect(new TextDecoder().decode(await stack.files.readBytes(stack.actor, original.id))).toBe(
+      'authorised notes from the quay watch',
+    );
     await stack.persistence.close();
   });
 

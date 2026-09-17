@@ -566,6 +566,10 @@ export class EvidenceLedger {
     });
   }
 
+  async getRecord(actor: InvestigationActor, id: string): Promise<DungeonRecordRow> {
+    return this.requireAny(actor, id, 'artifact.read');
+  }
+
   async listKind(actor: InvestigationActor, caseId: string, kind: string): Promise<DungeonRecordRow[]> {
     const caseRow = await this.requireCase(actor, caseId, 'artifact.read');
     const rows = await this.store(actor).list(actor, {

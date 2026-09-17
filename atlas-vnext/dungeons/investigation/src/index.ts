@@ -16,6 +16,8 @@ export {
   EPISTEMIC_IMMUTABLE,
 } from './epistemic.ts';
 export { loadHarbourFixture, type HarbourFixture } from './fixture.ts';
+export { InvestigationAnalysis, reconstructThreads, firstTimestamp } from './analysis.ts';
+export type { CaseAnalysis, CommunicationThread } from './analysis.ts';
 
 export const dungeonId: DungeonId = 'investigation';
 

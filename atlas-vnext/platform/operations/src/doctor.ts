@@ -171,7 +171,7 @@ export class OperationsDoctor {
       return result('stuck_jobs', 'not_configured', 'Cannot observe stuck jobs without a job engine.', { at });
     }
     if (!this.deps.listStuckJobs) {
-      return result('stuck_jobs', 'ok', 'No expired-lease listing probe is injected; inspect does not recover leases.', {
+      return result('stuck_jobs', 'not_configured', 'No expired-lease listing probe is injected; inspect does not recover leases.', {
         at,
         listed: false,
       });
@@ -307,7 +307,10 @@ function proposeRepairs(
   }
   const migrations = byId.get('migrations');
   if (migrations && (migrations.state === 'warn' || migrations.state === 'error')) {
-    proposals.push(migrateSchemaProposal());
+    const live = migrations.evidence.liveSchemaVersion;
+    if (typeof live === 'number' && live < CURRENT_SCHEMA_VERSION) {
+      proposals.push(migrateSchemaProposal());
+    }
   }
   const disk = byId.get('disk');
   if (disk && (disk.state === 'warn' || disk.state === 'error')) {

@@ -131,6 +131,37 @@ describe('RepairExecutor', () => {
     assertNoShell(recoverExpiredLeasesProposal());
   });
 
+  it('authorizes the canonical proposal capability, not a caller-supplied one', async () => {
+    const recover = vi.fn(async () => []);
+    const authority = new AuthorityEngine();
+    authority.grantMembership('user_ops', 'tenant_a');
+    authority.grantTo({ principalId: 'user_ops', tenantId: 'tenant_a', capability: 'conversation.read' });
+    const jobs = jobsStub(recover);
+    const doctor = new OperationsDoctor({ authority, jobs });
+    const executor = new RepairExecutor({ doctor, authority, jobs });
+    const spoofed: RepairProposal = {
+      ...recoverExpiredLeasesProposal(),
+      requiresCapability: 'conversation.read',
+    };
+    const denied = await executor.apply(actor, spoofed);
+    expect(denied.status).toBe('denied');
+    expect(denied.authorityDecision).toBe('DENY');
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it('keeps recover proposed when no job engine is injected', async () => {
+    const authority = new AuthorityEngine();
+    allowAdmin(authority);
+    const doctor = new OperationsDoctor({ authority });
+    const executor = new RepairExecutor({ doctor, authority });
+    const result = await executor.apply(actor, recoverExpiredLeasesProposal());
+    expect(result).toEqual({
+      proposalId: 'repair.recover_expired_leases',
+      status: 'proposed',
+      authorityDecision: 'ALLOW',
+    });
+  });
+
   it('verify re-runs inspect without applying consequential work', async () => {
     const unlink = vi.fn(async () => true);
     const authority = new AuthorityEngine();

@@ -82,6 +82,14 @@ export function proposalForCheck(checkId: CheckId): RepairProposal | null {
   return null;
 }
 
+export function canonicalProposal(id: string): RepairProposal | null {
+  if (id === REPAIR_RECOVER_EXPIRED_LEASES) return recoverExpiredLeasesProposal();
+  if (id === REPAIR_MIGRATE_SCHEMA) return migrateSchemaProposal();
+  if (id === REPAIR_UNLINK_CAS) return unlinkCasProposal();
+  if (id === REPAIR_RECONFIGURE_PROVIDERS) return reconfigureProvidersProposal();
+  return null;
+}
+
 export interface RepairExecutorDeps {
   doctor: OperationsDoctor;
   authority: AuthorityEngine;
@@ -98,37 +106,52 @@ export class RepairExecutor {
   constructor(private readonly deps: RepairExecutorDeps) {}
 
   async apply(actor: AuthorityPrincipal, proposal: RepairProposal): Promise<RepairExecution> {
-    const verdict = this.deps.authority.decide({
-      principal: actor,
-      capability: proposal.requiresCapability,
-    });
-    if (verdict.decision !== 'ALLOW') {
+    const canonical = canonicalProposal(proposal.id);
+    if (!canonical) {
       return {
         proposalId: proposal.id,
         status: 'denied',
         authorityDecision: 'DENY',
       };
     }
-
-    if (proposal.repairClass === 'consequential' || isConsequentialId(proposal.id)) {
+    const verdict = this.deps.authority.decide({
+      principal: actor,
+      capability: canonical.requiresCapability,
+    });
+    if (verdict.decision !== 'ALLOW') {
       return {
-        proposalId: proposal.id,
+        proposalId: canonical.id,
+        status: 'denied',
+        authorityDecision: 'DENY',
+      };
+    }
+
+    if (canonical.repairClass === 'consequential' || isConsequentialId(canonical.id)) {
+      return {
+        proposalId: canonical.id,
         status: 'proposed',
         authorityDecision: 'ALLOW',
       };
     }
 
-    if (proposal.id === REPAIR_RECOVER_EXPIRED_LEASES && proposal.repairClass === 'harmless_reversible') {
-      await this.deps.jobs?.recoverExpiredLeases();
+    if (canonical.id === REPAIR_RECOVER_EXPIRED_LEASES) {
+      if (!this.deps.jobs) {
+        return {
+          proposalId: canonical.id,
+          status: 'proposed',
+          authorityDecision: 'ALLOW',
+        };
+      }
+      await this.deps.jobs.recoverExpiredLeases();
       return {
-        proposalId: proposal.id,
+        proposalId: canonical.id,
         status: 'applied',
         authorityDecision: 'ALLOW',
       };
     }
 
     return {
-      proposalId: proposal.id,
+      proposalId: canonical.id,
       status: 'proposed',
       authorityDecision: 'ALLOW',
     };
@@ -147,7 +170,7 @@ export class RepairExecutor {
     }
     const related = relatedCheckId(previous.proposalId);
     const check = related ? report.checks.find((item) => item.id === related) : undefined;
-    const recovered = !check || check.state === 'ok' || check.state === 'not_configured';
+    const recovered = check?.state === 'ok';
     return {
       report,
       execution: {

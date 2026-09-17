@@ -10,5 +10,6 @@ export {
   migrateSchemaProposal,
   unlinkCasProposal,
   reconfigureProvidersProposal,
+  canonicalProposal,
 } from './repairs.ts';
 export { GENERIC_REPAIR_DENIED, OperationsError, OperationsRepairDeniedError } from './errors.ts';

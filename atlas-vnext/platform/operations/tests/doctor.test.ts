@@ -97,6 +97,17 @@ describe('OperationsDoctor', () => {
     expect(report.notes.some((note) => note.checkId === 'migrations' && note.kind === 'deterministic')).toBe(true);
   });
 
+  it('does not propose forward migration when the live schema is newer than the binary', async () => {
+    const doctor = new OperationsDoctor({
+      persistence: persistenceStub('postgres'),
+      authority: new AuthorityEngine(),
+      getSchemaVersion: async () => CURRENT_SCHEMA_VERSION + 1,
+    });
+    const report = await doctor.inspect(actor);
+    expect(report.checks.find((item) => item.id === 'migrations')?.state).toBe('error');
+    expect(report.proposals.some((item) => item.id === 'repair.migrate_schema')).toBe(false);
+  });
+
   it('reports CAS ok via physicalBytes and error when both probes fail', async () => {
     const cas = new MemoryCas();
     await cas.put(new TextEncoder().encode('blob'));
@@ -171,7 +182,7 @@ describe('OperationsDoctor', () => {
       authority: new AuthorityEngine(),
     }).inspect(actor);
     expect(report.checks.find((item) => item.id === 'jobs')?.state).toBe('ok');
-    expect(report.checks.find((item) => item.id === 'stuck_jobs')?.state).toBe('ok');
+    expect(report.checks.find((item) => item.id === 'stuck_jobs')?.state).toBe('not_configured');
     expect(report.checks.find((item) => item.id === 'architecture')?.summary).toMatch(/does not replace CI/);
   });
 

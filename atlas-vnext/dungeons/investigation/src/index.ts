@@ -1,9 +1,21 @@
 import type { DungeonId, DungeonRegistration } from '@atlas-vnext/contracts';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { FilesService } from '@atlas-vnext/files';
-import type { DungeonRecordRow, PersistenceActor, PlatformPersistence } from '@atlas-vnext/persistence';
+import type { DungeonRecordRow, PlatformPersistence } from '@atlas-vnext/persistence';
 import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import type { ProjectService } from '@atlas-vnext/projects';
+import { GENERIC_DENY, InvestigationError, type InvestigationActor } from './errors.ts';
+
+export { GENERIC_DENY, InvestigationError, type InvestigationActor } from './errors.ts';
+export { EvidenceLedger, EVIDENCE_KINDS } from './ledger.ts';
+export {
+  assertEpistemicClassImmutable,
+  assertFactLineage,
+  assertFactProducer,
+  EPISTEMIC_BOUNDARY,
+  EPISTEMIC_IMMUTABLE,
+} from './epistemic.ts';
+export { loadHarbourFixture, type HarbourFixture } from './fixture.ts';
 
 export const dungeonId: DungeonId = 'investigation';
 
@@ -29,24 +41,6 @@ export const INVESTIGATION_DUNGEON: DungeonRegistration = {
   permissions: { read: 'artifact.read', write: 'artifact.write' },
   featureAvailable: true,
 };
-
-export const GENERIC_DENY = 'Permission denied.';
-
-export class InvestigationError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-    readonly httpStatus = 400,
-  ) {
-    super(message);
-    this.name = 'InvestigationError';
-  }
-}
-
-export interface InvestigationActor extends PersistenceActor {
-  principalId: string;
-  tenantId: string;
-}
 
 export class InvestigationService {
   constructor(

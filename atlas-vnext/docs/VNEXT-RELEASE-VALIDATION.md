@@ -2,7 +2,11 @@
 
 Accepted development baseline: `0af67f19f2349a7ac4430364165af254caf4aa96`
 
-Status: development baseline accepted; production cutover not authorised or performed.
+Status: **READY FOR PRODUCTION CUTOVER**. Production cutover is not authorised or performed by this document.
+
+Release candidate (immutable for the cutover window): `757b77a9518ccbd595d1d3a3698915f3a94b045c`
+
+Exact-head GitHub CI: workflow run `35174760899` (`verify` SUCCESS) on that SHA.
 
 ## Integration evidence
 
@@ -65,7 +69,11 @@ Run a browser-based acceptance pass against a non-production environment and rec
 
 Do not use production traffic or data for this gate.
 
-Recorded against the release-closeout candidate in non-production mock host. Exact evidence SHA is frozen in the Release candidate section after GitHub CI on that commit.
+Recorded **green** against the non-production mock host at `http://127.0.0.1:5173/` (memory persistence, `ATLAS_USE_MOCK_PROVIDERS=1`) on 2026-09-17.
+
+Walkthrough video confirms: session boot, project create, CAS file upload, Workbench chat completion, Caspa generate/commit, OSINT scan → investigation/research, Website Studio with promote blocked while `repoWrite` is false, owner Privacy & Safety panel, and 390×844 navigation.
+
+A follow-up live pass confirmed the Sound off → Sound on → Sound off control and Command palette open/close. Reduced-motion follows `prefers-reduced-motion` CSS and was not OS-toggled in this pass. Forced cancellation and tool-approval UI were not re-driven in the browser (covered by host Workbench/tools tests).
 
 ### 2. Migration 008 rehearsal
 
@@ -109,7 +117,18 @@ No production-readiness row is silently promoted from CONDITIONAL to PASS.
 
 ## Release candidate
 
-Frozen after exact-head GitHub CI on the release-closeout commit. Until that SHA is recorded here, treat this document as the closeout dossier rather than the cutover freeze.
+Frozen SHA: `757b77a9518ccbd595d1d3a3698915f3a94b045c`  
+Branch: `cursor/vnext-release-closeout-8149`  
+GitHub CI: https://github.com/ocrowleymatt-stack/flipper-marauder-ai/actions/runs/35174760899 (`verify` SUCCESS on that exact commit)
+
+This SHA is the release-closeout of accepted baseline `0af67f1` plus:
+
+- Privacy package.json folded into shared `analyzePackageJson` (supersedes #17);
+- stored EffectivePolicy bound to generic Workbench chat;
+- migration 008 rehearsal from disposable pre-vNext schema;
+- residual-debt disposition and production-readiness delta.
+
+A later documentation commit may *name* this SHA; cutover must still deploy this code SHA or a later commit whose CI is also green and whose tree includes these fixes.
 
 Production cutover is **not** authorised by freezing a candidate.
 

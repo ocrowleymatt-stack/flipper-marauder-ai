@@ -72,6 +72,8 @@ const PACKAGE_LAYER: Record<string, Layer> = {
   '@atlas-vnext/permissions': 'permissions',
   '@atlas-vnext/observability': 'observability',
   '@atlas-vnext/flags': 'flags',
+  // Operations reuses the flags layer; do not add a new Layer union value.
+  '@atlas-vnext/operations': 'flags',
 };
 
 const DUNGEON_PACKAGES: Record<string, string> = {
@@ -201,6 +203,7 @@ export function classifyPath(relPath: string): { layer: Layer; dungeon?: string 
   if (normalised.startsWith('platform/permissions/')) return { layer: 'permissions' };
   if (normalised.startsWith('platform/observability/')) return { layer: 'observability' };
   if (normalised.startsWith('platform/flags/')) return { layer: 'flags' };
+  if (normalised.startsWith('platform/operations/')) return { layer: 'flags' };
   if (normalised.startsWith('apps/')) return { layer: 'apps' };
   const dungeonMatch = normalised.match(/^dungeons\/([^/]+)\//);
   if (dungeonMatch) return { layer: 'dungeon', dungeon: dungeonMatch[1] };
@@ -580,6 +583,7 @@ function analyzePackageJson(root: string, overlays: Record<string, string>): Vio
     ['platform/permissions/package.json', 'platform'],
     ['platform/observability/package.json', 'platform'],
     ['platform/flags/package.json', 'platform'],
+    ['platform/operations/package.json', 'platform'],
     ['dungeons/writing/package.json', 'dungeon'],
     ['dungeons/investigation/package.json', 'dungeon'],
     ['dungeons/research/package.json', 'dungeon'],

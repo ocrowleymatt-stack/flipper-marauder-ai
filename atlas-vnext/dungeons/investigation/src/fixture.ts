@@ -5,16 +5,53 @@ import type { FilesService } from '@atlas-vnext/files';
 
 export interface HarbourFixture {
   caseId: string;
-  fileIds: Record<string, string>;
-  sourceIds: Record<string, string>;
-  objectIds: Record<string, string>;
-  entityIds: Record<string, string>;
-  assertionIds: Record<string, string>;
+  fileIds: {
+    messages: string;
+    calls: string;
+    invoice: string;
+    invoiceCopy: string;
+    swipe: string;
+    gps: string;
+    delivery: string;
+  };
+  sourceIds: {
+    messages: string;
+    calls: string;
+    invoice: string;
+    invoiceCopy: string;
+    swipe: string;
+    gps: string;
+    delivery: string;
+  };
+  objectIds: {
+    messages: string;
+    calls: string;
+    invoice: string;
+    invoiceCopy: string;
+    swipe: string;
+    gps: string;
+    delivery: string;
+  };
+  entityIds: {
+    maya: string;
+    jordan: string;
+    priya: string;
+    alex: string;
+  };
+  assertionIds: {
+    mayaFriday: string;
+    haleThursday: string;
+    swipe: string;
+    gps: string;
+  };
   factId: string;
   contradictionId: string;
   hypothesisId: string;
   inferenceId: string;
-  findingIds: Record<string, string>;
+  findingIds: {
+    presence: string;
+    weekday: string;
+  };
 }
 
 /**
@@ -359,10 +396,39 @@ Hale: I'm at the barrier now. Thursday 16:30 handoff.
 
   return {
     caseId: created.id,
-    fileIds: Object.fromEntries(Object.entries(files).map(([key, file]) => [key, file.id])),
-    sourceIds: Object.fromEntries(Object.entries(sources).map(([key, row]) => [key, row.id])),
-    objectIds: Object.fromEntries(Object.entries(objects).map(([key, row]) => [key, row.id])),
-    entityIds: Object.fromEntries(Object.entries(entities).map(([key, row]) => [key, row.id])),
+    fileIds: {
+      messages: files.messages.id,
+      calls: files.calls.id,
+      invoice: files.invoice.id,
+      invoiceCopy: files.invoiceCopy.id,
+      swipe: files.swipe.id,
+      gps: files.gps.id,
+      delivery: files.delivery.id,
+    },
+    sourceIds: {
+      messages: sources.messages.id,
+      calls: sources.calls.id,
+      invoice: sources.invoice.id,
+      invoiceCopy: sources.invoiceCopy.id,
+      swipe: sources.swipe.id,
+      gps: sources.gps.id,
+      delivery: sources.delivery.id,
+    },
+    objectIds: {
+      messages: objects.messages.id,
+      calls: objects.calls.id,
+      invoice: objects.invoice.id,
+      invoiceCopy: objects.invoiceCopy.id,
+      swipe: objects.swipe.id,
+      gps: objects.gps.id,
+      delivery: objects.delivery.id,
+    },
+    entityIds: {
+      maya: entities.maya.id,
+      jordan: entities.jordan.id,
+      priya: entities.priya.id,
+      alex: entities.alex.id,
+    },
     assertionIds: {
       mayaFriday: mayaFriday.id,
       haleThursday: haleThursday.id,

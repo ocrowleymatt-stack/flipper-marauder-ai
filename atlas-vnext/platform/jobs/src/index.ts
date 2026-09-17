@@ -24,3 +24,10 @@ export type {
 } from './types.ts';
 export { createJobEngine } from './engine.ts';
 export { MemoryJobStore } from './memory.ts';
+export {
+  SlowCookScheduler,
+  SLOW_COOK_JOB_TYPE,
+  SLOW_COOK_UTILISATION_CEILING,
+  readSlowCookSpec,
+} from './slow-cook.ts';
+export type { ComputeDemand } from './slow-cook.ts';

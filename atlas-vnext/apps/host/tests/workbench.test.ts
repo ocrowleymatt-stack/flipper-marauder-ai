@@ -54,6 +54,7 @@ async function startWorkbench() {
     context: spine.context,
     persistence: spine.persistence,
     writing: spine.writing,
+    privacy: spine.privacy,
     tenantId: spine.tenantId,
     principalId: spine.principalId,
     maxRequestBytes: spine.limits.maxRequestBytes,
@@ -469,5 +470,34 @@ describe('Atlas Workbench host', () => {
     });
     expect(evil.headers.get('access-control-allow-origin')).not.toBe('*');
     expect(evil.headers.get('access-control-allow-origin')).not.toBe('https://evil.example');
+  });
+
+  it('binds stored local_only processing onto generic Workbench chat routing', async () => {
+    const { url } = await startWorkbench();
+    const session = await bootstrap(url);
+    const updated = await fetch(`${url}/api/privacy/policy`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ patch: { processing: 'local_only' }, confirm: 'CONFIRM' }),
+    });
+    expect(updated.status).toBe(200);
+    const conversationRes = await fetch(`${url}/api/conversations`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ title: 'private thread' }),
+    });
+    const conversation = (await conversationRes.json()) as { id: string };
+    const stream = await fetch(`${url}/api/conversations/${conversation.id}/messages`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ content: 'keep this local', capability: 'nexus/fast' }),
+    });
+    const frames = await readSse(stream);
+    const execution = [...frames].reverse().find((frame) => frame.event === 'execution')?.data as {
+      execution: { selectedProvider: string; route: { localOnly: boolean; locality: string } };
+    };
+    expect(execution.execution.route.localOnly).toBe(true);
+    expect(execution.execution.route.locality).toBe('local');
+    expect(execution.execution.selectedProvider).toBe('ollama');
   });
 });

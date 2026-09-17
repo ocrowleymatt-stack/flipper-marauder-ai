@@ -60,7 +60,7 @@ Production **fails loud** without: PostgreSQL URL, `ATLAS_TENANT_ID`, `ATLAS_SES
 
 ## 7. Migrations
 
-Ordered `001`–`007`, transactional, checksummed, forward-only. Failed SQL rolls back that version and is not recorded. Empty→latest, v1→latest, interrupted migration, and checksum mismatch are tested. **No DROP DATABASE / DROP SCHEMA as recovery.** Destructive table drops are not part of this product.
+Ordered `001`–`008`, transactional, checksummed, forward-only. Failed SQL rolls back that version and is not recorded. Empty→latest, v1→latest, pre-vNext `007`→`008` rehearsal, interrupted migration, and checksum mismatch are tested. Migration `008` is additive (`dungeon_records` plus owner-only privacy policy/audit/proposal tables) and does not rewrite Projects, Files, CAS, context, or provenance rows. **No DROP DATABASE / DROP SCHEMA as recovery.** Destructive table drops are not part of this product.
 
 ## 8. DB connections
 
@@ -237,7 +237,19 @@ Statuses: PASS / FAIL / CONDITIONAL / N/A. GO for **cutover** requires no unreso
 
 **Tranche verdict:** operational production **candidate** is defensible for a **documented single-instance** PostgreSQL+CAS deploy of this stack. Multi-instance SSE, shared rate limiting, distributed tracing, and dual RunPod schedulers are **not** claimed.
 
-**Cutover verdict: NO-GO.** Do not switch production traffic. Remaining conditions: human merge of this PR after exact-head CI; human apply of production migrations; human DNS/secret/cutover; accept CONDITIONAL multi-instance/SSE/rate-limit/tracing/RunPod-scheduler rows as single-instance-only.
+**Cutover verdict: NO-GO.** Do not switch production traffic. Remaining conditions: human DNS/secret/cutover; accept CONDITIONAL multi-instance/SSE/rate-limit/tracing/RunPod-scheduler rows as single-instance-only. The vNext estate/Caspa/Privacy/Workbench delta does not reopen this matrix: migration `008` is additive, production config/topology/backup contracts still hold, and cutover remains a separate explicit operation.
+
+### vNext delta after PR #11
+
+| Area | Result | Notes |
+|---|---|---|
+| Schema | PASS | `001`–`008`; `008` additive dungeon_records + privacy tables; pre-vNext rehearsal in `migrate.test.ts`. |
+| Config / secrets | PASS | Catalogue and `--production` validation unchanged. |
+| Topology | PASS | Still refuses claimed HA. |
+| Backup / restore | PASS | Existing restore drill plus 008 rehearsal; restore still uses backup, not down-migration. |
+| Authority / Privacy | PASS | Owner-only control room; overlays cannot grant; generic chat now binds tools/processing. |
+| Workbench | PASS | Presentation-only motion/sound; server contracts unchanged. |
+| Production cutover | FAIL (intentional) | Not authorised by development freeze. |
 
 ## 48. Human gate
 

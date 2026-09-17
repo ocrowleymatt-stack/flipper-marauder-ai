@@ -186,4 +186,141 @@ describe('schema bootstrap and migrations', () => {
       client.release();
     }
   });
+
+  it('rehearses migration 008 from a disposable pre-vNext schema without mutating existing rows', async () => {
+    const schema = `t_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
+    const pool = new Pool({ connectionString: postgresUrl(), connectionTimeoutMillis: 5_000 });
+    cleanups.push(async () => {
+      await dropTestSchema(schema);
+      await pool.end();
+    });
+    const admin = await pool.connect();
+    try {
+      await withPostgresDdlLock(admin, () => admin.query(`CREATE SCHEMA ${assertIdent(schema)}`));
+    } finally {
+      admin.release();
+    }
+    const client = await pool.connect();
+    try {
+      await client.query(`SET search_path TO ${assertIdent(schema)}`);
+      const all = loadMigrations();
+      const preVnext = all.filter((item) => item.version <= 7);
+      const first = await migrate(client, preVnext);
+      expect(first.applied).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      const now = new Date().toISOString();
+      const hash = 'aa'.repeat(32);
+      await client.query(
+        `INSERT INTO tenants (id, urn, name, created_at, updated_at)
+         VALUES ('tenant_keep', 'urn:atlas:tenant:keep', 'Keep', $1, $1)`,
+        [now],
+      );
+      await client.query(
+        `INSERT INTO workspaces (id, urn, tenant_id, name, dungeon, root_manifest_hash, archived, created_at, updated_at)
+         VALUES ('ws_keep', 'urn:atlas:workspace:keep', 'tenant_keep', 'Keep Project', 'writing', 'ab', false, $1, $1)`,
+        [now],
+      );
+      await client.query(
+        `INSERT INTO artefact_metadata (id, tenant_id, workspace_id, content_hash, mime_type, size_bytes, created_at, urn, type, updated_at)
+         VALUES ('art_keep', 'tenant_keep', 'ws_keep', $2, 'text/markdown', 12, $1, 'urn:atlas:artefact:keep', 'file', $1)`,
+        [now, hash],
+      );
+      await client.query(
+        `INSERT INTO cas_objects (sha256, size_bytes, created_at)
+         VALUES ($2, 12, $1)`,
+        [now, hash],
+      );
+      await client.query(
+        `INSERT INTO cas_refs (id, sha256, tenant_id, workspace_id, kind, owner_id, created_at)
+         VALUES ('ref_keep', $2, 'tenant_keep', 'ws_keep', 'file', 'file_keep', $1)`,
+        [now, hash],
+      );
+      await client.query(
+        `INSERT INTO files (id, urn, tenant_id, workspace_id, path, display_name, mime_type, size_bytes, content_hash, status, artefact_id, created_by, created_at, updated_at)
+         VALUES ('file_keep', 'urn:atlas:file:keep', 'tenant_keep', 'ws_keep', 'notes.md', 'notes.md', 'text/markdown', 12, $2, 'ready', 'art_keep', 'principal_keep', $1, $1)`,
+        [now, hash],
+      );
+      await client.query(
+        `INSERT INTO chunks (id, tenant_id, workspace_id, file_id, content_hash, chunker, chunker_version, ordinal, start_offset, end_offset, locator, text, token_count, created_at)
+         VALUES ('chunk_keep', 'tenant_keep', 'ws_keep', 'file_keep', $2, 'lexical', '1', 0, 0, 12, '{}'::jsonb, 'keep this', 2, $1)`,
+        [now, hash],
+      );
+      await client.query(
+        `INSERT INTO provenance (id, tenant_id, artefact_id, project_id, source_inputs, provider, model, timestamp, trace_id)
+         VALUES ('prov_keep', 'tenant_keep', 'art_keep', 'ws_keep', '["file_keep"]'::jsonb, 'openai', 'gpt-4o', $1, 'trc_keep')`,
+        [now],
+      );
+      await client.query(
+        `INSERT INTO conversations (id, urn, tenant_id, workspace_id, title, created_at, updated_at)
+         VALUES ('convo_keep', 'urn:atlas:conversation:keep', 'tenant_keep', 'ws_keep', 'Keep thread', $1, $1)`,
+        [now],
+      );
+      await client.query(
+        `INSERT INTO documents (id, urn, tenant_id, workspace_id, title, status, created_at, updated_at)
+         VALUES ('doc_keep', 'urn:atlas:document:keep', 'tenant_keep', 'ws_keep', 'Keep chapter', 'draft', $1, $1)`,
+        [now],
+      );
+
+      const snapshotTables = [
+        'tenants',
+        'workspaces',
+        'artefact_metadata',
+        'cas_objects',
+        'cas_refs',
+        'files',
+        'chunks',
+        'provenance',
+        'conversations',
+        'documents',
+      ];
+      const fingerprint = async () => {
+        const out: Record<string, unknown> = {};
+        for (const table of snapshotTables) {
+          const rows = await client.query(
+            `SELECT COALESCE(json_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text), '[]'::json) AS rows FROM ${table} t`,
+          );
+          out[table] = rows.rows[0]?.rows;
+        }
+        return JSON.stringify(out);
+      };
+      const before = await fingerprint();
+
+      const upgrade = await migrate(client, all);
+      expect(upgrade.applied).toEqual([8]);
+      expect(upgrade.skipped).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(await fingerprint()).toBe(before);
+
+      const privacyTables = await client.query(
+        `SELECT table_name FROM information_schema.tables
+         WHERE table_schema = $1 AND table_name IN ('dungeon_records', 'privacy_policies', 'privacy_audit', 'privacy_proposals')
+         ORDER BY table_name`,
+        [schema],
+      );
+      expect(privacyTables.rows.map((row) => row.table_name)).toEqual([
+        'dungeon_records',
+        'privacy_audit',
+        'privacy_policies',
+        'privacy_proposals',
+      ]);
+      const emptyCounts = await client.query(
+        `SELECT
+           (SELECT COUNT(*)::int FROM dungeon_records) AS dungeon_records,
+           (SELECT COUNT(*)::int FROM privacy_policies) AS privacy_policies,
+           (SELECT COUNT(*)::int FROM privacy_audit) AS privacy_audit,
+           (SELECT COUNT(*)::int FROM privacy_proposals) AS privacy_proposals`,
+      );
+      expect(emptyCounts.rows[0]).toEqual({
+        dungeon_records: 0,
+        privacy_policies: 0,
+        privacy_audit: 0,
+        privacy_proposals: 0,
+      });
+
+      const again = await migrate(client, all);
+      expect(again.applied).toEqual([]);
+      expect(again.skipped).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(await fingerprint()).toBe(before);
+    } finally {
+      client.release();
+    }
+  });
 });

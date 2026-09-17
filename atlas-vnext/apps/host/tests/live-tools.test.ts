@@ -260,6 +260,7 @@ describe('live provider tool orchestration', () => {
       context: spine.context,
       persistence: spine.persistence,
       writing: spine.writing,
+      privacy: spine.privacy,
       tenantId: spine.tenantId,
       principalId: spine.principalId,
       flags: spine.flags,
@@ -310,5 +311,63 @@ describe('live provider tool orchestration', () => {
     expect(advertised).toContain('job__run');
     expect(advertised).toContain('project__file_op');
     expect(JSON.stringify(onBodies[1]?.messages)).toContain('"role":"tool"');
+  });
+
+  it('does not advertise tools when stored EffectivePolicy disables them', async () => {
+    const { spine, bodies } = await startLiveSpine(async () =>
+      responseFromText(200, sse(['{"choices":[{"delta":{"content":"no tools"}}]}', '[DONE]']), {
+        'content-type': 'text/event-stream',
+      }),
+    );
+    const server = createHost({
+      runtime: spine.runtime,
+      auth: spine.auth,
+      tools: spine.tools,
+      projects: spine.projects,
+      files: spine.files,
+      context: spine.context,
+      persistence: spine.persistence,
+      writing: spine.writing,
+      privacy: spine.privacy,
+      tenantId: spine.tenantId,
+      principalId: spine.principalId,
+      flags: spine.flags,
+      killSwitches: spine.killSwitches,
+      resources: spine.resources,
+      maxRequestBytes: spine.limits.maxRequestBytes,
+      maxUploadBytes: spine.limits.maxUploadBytes,
+      timeouts: spine.timeouts,
+    });
+    servers.push(server);
+    const bound = await listen(server, 0, '127.0.0.1');
+    const sessionRes = await fetch(`${bound.url}/api/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const sessionBody = (await sessionRes.json()) as { csrfToken: string };
+    const headers = {
+      cookie: sessionRes.headers.get('set-cookie') ?? '',
+      'x-atlas-csrf': sessionBody.csrfToken,
+      'content-type': 'application/json',
+    };
+    const policyRes = await fetch(`${bound.url}/api/privacy/policy`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ patch: { toolsEnabled: false }, confirm: 'CONFIRM' }),
+    });
+    expect(policyRes.status).toBe(200);
+    const conversation = await spine.runtime.createConversation({ title: 'policy-off' });
+    const onRes = await fetch(`${bound.url}/api/conversations/${conversation.id}/messages`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ content: 'search anyway', capability: 'nexus/fast', tools: true }),
+    });
+    expect(onRes.ok).toBe(true);
+    await onRes.text();
+    const chatBodies = bodies.filter((body) => Array.isArray(body.messages));
+    expect(chatBodies.length).toBeGreaterThan(0);
+    expectSideEffectToolsAbsent(advertisedToolPayload(chatBodies[0]));
+    expect(chatBodies[0]?.tools).toBeUndefined();
   });
 });

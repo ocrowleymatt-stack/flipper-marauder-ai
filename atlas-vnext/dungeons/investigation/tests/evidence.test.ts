@@ -210,6 +210,55 @@ describe('Investigation evidential substrate', () => {
     await expect(ledger.chronology(other, fixture.caseId)).rejects.toBeInstanceOf(InvestigationError);
   });
 
+  it('does not copy peer ids from another project into a writable case', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const { investigation, ledger } = stackService(stack);
+    const otherProject = await stack.projects.create(stack.actor, { name: 'Other Lab' });
+    const home = await investigation.createCase(stack.actor, {
+      projectId: stack.project.id,
+      title: 'Home',
+      question: 'q',
+    });
+    const away = await investigation.createCase(stack.actor, {
+      projectId: otherProject.id,
+      title: 'Away',
+      question: 'q',
+    });
+    const foreign = await ledger.addEntity(stack.actor, {
+      caseId: away.id,
+      kind: 'person',
+      canonicalName: 'Foreign',
+    });
+    await expect(
+      ledger.addRelationship(stack.actor, {
+        caseId: home.id,
+        fromEntityId: foreign.id,
+        toEntityId: foreign.id,
+        kind: 'alias',
+        epistemicClass: 'source_assertion',
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    await expect(
+      ledger.link(stack.actor, {
+        caseId: home.id,
+        fromId: foreign.id,
+        toId: foreign.id,
+        role: 'corroborates',
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    await expect(
+      ledger.recordFinding(stack.actor, {
+        caseId: home.id,
+        statement: 'Must not absorb a foreign id.',
+        epistemicClass: 'inference',
+        linkedIds: [foreign.id],
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    const listed = await ledger.listCase(stack.actor, home.id);
+    expect(listed.some((row) => JSON.stringify(row.payload).includes(foreign.id))).toBe(false);
+  });
+
   it('rejects facts corroborated by another case or by a hidden inference', async () => {
     const stack = await openDungeonStack();
     persistences.push(stack.persistence);

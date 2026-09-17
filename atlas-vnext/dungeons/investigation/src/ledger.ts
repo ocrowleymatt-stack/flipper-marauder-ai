@@ -70,6 +70,8 @@ type LedgerDeps = {
   policy: EffectivePolicyEngine;
 };
 
+type CaseBind = { workspaceId: string; caseId: string };
+
 /**
  * Durable evidential ledger over dungeon_records + Files/CAS/provenance.
  * Derived findings carry dependsOn + generation so a source change can stale
@@ -214,9 +216,10 @@ export class EvidenceLedger {
     if (input.corroboratedBy.length < 1) {
       throw new InvestigationError('malformed', 'A fact requires at least one corroborating record.');
     }
-    const sources = await Promise.all(input.corroboratedBy.map((id) => this.requireAny(actor, id, 'artifact.read')));
-    for (const row of sources) this.assertSameCase(row, input.caseId);
-    const classes = await this.collectLineageClasses(actor, input.corroboratedBy);
+    const sources = await Promise.all(
+      input.corroboratedBy.map((id) => this.requireAny(actor, id, 'artifact.read', this.caseBind(caseRow))),
+    );
+    const classes = await this.collectLineageClasses(actor, input.corroboratedBy, this.caseBind(caseRow));
     assertFactLineage(classes);
     const dependsOn = unique([
       ...input.corroboratedBy,
@@ -250,6 +253,7 @@ export class EvidenceLedger {
     },
   ): Promise<Inference> {
     const caseRow = await this.requireCase(actor, input.caseId, 'artifact.write');
+    await this.requirePeers(actor, input.dependsOn, 'artifact.read', this.caseBind(caseRow));
     const inference: Inference = {
       id: `inf_${randomUUID()}`,
       caseId: caseRow.id,
@@ -277,6 +281,7 @@ export class EvidenceLedger {
     },
   ): Promise<Hypothesis> {
     const caseRow = await this.requireCase(actor, input.caseId, 'artifact.write');
+    await this.requirePeers(actor, input.dependsOn ?? [], 'artifact.read', this.caseBind(caseRow));
     const hypothesis: Hypothesis = {
       id: `hyp_${randomUUID()}`,
       caseId: caseRow.id,
@@ -299,8 +304,9 @@ export class EvidenceLedger {
     input: { caseId: string; leftId: string; rightId: string; statement: string },
   ): Promise<Contradiction> {
     const caseRow = await this.requireCase(actor, input.caseId, 'artifact.write');
-    const left = await this.requireAny(actor, input.leftId, 'artifact.read');
-    const right = await this.requireAny(actor, input.rightId, 'artifact.read');
+    const bind = this.caseBind(caseRow);
+    const left = await this.requireAny(actor, input.leftId, 'artifact.read', bind);
+    const right = await this.requireAny(actor, input.rightId, 'artifact.read', bind);
     const contradiction: Contradiction = {
       id: `ctr_${randomUUID()}`,
       caseId: caseRow.id,
@@ -351,10 +357,16 @@ export class EvidenceLedger {
     input: { entityId: string; evidenceObjectId: string; surface: string; sourceLocation?: SourceLocation },
   ): Promise<EntityMention> {
     const entityRow = await this.requireKind(actor, input.entityId, EVIDENCE_KINDS.entity, 'artifact.write');
-    const objectRow = await this.requireKind(actor, input.evidenceObjectId, EVIDENCE_KINDS.object, 'artifact.read');
     const entity = entitySchema.parse(entityRow.payload);
-    const object = evidenceObjectSchema.parse(objectRow.payload);
     const caseRow = await this.requireCase(actor, entity.caseId, 'artifact.write');
+    const objectRow = await this.requireKind(
+      actor,
+      input.evidenceObjectId,
+      EVIDENCE_KINDS.object,
+      'artifact.read',
+      this.caseBind(caseRow),
+    );
+    const object = evidenceObjectSchema.parse(objectRow.payload);
     const mention: EntityMention = {
       id: `emn_${randomUUID()}`,
       caseId: caseRow.id,
@@ -383,6 +395,7 @@ export class EvidenceLedger {
     },
   ): Promise<EvidenceEvent> {
     const caseRow = await this.requireCase(actor, input.caseId, 'artifact.write');
+    await this.requirePeers(actor, input.evidenceObjectIds ?? [], 'artifact.read', this.caseBind(caseRow));
     const event: EvidenceEvent = {
       id: `evt_${randomUUID()}`,
       caseId: caseRow.id,
@@ -411,8 +424,9 @@ export class EvidenceLedger {
     },
   ): Promise<EvidenceRelationship> {
     const caseRow = await this.requireCase(actor, input.caseId, 'artifact.write');
-    await this.requireKind(actor, input.fromEntityId, EVIDENCE_KINDS.entity, 'artifact.read');
-    await this.requireKind(actor, input.toEntityId, EVIDENCE_KINDS.entity, 'artifact.read');
+    const bind = this.caseBind(caseRow);
+    await this.requireKind(actor, input.fromEntityId, EVIDENCE_KINDS.entity, 'artifact.read', bind);
+    await this.requireKind(actor, input.toEntityId, EVIDENCE_KINDS.entity, 'artifact.read', bind);
     const relationship: EvidenceRelationship = {
       id: `rel_${randomUUID()}`,
       caseId: caseRow.id,
@@ -453,8 +467,9 @@ export class EvidenceLedger {
     input: { caseId: string; fromId: string; toId: string; role: EvidenceLink['role'] },
   ): Promise<EvidenceLink> {
     const caseRow = await this.requireCase(actor, input.caseId, 'artifact.write');
-    await this.requireAny(actor, input.fromId, 'artifact.read');
-    await this.requireAny(actor, input.toId, 'artifact.read');
+    const bind = this.caseBind(caseRow);
+    await this.requireAny(actor, input.fromId, 'artifact.read', bind);
+    await this.requireAny(actor, input.toId, 'artifact.read', bind);
     const link: EvidenceLink = {
       id: `lnk_${randomUUID()}`,
       caseId: caseRow.id,
@@ -474,12 +489,12 @@ export class EvidenceLedger {
     actor: InvestigationActor,
     input: { caseId: string; statement: string; epistemicClass: EpistemicClass; linkedIds: string[] },
   ): Promise<EvidenceFinding> {
-    if (input.epistemicClass === 'fact') {
-      const linked = await Promise.all(input.linkedIds.map((id) => this.requireAny(actor, id, 'artifact.read')));
-      for (const row of linked) this.assertSameCase(row, input.caseId);
-      assertFactLineage(await this.collectLineageClasses(actor, input.linkedIds));
-    }
     const caseRow = await this.requireCase(actor, input.caseId, 'artifact.write');
+    const bind = this.caseBind(caseRow);
+    await this.requirePeers(actor, input.linkedIds, 'artifact.read', bind);
+    if (input.epistemicClass === 'fact') {
+      assertFactLineage(await this.collectLineageClasses(actor, input.linkedIds, bind));
+    }
     const finding: EvidenceFinding = {
       id: `fnd_${randomUUID()}`,
       caseId: caseRow.id,
@@ -662,17 +677,44 @@ export class EvidenceLedger {
     id: string,
     kind: string,
     capability: 'artifact.read' | 'artifact.write',
+    bind?: CaseBind,
   ) {
-    const row = await this.requireAny(actor, id, capability);
+    const row = await this.requireAny(actor, id, capability, bind);
     if (row.kind !== kind) throw new InvestigationError('malformed', `Expected ${kind}.`);
     return row;
   }
 
-  private async requireAny(actor: InvestigationActor, id: string, capability: 'artifact.read' | 'artifact.write') {
+  private async requireAny(
+    actor: InvestigationActor,
+    id: string,
+    capability: 'artifact.read' | 'artifact.write',
+    bind?: CaseBind,
+  ) {
     const row = await this.store(actor).get(actor, id);
     if (!row || row.dungeon !== 'investigation') throw new InvestigationError('not_found', GENERIC_DENY, 404);
     this.authorize(actor, capability, row.workspaceId ?? row.id, row.tenantId);
+    if (bind) this.assertBound(row, bind);
     return row;
+  }
+
+  private caseBind(caseRow: DungeonRecordRow): CaseBind {
+    return { workspaceId: caseRow.workspaceId ?? caseRow.id, caseId: caseRow.id };
+  }
+
+  private assertBound(row: DungeonRecordRow, bind: CaseBind): void {
+    if ((row.workspaceId ?? row.id) !== bind.workspaceId) {
+      throw new InvestigationError('not_found', GENERIC_DENY, 404);
+    }
+    this.assertSameCase(row, bind.caseId);
+  }
+
+  private async requirePeers(
+    actor: InvestigationActor,
+    ids: string[],
+    capability: 'artifact.read' | 'artifact.write',
+    bind: CaseBind,
+  ): Promise<DungeonRecordRow[]> {
+    return Promise.all(ids.map((id) => this.requireAny(actor, id, capability, bind)));
   }
 
   private assertSameCase(row: DungeonRecordRow, caseId: string): void {
@@ -682,7 +724,11 @@ export class EvidenceLedger {
     }
   }
 
-  private async collectLineageClasses(actor: InvestigationActor, ids: string[]): Promise<EpistemicClass[]> {
+  private async collectLineageClasses(
+    actor: InvestigationActor,
+    ids: string[],
+    bind: CaseBind,
+  ): Promise<EpistemicClass[]> {
     const classes: EpistemicClass[] = [];
     const seen = new Set<string>();
     const queue = [...ids];
@@ -690,7 +736,7 @@ export class EvidenceLedger {
       const id = queue.shift();
       if (!id || seen.has(id)) continue;
       seen.add(id);
-      const row = await this.requireAny(actor, id, 'artifact.read');
+      const row = await this.requireAny(actor, id, 'artifact.read', bind);
       const resolved = resolveEpistemicClass(row.kind, row.payload);
       if (resolved) classes.push(resolved);
       for (const dep of asStringArray(row.payload.dependsOn)) {

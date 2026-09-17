@@ -165,4 +165,12 @@ describe('SlowCookScheduler', () => {
     expect(checkpointed.checkpoint.passes).toEqual([{ metric: 0.4, improved: true }]);
     expect(afterPass.currentStage).toBe('pass:1');
   });
+  it('leaves background work queued when interactive demand waits elsewhere', async () => {
+    const engine = createJobEngine({ store: new MemoryJobStore() });
+    const scheduler = new SlowCookScheduler(engine);
+    const background = await scheduler.enqueue(actor, spec('BACKGROUND'));
+    expect(await scheduler.claimNext(actor, 'worker', 5000, { interactiveQueued: true, utilisation: 0.1 })).toBeNull();
+    expect((await engine.get(actor, background.id))?.status).toBe('queued');
+  });
+
 });

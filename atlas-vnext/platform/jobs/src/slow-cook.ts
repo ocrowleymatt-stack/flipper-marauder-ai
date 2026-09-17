@@ -43,12 +43,13 @@ export class SlowCookScheduler {
     leaseMs: number,
     demand: ComputeDemand,
   ): Promise<JobRecord | null> {
-    const skipSlowCook = demand.interactiveQueued || demand.utilisation >= SLOW_COOK_UTILISATION_CEILING;
+    const minPriority = demand.interactiveQueued ? SCHEDULE_CLASS_PRIORITY.INTERACTIVE
+      : demand.utilisation >= SLOW_COOK_UTILISATION_CEILING ? SCHEDULE_CLASS_PRIORITY.BACKGROUND : undefined;
     return this.engine.claimNext(
       actor,
       workerId,
       leaseMs,
-      skipSlowCook ? { minPriority: SCHEDULE_CLASS_PRIORITY.BACKGROUND } : undefined,
+      minPriority === undefined ? undefined : { minPriority },
     );
   }
 

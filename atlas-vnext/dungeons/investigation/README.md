@@ -1,7 +1,7 @@
 # Investigation dungeon
 
-Domain: caseboards, multi-role evidential agents, challenge loops, court-ready grading.
+Domain: caseboards, evidential substrate, multi-role challenge loops.
 
-**Must not:** import other dungeons or provider adapters. Jobs, CAS, and provenance are platform primitives.
+Durable evidential objects live as typed `dungeon_records` that point at Projects / Files / CAS / provenance. FACT, SOURCE ASSERTION, INFERENCE, HYPOTHESIS, and CONTRADICTION are disjoint classes; an inference cannot be rewritten into a fact.
 
-Product code is not in this PR. Behavioural reference: specified Atlas Mountain investigation executor (TypeScript AM tree not re-opened this audit).
+Must not import other dungeons or provider adapters.

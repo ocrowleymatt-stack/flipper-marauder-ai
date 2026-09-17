@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { estimateTokens } from '@atlas-vnext/files';
 import { ContextCompiler } from '../src/index.ts';
 
 const compiler = new ContextCompiler();
@@ -108,4 +109,12 @@ describe('ContextCompiler', () => {
     expect(compiled.omitted.some((entry) => entry.id === 'objective')).toBe(true);
     expect(compiled.omitted.some((entry) => entry.id === 'policy')).toBe(true);
   });
+  it.each([0, 1, 2, 4, 8, 20, 100])('accounts for every emitted text copy with budget %i', tokenBudget => {
+    const result = compiler.compile({ objective: '12345678', policy: 'x'.repeat(300), tokenBudget });
+    const cost = (text: string) => text ? estimateTokens(text) : 0;
+    const actual = result.items.reduce((sum, item) => sum + cost(item.content), 0) + cost(result.objective) + cost(result.policyExcerpt);
+    expect(result.tokenCount).toBe(actual);
+    expect(actual).toBeLessThanOrEqual(tokenBudget);
+  });
+
 });

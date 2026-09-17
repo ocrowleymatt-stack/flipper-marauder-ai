@@ -94,12 +94,13 @@ export class ContextCompiler {
         omitted.push({ id: candidate.id, reason: 'token_budget' });
         continue;
       }
-      if (candidate.tokenCost <= remaining) {
+      const cost = (content: string) => estimateTokens(content) + (candidate.kind === 'objective' ? estimateTokens(content) : candidate.kind === 'policy' ? estimateTokens(excerpt(content)) : 0);
+      if (cost(candidate.content) <= remaining) {
         items.push(candidate);
-        tokenCount += candidate.tokenCost;
+        tokenCount += cost(candidate.content);
         continue;
       }
-      const fitted = fitToBudget(candidate.content, remaining);
+      const fitted = fitToBudget(candidate.content, remaining, cost);
       if (!fitted) {
         truncated = true;
         omitted.push({ id: candidate.id, reason: 'token_budget' });
@@ -108,7 +109,7 @@ export class ContextCompiler {
       truncated = true;
       const next = { ...candidate, content: fitted, tokenCost: estimateTokens(fitted) };
       items.push(next);
-      tokenCount += next.tokenCost;
+      tokenCount += cost(next.content);
     }
 
     const keptObjective = items.find((entry) => entry.kind === 'objective');
@@ -194,16 +195,16 @@ function stableStringify(value: unknown): string {
 }
 
 /** Fit content under remaining tokens. estimateTokens is ceil(chars/4) and never 0 for non-empty text. */
-function fitToBudget(text: string, remaining: number): string | null {
+function fitToBudget(text: string, remaining: number, cost: (text: string) => number): string | null {
   if (remaining <= 0) return null;
-  if (estimateTokens(text) <= remaining) return text;
+  if (cost(text) <= remaining) return text;
   let lo = 1;
   let hi = text.length;
   let best: string | null = null;
   while (lo <= hi) {
     const mid = Math.floor((lo + hi) / 2);
     const candidate = `${text.slice(0, mid)}…`;
-    if (estimateTokens(candidate) <= remaining) {
+    if (cost(candidate) <= remaining) {
       best = candidate;
       lo = mid + 1;
     } else {

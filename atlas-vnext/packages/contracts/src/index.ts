@@ -493,3 +493,4 @@ export * from './privacy.ts';
 export * from './estate.ts';
 export * from './compiled-context.ts';
 export * from './slow-cook.ts';
+export * from './evidence.ts';

@@ -138,7 +138,7 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
       return record;
     },
 
-    async claimNext(actor, workerId, leaseMs) {
+    async claimNext(actor, workerId, leaseMs, filter) {
       assertJobActor(actor, 'claim');
       const now = clock();
       const leaseUntil = new Date(Date.parse(now) + leaseMs).toISOString();
@@ -149,6 +149,8 @@ export function createJobEngine(options: JobEngineOptions): DurableJobEngine {
           workerId,
           leaseUntil,
           now,
+          minPriority: filter?.minPriority,
+          types: filter?.types,
         });
         if (!claimed) return null;
         const attempts = await store.listAttempts(actor.tenantId, claimed.id);

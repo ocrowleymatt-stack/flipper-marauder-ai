@@ -66,6 +66,8 @@ export class MemoryJobStore implements JobStore {
     workerId: string;
     leaseUntil: string;
     now: string;
+    minPriority?: number;
+    types?: readonly string[];
   }): Promise<JobRecord | null> {
     return this.mutex.run(async () => {
       const candidates = [...this.jobs.values()]
@@ -73,6 +75,8 @@ export class MemoryJobStore implements JobStore {
         .filter((job) => !input.workspaceId || job.workspaceId === input.workspaceId)
         .filter((job) => job.status === 'queued' && !job.cancelRequested)
         .filter((job) => !job.leaseUntil || job.leaseUntil <= input.now)
+        .filter((job) => input.minPriority === undefined || job.priority >= input.minPriority)
+        .filter((job) => !input.types?.length || input.types.includes(job.type))
         .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt));
       const picked = candidates[0];
       if (!picked) return null;

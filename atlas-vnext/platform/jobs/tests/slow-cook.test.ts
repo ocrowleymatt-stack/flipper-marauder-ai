@@ -110,6 +110,34 @@ describe('SlowCookScheduler', () => {
         { metric: 0.6, improved: true },
       ]),
     ).toEqual({ decision: 'stop', reason: 'max_passes' });
+    expect(
+      scheduler.shouldStop(
+        spec('SLOW_COOK', { acceptance: { metric: 'loss', minImprovement: 0.1, maxPasses: 4 } }),
+        [
+          { metric: 0.5, improved: true },
+          { metric: 0.2, improved: true },
+        ],
+      ),
+    ).toEqual({ decision: 'continue' });
+  });
+
+  it('claims persisted interactive work after a scheduler restart at the utilisation ceiling', async () => {
+    const engine = createJobEngine({ store: new MemoryJobStore() });
+    const original = new SlowCookScheduler(engine);
+    const interactive = await original.enqueue(actor, spec('INTERACTIVE'));
+    const slow = await original.enqueue(actor, spec('SLOW_COOK'));
+    const restarted = new SlowCookScheduler(engine);
+    const claimed = await restarted.claimNext(actor, 'worker-1', 5_000, {
+      interactiveQueued: false,
+      utilisation: 0.9,
+    });
+    expect(claimed?.id).toBe(interactive.id);
+    const leftover = await restarted.claimNext(actor, 'worker-2', 5_000, {
+      interactiveQueued: false,
+      utilisation: 0.9,
+    });
+    expect(leftover).toBeNull();
+    expect((await engine.get(actor, slow.id))?.status).toBe('queued');
   });
 
   it('persists the job spec through checkpointed passes', async () => {

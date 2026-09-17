@@ -19,7 +19,6 @@ export class ContextCompiler {
     const candidates: CompiledContextItem[] = [];
 
     const policyText = policyToText(parsed.policy);
-    const policyExcerpt = policyText ? excerpt(policyText) : '';
 
     candidates.push(
       item('objective', 'objective', parsed.objective, 'task_objective', null),
@@ -84,24 +83,9 @@ export class ContextCompiler {
       );
     }
 
-    if (parsed.tokenBudget <= 0) {
-      return {
-        objective: parsed.objective,
-        policyExcerpt,
-        items: [],
-        tokenCount: 0,
-        tokenBudget: parsed.tokenBudget,
-        truncated: true,
-        omitted: [
-          ...omitted,
-          ...candidates.map((candidate) => ({ id: candidate.id, reason: 'token_budget' })),
-        ],
-      };
-    }
-
     const items: CompiledContextItem[] = [];
     let tokenCount = 0;
-    let truncated = false;
+    let truncated = parsed.tokenBudget <= 0;
 
     for (const candidate of candidates) {
       const remaining = parsed.tokenBudget - tokenCount;
@@ -127,9 +111,11 @@ export class ContextCompiler {
       tokenCount += next.tokenCost;
     }
 
+    const keptObjective = items.find((entry) => entry.kind === 'objective');
+    const keptPolicy = items.find((entry) => entry.kind === 'policy');
     return {
-      objective: parsed.objective,
-      policyExcerpt,
+      objective: keptObjective?.content ?? '',
+      policyExcerpt: keptPolicy ? excerpt(keptPolicy.content) : '',
       items,
       tokenCount,
       tokenBudget: parsed.tokenBudget,

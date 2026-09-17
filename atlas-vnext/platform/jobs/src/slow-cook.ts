@@ -3,7 +3,6 @@ import {
   slowCookJobSpecSchema,
   type DiminishingReturnsDecision,
   type JobRecord,
-  type JobScheduleClass,
   type SlowCookJobSpec,
   type SlowCookPass,
 } from '@atlas-vnext/contracts';
@@ -26,20 +25,16 @@ export interface ComputeDemand {
  * side-effect class none. This is not an unbounded autonomous agent.
  */
 export class SlowCookScheduler {
-  private readonly classes = new Map<string, JobScheduleClass>();
-
   constructor(private readonly engine: DurableJobEngine) {}
 
   async enqueue(actor: JobActor, spec: SlowCookJobSpec & { type?: string }): Promise<JobRecord> {
     const parsed = slowCookJobSpecSchema.parse(spec);
-    const record = await this.engine.enqueue(actor, {
+    return this.engine.enqueue(actor, {
       dungeon: 'platform',
       type: spec.type ?? SLOW_COOK_JOB_TYPE,
       priority: SCHEDULE_CLASS_PRIORITY[parsed.resourcePolicy.class],
       checkpoint: asCheckpoint(parsed),
     });
-    this.classes.set(record.id, parsed.resourcePolicy.class);
-    return record;
   }
 
   async claimNext(
@@ -49,10 +44,12 @@ export class SlowCookScheduler {
     demand: ComputeDemand,
   ): Promise<JobRecord | null> {
     const skipSlowCook = demand.interactiveQueued || demand.utilisation >= SLOW_COOK_UTILISATION_CEILING;
-    if (skipSlowCook && !(await this.hasClaimableNonSlowCook(actor))) {
-      return null;
-    }
-    return this.engine.claimNext(actor, workerId, leaseMs);
+    return this.engine.claimNext(
+      actor,
+      workerId,
+      leaseMs,
+      skipSlowCook ? { minPriority: SCHEDULE_CLASS_PRIORITY.BACKGROUND } : undefined,
+    );
   }
 
   async recordPass(
@@ -83,22 +80,14 @@ export class SlowCookScheduler {
     if (last && last.improved === false) {
       return { decision: 'stop', reason: 'min_improvement' };
     }
-    if (passes.length >= 2) {
+    if (passes.length >= 2 && last) {
       const previous = passes[passes.length - 2]!;
-      if (last!.metric - previous.metric < spec.acceptance.minImprovement) {
+      const improvement = Math.abs(last.metric - previous.metric);
+      if (improvement < spec.acceptance.minImprovement) {
         return { decision: 'stop', reason: 'min_improvement' };
       }
     }
     return { decision: 'continue' };
-  }
-
-  private async hasClaimableNonSlowCook(actor: JobActor): Promise<boolean> {
-    for (const [id, scheduleClass] of this.classes) {
-      if (scheduleClass === 'SLOW_COOK') continue;
-      const job = await this.engine.get(actor, id);
-      if (job?.status === 'queued') return true;
-    }
-    return false;
   }
 }
 

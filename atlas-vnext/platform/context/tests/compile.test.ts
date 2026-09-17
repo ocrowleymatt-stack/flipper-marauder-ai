@@ -102,7 +102,10 @@ describe('ContextCompiler', () => {
     });
     expect(compiled.items).toEqual([]);
     expect(compiled.tokenCount).toBe(0);
+    expect(compiled.objective).toBe('');
+    expect(compiled.policyExcerpt).toBe('');
     expect(compiled.truncated).toBe(true);
     expect(compiled.omitted.some((entry) => entry.id === 'objective')).toBe(true);
+    expect(compiled.omitted.some((entry) => entry.id === 'policy')).toBe(true);
   });
 });

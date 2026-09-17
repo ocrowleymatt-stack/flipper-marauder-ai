@@ -1,0 +1,16 @@
+{
+  "name": "@atlas-vnext/acquisition",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@atlas-vnext/contracts": "*",
+    "@atlas-vnext/files": "*",
+    "@atlas-vnext/persistence": "*",
+    "@atlas-vnext/storage": "*",
+    "@atlas-vnext/jobs": "*",
+    "@atlas-vnext/permissions": "*",
+    "@atlas-vnext/projects": "*"
+  }
+}

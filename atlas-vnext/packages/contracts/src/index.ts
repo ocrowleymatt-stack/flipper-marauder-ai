@@ -492,3 +492,4 @@ export * from './writing.ts';
 export * from './privacy.ts';
 export * from './estate.ts';
 export * from './evidence.ts';
+export * from './acquisition.ts';

@@ -136,11 +136,23 @@ export class PostgresJobStore implements JobStore {
     workerId: string;
     leaseUntil: string;
     now: string;
+    minPriority?: number;
+    types?: readonly string[];
   }): Promise<JobRecord | null> {
-    const workspaceClause = input.workspaceId ? 'AND (workspace_id = $5)' : '';
-    const params = input.workspaceId
-      ? [input.tenantId, input.now, input.workerId, input.leaseUntil, input.workspaceId]
-      : [input.tenantId, input.now, input.workerId, input.leaseUntil];
+    const params: unknown[] = [input.tenantId, input.now, input.workerId, input.leaseUntil];
+    const extra: string[] = [];
+    if (input.workspaceId) {
+      params.push(input.workspaceId);
+      extra.push(`AND (workspace_id = $${params.length})`);
+    }
+    if (typeof input.minPriority === 'number') {
+      params.push(input.minPriority);
+      extra.push(`AND priority >= $${params.length}`);
+    }
+    if (input.types && input.types.length > 0) {
+      params.push([...input.types]);
+      extra.push(`AND type = ANY($${params.length}::text[])`);
+    }
     const result = await this.tx.query<JobRow>(
       `WITH picked AS (
          SELECT id FROM jobs
@@ -148,7 +160,7 @@ export class PostgresJobStore implements JobStore {
            AND status = 'queued'
            AND cancel_requested = FALSE
            AND (lease_until IS NULL OR lease_until <= $2::timestamptz)
-           ${workspaceClause}
+           ${extra.join('\n           ')}
          ORDER BY priority DESC, created_at ASC
          FOR UPDATE SKIP LOCKED
          LIMIT 1

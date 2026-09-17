@@ -79,6 +79,13 @@ export interface JobEventSink {
   }): Promise<void>;
 }
 
+export interface JobClaimFilter {
+  /** Inclusive lower bound on persisted `JobRecord.priority`. */
+  minPriority?: number;
+  /** When set, only these job types may be claimed. */
+  types?: readonly string[];
+}
+
 export interface JobStore {
   insert(record: JobRecord): Promise<JobRecord>;
   findByIdempotency(tenantId: string, key: string): Promise<JobRecord | null>;
@@ -90,7 +97,7 @@ export interface JobStore {
     workerId: string;
     leaseUntil: string;
     now: string;
-  }): Promise<JobRecord | null>;
+  } & JobClaimFilter): Promise<JobRecord | null>;
   listExpiredRunning(now: string): Promise<JobRecord[]>;
   listByLeaseOwner(workerId: string): Promise<JobRecord[]>;
   appendCheckpoint(row: JobCheckpointRecord): Promise<JobCheckpointRecord>;
@@ -112,7 +119,12 @@ export interface UnitOfWork {
 export interface DurableJobEngine {
   enqueue(actor: JobActor, input: JobEnqueueInput): Promise<JobRecord>;
   get(actor: JobActor, id: string): Promise<JobRecord | null>;
-  claimNext(actor: JobActor, workerId: string, leaseMs: number): Promise<JobRecord | null>;
+  claimNext(
+    actor: JobActor,
+    workerId: string,
+    leaseMs: number,
+    filter?: JobClaimFilter,
+  ): Promise<JobRecord | null>;
   heartbeat(actor: JobActor, id: string, workerId: string, leaseMs: number): Promise<JobRecord>;
   checkpoint(
     actor: JobActor,

@@ -70,6 +70,14 @@ export class DirectoryAdapter {
   }
 }
 
+function archiveBlobMime(filename?: string, declared?: string): string {
+  if (declared?.trim()) return declared.trim();
+  const name = (filename ?? '').toLowerCase();
+  if (name.endsWith('.zip')) return 'application/zip';
+  if (name.endsWith('.json')) return 'application/json';
+  return 'application/octet-stream';
+}
+
 /**
  * Archive contents must arrive as caller-supplied entries (already unpacked bytes)
  * or as a single archive blob the caller already loaded. No host path is opened.
@@ -82,11 +90,12 @@ export class ArchiveAdapter {
     entries?: SuppliedAcquisitionItem[];
     bytes?: Uint8Array;
     filename?: string;
+    mime?: string;
   }): PreparedAcquisition {
     const entries: SuppliedAcquisitionItem[] = input.entries?.length
       ? input.entries
       : input.bytes
-        ? [{ path: input.filename?.trim() || 'archive.bin', bytes: input.bytes, mime: 'application/json', kind: 'archive' }]
+        ? [{ path: input.filename?.trim() || 'archive.bin', bytes: input.bytes, mime: archiveBlobMime(input.filename, input.mime), kind: 'archive' }]
         : [];
     if (!entries.length) {
       throw new AcquisitionError('malformed', 'ArchiveAdapter requires caller-supplied bytes or entries.');

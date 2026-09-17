@@ -123,7 +123,7 @@ describe('local data acquisition substrate', () => {
     expect(processed).toBeTruthy();
 
     const listed = await stack.files.list(stack.actor, stack.project.id);
-    const source = listed.find((file) => file.path === `acquisition/${begun.id}/meta.json`);
+    const source = listed.find((file) => file.path === `acquisition/${begun.id}/originals/meta.json`);
     expect(source).toBeTruthy();
     await stack.acquisition.extract(stack.actor, source!.id);
     const extraction = await stack.persistence
@@ -167,7 +167,7 @@ describe('local data acquisition substrate', () => {
     expect(accepted.status).toBe('accepted');
     const before = await stack.files.list(stack.actor, stack.project.id);
     const acceptedManifest = before.find((file) => file.path === `acquisition/${accepted.id}/manifest.json`);
-    const acceptedOriginal = before.find((file) => file.path === `acquisition/${accepted.id}/watch.txt`);
+    const acceptedOriginal = before.find((file) => file.path === `acquisition/${accepted.id}/originals/watch.txt`);
     const acceptedManifestHash = acceptedManifest!.contentHash;
     const acceptedOriginalHash = acceptedOriginal!.contentHash;
 
@@ -198,10 +198,10 @@ describe('local data acquisition substrate', () => {
     expect(afterFail.find((file) => file.path === `acquisition/${accepted.id}/manifest.json`)?.contentHash).toBe(
       acceptedManifestHash,
     );
-    expect(afterFail.find((file) => file.path === `acquisition/${accepted.id}/watch.txt`)?.contentHash).toBe(
+    expect(afterFail.find((file) => file.path === `acquisition/${accepted.id}/originals/watch.txt`)?.contentHash).toBe(
       acceptedOriginalHash,
     );
-    expect(afterFail.some((file) => file.path === `acquisition/${failed.id}/keep.txt`)).toBe(true);
+    expect(afterFail.some((file) => file.path === `acquisition/${failed.id}/originals/keep.txt`)).toBe(true);
     expect(await stack.cas.has(acceptedOriginalHash)).toBe(true);
 
     const replay = await stack.acquisition.begin(stack.actor, {
@@ -263,5 +263,99 @@ describe('local data acquisition substrate', () => {
     });
     expect(archive.plan.sourceKind).toBe('backup');
     expect(archive.plan.items[0]?.path).toBe('inbox/note.txt');
+
+    const zipBlob = new ArchiveAdapter().prepare({
+      bytes: new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+      filename: 'export.zip',
+    });
+    expect(zipBlob.items[0]?.mime).toBe('application/zip');
+    const opaqueBlob = new ArchiveAdapter().prepare({ bytes: new Uint8Array([1, 2, 3]) });
+    expect(opaqueBlob.items[0]?.mime).toBe('application/octet-stream');
+  });
+
+  it('reconstructs get() from the stored manifest after process-local state is gone', async () => {
+    const stack = await openAcquisitionStack();
+    const notes = new TextEncoder().encode('quay watch notes');
+    const first = await stack.acquisition.begin(stack.actor, {
+      projectId: stack.project.id,
+      sourceKind: 'documents',
+      title: 'Persisted pack',
+      acquiredFrom: 'caller',
+      items: [{ path: 'watch.txt', bytes: notes }],
+    });
+    const restarted = new AcquisitionService({
+      persistence: stack.persistence,
+      files: stack.files,
+      projects: stack.projects,
+      authority: stack.authority,
+    });
+    const loaded = await restarted.get(stack.actor, first.id);
+    expect(loaded.status).toBe('accepted');
+    expect(loaded.entries).toEqual(first.entries);
+    expect(loaded.originalCasHash).toBe(first.originalCasHash);
+    await stack.persistence.close();
+  });
+
+  it('does not let a caller item named manifest.json overwrite the acquisition manifest', async () => {
+    const stack = await openAcquisitionStack();
+    const original = new TextEncoder().encode(JSON.stringify({ lookalike: true, body: 'caller original' }));
+    const begun = await stack.acquisition.begin(stack.actor, {
+      projectId: stack.project.id,
+      sourceKind: 'documents',
+      title: 'Collision',
+      acquiredFrom: 'caller',
+      items: [{ path: 'manifest.json', bytes: original }],
+    });
+    const listed = await stack.files.list(stack.actor, stack.project.id);
+    const storedOriginal = listed.find((file) => file.path === `acquisition/${begun.id}/originals/manifest.json`);
+    const storedManifest = listed.find((file) => file.path === `acquisition/${begun.id}/manifest.json`);
+    expect(storedOriginal?.contentHash).toBe(sha256Hex(original));
+    expect(storedManifest?.contentHash).not.toBe(storedOriginal?.contentHash);
+    const processed = await stack.acquisition.processNext(stack.actor, 'acq-worker');
+    expect(Array.isArray(processed) ? processed[0]?.id : processed?.id).toBe(storedOriginal?.id);
+    await stack.persistence.close();
+  });
+
+  it('does not claim or fail unrelated queued jobs', async () => {
+    const stack = await openAcquisitionStack();
+    const foreign = await stack.persistence.forActor(stack.actor).jobs.enqueue(stack.actor, {
+      dungeon: 'writing',
+      type: 'commission',
+      priority: 999,
+    });
+    await stack.acquisition.begin(stack.actor, {
+      projectId: stack.project.id,
+      sourceKind: 'documents',
+      title: 'Later',
+      acquiredFrom: 'caller',
+      items: [{ path: 'note.txt', bytes: new TextEncoder().encode('ok') }],
+    });
+    const processed = await stack.acquisition.processNext(stack.actor, 'acq-worker');
+    expect(processed).toBeTruthy();
+    const still = await stack.persistence.forActor(stack.actor).jobs.get(stack.actor, foreign.id);
+    expect(still?.status).toBe('queued');
+    expect(still?.failureReason).toBeNull();
+    await stack.persistence.close();
+  });
+
+  it('requires file.read before extract', async () => {
+    const stack = await openAcquisitionStack();
+    await stack.persistence.ensurePrincipal({ id: 'principal_noread', displayName: 'NoRead' });
+    const noRead = { tenantId: 'tenant_a', principalId: 'principal_noread' };
+    stack.authority.grantMembership(noRead.principalId, noRead.tenantId);
+    const begun = await stack.acquisition.begin(stack.actor, {
+      projectId: stack.project.id,
+      sourceKind: 'documents',
+      title: 'Needs read',
+      acquiredFrom: 'caller',
+      items: [{ path: 'note.txt', bytes: new TextEncoder().encode('secret') }],
+    });
+    const listed = await stack.files.list(stack.actor, stack.project.id);
+    const source = listed.find((file) => file.path === `acquisition/${begun.id}/originals/note.txt`);
+    await expect(stack.acquisition.extract(noRead, source!.id)).rejects.toMatchObject({
+      httpStatus: 404,
+      message: GENERIC_DENY,
+    });
+    await stack.persistence.close();
   });
 });

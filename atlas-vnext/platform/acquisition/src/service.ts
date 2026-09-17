@@ -6,6 +6,7 @@ import type {
   AcquisitionStatus,
   ProvenanceRecord,
 } from '@atlas-vnext/contracts';
+import { acquisitionManifestSchema } from '@atlas-vnext/contracts';
 import { FILE_JOB_INGEST, FilesService, sanitiseRelPath } from '@atlas-vnext/files';
 import type { DurableJobEngine } from '@atlas-vnext/jobs';
 import type { FileRecord, PersistenceActor, PlatformPersistence } from '@atlas-vnext/persistence';
@@ -16,6 +17,14 @@ import { AcquisitionError, GENERIC_DENY } from './errors.ts';
 
 export const ACQUISITION_JOB_DUNGEON = 'platform';
 export const ACQUISITION_JOB_PROCESS = 'acquisition.process';
+
+function originalStoredPath(id: string, rel: string): string {
+  return sanitiseRelPath(`acquisition/${id}/originals/${rel}`);
+}
+
+function manifestStoredPath(id: string): string {
+  return sanitiseRelPath(`acquisition/${id}/manifest.json`);
+}
 
 export interface AcquisitionActor extends PersistenceActor {
   principalId: string;
@@ -77,7 +86,7 @@ export class AcquisitionService {
 
     for (const item of input.items) {
       const rel = sanitiseRelPath(item.path);
-      const storedPath = sanitiseRelPath(`acquisition/${id}/${rel}`);
+      const storedPath = originalStoredPath(id, rel);
       const sha256 = sha256Hex(item.bytes);
       hashed.push({
         path: rel,
@@ -171,7 +180,7 @@ export class AcquisitionService {
       const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
       manifestFile = await this.deps.files.ingest(actor, {
         projectId: project.id,
-        path: sanitiseRelPath(`acquisition/${id}/manifest.json`),
+        path: sanitiseRelPath(manifestStoredPath(id)),
         bytes: manifestBytes,
         declaredMime: 'application/json',
       });
@@ -233,11 +242,12 @@ export class AcquisitionService {
 
   async get(actor: AcquisitionActor, id: string): Promise<AcquisitionManifest> {
     this.assertActor(actor);
-    const record = this.records.get(id);
+    const record = this.records.get(id) ?? (await this.loadPersisted(actor, id));
     if (!record || record.tenantId !== actor.tenantId) {
       throw new AcquisitionError('not_found', GENERIC_DENY, 404);
     }
     await this.requireProject(actor, record.workspaceId, 'file.read');
+    this.records.set(id, record);
     return this.snapshot(record);
   }
 
@@ -253,7 +263,9 @@ export class AcquisitionService {
   ): Promise<FileRecord[] | FileRecord | null> {
     const scoped = this.scoped(actor);
     const bound = this.deps.persistence.forActor(scoped);
-    const job = await bound.jobs.claimNext(scoped, workerId, leaseMs);
+    const job = await bound.jobs.claimNext(scoped, workerId, leaseMs, {
+      types: [ACQUISITION_JOB_PROCESS, FILE_JOB_INGEST],
+    });
     if (!job) return null;
     const fileIds =
       job.type === ACQUISITION_JOB_PROCESS
@@ -287,10 +299,34 @@ export class AcquisitionService {
     }
   }
 
-  /** Optional alias: same as FilesService.extractAndChunk. */
+  /** Optional alias: same as FilesService.extractAndChunk after file.read. */
   async extract(actor: AcquisitionActor, fileId: string, jobId?: string): Promise<FileRecord> {
     this.assertActor(actor);
+    const file = await this.deps.files.getMetadata(actor, fileId);
+    if (!file) throw new AcquisitionError('not_found', GENERIC_DENY, 404);
+    await this.requireProject(actor, file.workspaceId, 'file.read');
     return this.deps.files.extractAndChunk(actor, fileId, jobId);
+  }
+
+  private async loadPersisted(actor: AcquisitionActor, id: string): Promise<MutableManifest | null> {
+    const projects = await this.deps.projects.list(actor);
+    for (const project of projects) {
+      const files = await this.deps.files.list(actor, project.id);
+      const manifestFile = files.find((file) => file.path === manifestStoredPath(id));
+      if (!manifestFile) continue;
+      await this.requireProject(actor, project.id, 'file.read');
+      const bytes = await this.deps.files.readBytes(actor, manifestFile.id);
+      const parsed = acquisitionManifestSchema.safeParse(JSON.parse(new TextDecoder().decode(bytes)));
+      if (!parsed.success) continue;
+      const prefix = `acquisition/${id}/originals/`;
+      const fileIds = files.filter((file) => file.path.startsWith(prefix)).map((file) => file.id);
+      return {
+        ...parsed.data,
+        manifestHash: manifestFile.contentHash,
+        fileIds,
+      };
+    }
+    return null;
   }
 
   private snapshot(record: MutableManifest): AcquisitionManifest {

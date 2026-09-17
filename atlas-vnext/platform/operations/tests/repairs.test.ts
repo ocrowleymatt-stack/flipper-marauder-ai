@@ -100,7 +100,7 @@ describe('RepairExecutor', () => {
       cas,
       diskQuotaBytes: 1,
       getSchemaVersion: async () => 0,
-      persistence: { mode: 'postgres', run: async (fn) => fn() } as never,
+      persistence: { mode: 'postgres', run: async (fn: () => Promise<unknown>) => fn() } as never,
       providerHealth: { openai: 'error' },
     });
     const executor = new RepairExecutor({ doctor, authority, jobs });

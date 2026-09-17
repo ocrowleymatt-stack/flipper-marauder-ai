@@ -586,6 +586,7 @@ function analyzePackageJson(root: string, overlays: Record<string, string>): Vio
     ['dungeons/website/package.json', 'dungeon'],
     ['dungeons/osint/package.json', 'dungeon'],
     ['dungeons/music/package.json', 'dungeon'],
+    ['dungeons/privacy/package.json', 'dungeon'],
   ] as const;
 
   for (const [rel, kind] of packages) {

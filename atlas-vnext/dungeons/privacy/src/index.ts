@@ -200,7 +200,27 @@ export class PrivacyService {
     return this.deps.policy.modelContext(policy);
   }
 
-  private async loadOverlay(actor: PrivacyActor, dungeonId: DungeonId | null): Promise<EffectivePolicy> {
+  /**
+   * Load the stored overlay for enforcement. Viewing policy remains owner-only;
+   * applying tools/processing restrictions is host-side for every actor.
+   */
+  async runtimeOverlay(actor: PersistenceActor, dungeonId: DungeonId | null = null): Promise<EffectivePolicy> {
+    return this.loadOverlay(actor, dungeonId);
+  }
+
+  toolsAllowed(policy: EffectivePolicy, requested: boolean): boolean {
+    return this.deps.policy.toolsAllowed(policy, requested);
+  }
+
+  runtimePrivacy(policy: EffectivePolicy, requested: 'any' | 'local_only' = 'any'): 'any' | 'local_only' {
+    return this.deps.policy.runtimePrivacy(policy, requested);
+  }
+
+  scopedModelInstructions(policy: EffectivePolicy): string {
+    return this.deps.policy.scopedModelInstructions(policy);
+  }
+
+  private async loadOverlay(actor: PersistenceActor, dungeonId: DungeonId | null): Promise<EffectivePolicy> {
     const tenantRow = await this.row(actor, null);
     const dungeonRow = dungeonId ? await this.row(actor, dungeonId) : null;
     const tenant = this.fromRow(actor.tenantId, null, tenantRow);
@@ -216,7 +236,7 @@ export class PrivacyService {
     });
   }
 
-  private async row(actor: PrivacyActor, dungeonId: DungeonId | null) {
+  private async row(actor: PersistenceActor, dungeonId: DungeonId | null) {
     return this.deps.persistence.forActor(actor).privacy.getPolicy(actor, dungeonId);
   }
 

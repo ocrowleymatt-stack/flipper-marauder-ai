@@ -45,6 +45,25 @@ describe('migrated dungeon architecture', () => {
     expect(MUSIC_DUNGEON.description).not.toMatch(/runpod/i);
   });
 
+  it('fails when the Privacy dungeon package.json depends on transports or control-plane', () => {
+    const report = analyzeGraph(root, {
+      'dungeons/privacy/package.json': JSON.stringify({
+        name: '@atlas-vnext/dungeon-privacy',
+        dependencies: {
+          '@atlas-vnext/contracts': '*',
+          eventsource: '^2.0.0',
+          '@atlas-vnext/nexus': '*',
+          '@atlas-vnext/dungeon-osint': '*',
+        },
+      }),
+    });
+    expect(
+      report.violations.some((item) => item.rule === 'dungeon-package-deps' && item.detail.includes('eventsource')),
+    ).toBe(true);
+    expect(report.violations.some((item) => item.detail.includes('@atlas-vnext/nexus'))).toBe(true);
+    expect(report.violations.some((item) => item.detail.includes('@atlas-vnext/dungeon-osint'))).toBe(true);
+  });
+
   it('registers specialist surfaces rather than Caspa clones', () => {
     expect(new Set([OSINT_DUNGEON.surface, INVESTIGATION_DUNGEON.surface, RESEARCH_DUNGEON.surface, WEBSITE_DUNGEON.surface, MUSIC_DUNGEON.surface, PRIVACY_DUNGEON.surface]).size).toBe(6);
     expect(PRIVACY_DUNGEON.ownerOnly).toBe(true);

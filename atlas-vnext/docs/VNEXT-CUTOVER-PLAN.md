@@ -4,6 +4,8 @@ Status: planning only. No production cutover is authorised by this document.
 
 Accepted development baseline: `0af67f19f2349a7ac4430364165af254caf4aa96`.
 
+The release candidate must be the exact SHA of the release-closeout commit that is green on GitHub CI after Privacy package-boundary folding, Workbench stored-policy bind, and migration 008 rehearsal. Record that SHA in `VNEXT-RELEASE-VALIDATION.md` before any cutover window.
+
 ## Objective
 
 Promote an explicitly approved Atlas vNext release to production without changing protected architecture contracts, losing persisted data, widening Authority, or creating an unrecoverable migration state.

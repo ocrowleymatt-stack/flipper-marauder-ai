@@ -72,4 +72,26 @@ describe('Privacy & Safety dungeon', () => {
     const denied = await privacy.decideProposal(stack.actor, proposal.id, 'denied');
     expect(denied.status).toBe('denied');
   });
+
+  it('exposes stored overlays for host enforcement without making the control room public', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const privacy = new PrivacyService({
+      persistence: stack.persistence,
+      authority: stack.authority,
+      policy: stack.policy,
+      ownerPrincipalId: stack.actor.principalId,
+    });
+    await privacy.update(stack.actor, {
+      patch: { toolsEnabled: false, processing: 'local_only' },
+      confirm: 'CONFIRM',
+    });
+    const intruder = { tenantId: 'tenant_a', principalId: 'principal_other', kind: 'user' as const };
+    const overlay = await privacy.runtimeOverlay(intruder);
+    expect(overlay.toolsEnabled).toBe(false);
+    expect(privacy.toolsAllowed(overlay, true)).toBe(false);
+    expect(privacy.runtimePrivacy(overlay, 'any')).toBe('local_only');
+    expect(privacy.scopedModelInstructions(overlay)).toMatch(/localOnly=true/);
+    await expect(privacy.effective(intruder)).rejects.toMatchObject({ httpStatus: 404, message: GENERIC_DENY });
+  });
 });

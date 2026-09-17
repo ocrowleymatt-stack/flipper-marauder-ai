@@ -324,7 +324,17 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
       const body = await readJson(req, options.maxRequestBytes);
       const content = typeof body.content === 'string' ? body.content : '';
       const capability = typeof body.capability === 'string' ? body.capability : 'nexus/fast';
-      const allowTools = body.tools === true;
+      const requestedTools = body.tools === true;
+      const requestedPrivacy = body.privacy === 'local_only' ? 'local_only' : 'any';
+      let allowTools = requestedTools;
+      let privacy: 'any' | 'local_only' = requestedPrivacy;
+      let systemPrompt: string | undefined;
+      if (options.privacy && conversationActor) {
+        const policy = await options.privacy.runtimeOverlay(conversationActor);
+        allowTools = options.privacy.toolsAllowed(policy, requestedTools);
+        privacy = options.privacy.runtimePrivacy(policy, requestedPrivacy);
+        systemPrompt = options.privacy.scopedModelInstructions(policy);
+      }
       const origin = matchingOrigin(req, options.allowedOrigins);
       const tenantKey = conversationActor?.tenantId ?? options.tenantId ?? 'local';
       const conversationId = decodeURIComponent(messageMatch[1]!);
@@ -336,6 +346,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
           options.runtime.sendMessage(conversationId, {
             content,
             capability,
+            privacy,
+            systemPrompt,
             requireTools: allowTools,
             allowTools,
           }),

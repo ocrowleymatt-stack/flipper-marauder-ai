@@ -8,7 +8,7 @@ import { CasNotFoundError, sha256Hex } from '@atlas-vnext/storage';
 import { CHUNKER_ID, CHUNKER_VERSION, chunkBlocks } from './chunk.ts';
 import { CasMissingError, FilesAccessError, IngestionError } from './errors.ts';
 import { EXTRACTOR_ID, EXTRACTOR_VERSION, extractBytes, estimateTokens } from './extract/index.ts';
-import { resolveMime, type AllowedMime } from './mime.ts';
+import { resolveMime, sniffMime, type AllowedMime } from './mime.ts';
 import { displayNameFromPath, sanitiseRelPath } from './path.ts';
 import {
   DEFAULT_SITE_RETENTION,
@@ -51,6 +51,18 @@ export class FilesService {
     const scoped = this.scoped(actor, 'ingest file');
     const path = sanitiseRelPath(input.path);
     const mime = resolveMime({ bytes: input.bytes, filename: path, declared: input.declaredMime });
+    return this.storeOriginal(scoped, input, path, mime, true);
+  }
+
+  /** Preserve opaque archive bytes in shared CAS without scheduling extraction. */
+  async ingestRawOriginal(actor: PersistenceActor, input: IngestInput): Promise<FileRecord> {
+    const scoped = this.scoped(actor, 'ingest raw original');
+    const path = sanitiseRelPath(input.path);
+    const mime = sniffMime(input.bytes) === 'application/zip' ? 'application/zip' : 'application/octet-stream';
+    return this.storeOriginal(scoped, input, path, mime, false);
+  }
+
+  private async storeOriginal(scoped: PersistenceActor, input: IngestInput, path: string, mime: string, extract: boolean): Promise<FileRecord> {
     const workspace = await this.requireProject(scoped, input.projectId);
     logPlatform('files.ingest.start', {
       tenantId: scoped.tenantId,
@@ -117,7 +129,7 @@ export class FilesService {
         kind: 'file',
         ownerId: file.id,
       });
-      await bound.jobs.enqueue(scoped, {
+      if (extract) await bound.jobs.enqueue(scoped, {
         dungeon: FILE_JOB_DUNGEON,
         type: FILE_JOB_INGEST,
         workspaceId: workspace.id,
@@ -265,7 +277,9 @@ export class FilesService {
   async processNextJob(actor: PersistenceActor, workerId: string, leaseMs = 30_000): Promise<FilesJobOutcome | null> {
     const scoped = this.scoped(actor, 'process file job');
     const bound = this.persistence.forActor(scoped);
-    const job = await bound.jobs.claimNext(scoped, workerId, leaseMs);
+    const job = await bound.jobs.claimNext(scoped, workerId, leaseMs, {
+      types: [FILE_JOB_INGEST, STORAGE_JOB_RETAIN, STORAGE_JOB_GC],
+    });
     if (!job) return null;
     if (job.type === STORAGE_JOB_RETAIN) {
       try {

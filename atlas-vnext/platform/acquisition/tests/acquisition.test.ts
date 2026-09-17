@@ -358,4 +358,57 @@ describe('local data acquisition substrate', () => {
     });
     await stack.persistence.close();
   });
+  it('rejects normalized duplicate paths before storing originals', async () => {
+    const stack = await openAcquisitionStack();
+    await expect(stack.acquisition.begin(stack.actor, {
+      projectId: stack.project.id, sourceKind: 'documents', title: 'Duplicate', acquiredFrom: 'caller',
+      items: [
+        { path: 'folder/note.txt', bytes: new TextEncoder().encode('first') },
+        { path: 'folder//./note.txt', bytes: new TextEncoder().encode('second') },
+      ],
+    })).rejects.toMatchObject({ code: 'malformed' });
+    expect(await stack.files.list(stack.actor, stack.project.id)).toEqual([]);
+    await stack.persistence.close();
+  });
+
+  it('reconstructs acquisitions in archived projects after restart', async () => {
+    const stack = await openAcquisitionStack();
+    const first = await stack.acquisition.begin(stack.actor, {
+      projectId: stack.project.id, sourceKind: 'documents', title: 'Archived', acquiredFrom: 'caller',
+      items: [{ path: 'note.txt', bytes: new TextEncoder().encode('original') }],
+    });
+    await stack.projects.archive(stack.actor, stack.project.id);
+    expect(await new AcquisitionService(stack).get(stack.actor, first.id)).toEqual(first);
+    await stack.persistence.close();
+  });
+
+  it.each([
+    ['export.zip', new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 255]), 'application/zip'],
+    ['backup.bin', new Uint8Array([0, 255, 128, 1]), 'application/octet-stream'],
+  ])('preserves raw %s and isolates acquisition jobs from the files worker', async (filename, bytes, mime) => {
+    const stack = await openAcquisitionStack();
+    const prepared = new ArchiveAdapter().prepare({ filename, bytes });
+    const begun = await stack.acquisition.begin(stack.actor, {
+      projectId: stack.project.id, ...prepared.plan, items: prepared.items,
+    });
+    expect(begun.status).toBe('accepted');
+    const listed = await stack.files.list(stack.actor, stack.project.id);
+    const original = listed.find(file => file.path.endsWith(`/originals/${filename}`))!;
+    expect(original.mimeType).toBe(mime);
+    expect(new Uint8Array(await stack.files.readBytes(stack.actor, original.id))).toEqual(bytes);
+    const bound = stack.persistence.forActor(stack.actor);
+    const acquisitionJob = await bound.jobs.enqueue(stack.actor, {
+      dungeon: 'platform', type: 'acquisition.process',
+      idempotencyKey: `acquisition.process:${begun.id}:${begun.originalCasHash}`,
+    });
+    while (await stack.files.processNextJob(stack.actor, 'files-worker')) { /* drain supported jobs */ }
+    expect((await bound.jobs.get(stack.actor, acquisitionJob.id))?.status).toBe('queued');
+    expect(await stack.acquisition.processNext(stack.actor, 'acq-worker')).toMatchObject({ id: original.id });
+    expect((await bound.jobs.get(stack.actor, acquisitionJob.id))?.status).toBe('completed');
+    expect(await bound.extractions.getByHash(stack.actor, original.contentHash, EXTRACTOR_ID, EXTRACTOR_VERSION)).toBeNull();
+    await stack.files.gcUnreferenced();
+    expect(new Uint8Array(await stack.files.readBytes(stack.actor, original.id))).toEqual(bytes);
+    await stack.persistence.close();
+  });
+
 });

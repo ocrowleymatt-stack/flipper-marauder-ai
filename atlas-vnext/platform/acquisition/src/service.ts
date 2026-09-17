@@ -7,7 +7,7 @@ import type {
   ProvenanceRecord,
 } from '@atlas-vnext/contracts';
 import { acquisitionManifestSchema } from '@atlas-vnext/contracts';
-import { FILE_JOB_INGEST, FilesService, sanitiseRelPath } from '@atlas-vnext/files';
+import { ALLOWED_MIME_TYPES, FILE_JOB_INGEST, FilesService, sanitiseRelPath } from '@atlas-vnext/files';
 import type { DurableJobEngine } from '@atlas-vnext/jobs';
 import type { FileRecord, PersistenceActor, PlatformPersistence } from '@atlas-vnext/persistence';
 import { AuthorityEngine } from '@atlas-vnext/permissions';
@@ -84,9 +84,13 @@ export class AcquisitionService {
       kind: string;
     }> = [];
 
+    const paths = new Set<string>();
     for (const item of input.items) {
       const rel = sanitiseRelPath(item.path);
+      if (sanitiseRelPath(rel) !== rel) throw new AcquisitionError('malformed', 'Original path must have a stable normalized form.');
       const storedPath = originalStoredPath(id, rel);
+      if (paths.has(storedPath)) throw new AcquisitionError('malformed', 'Duplicate original path.');
+      paths.add(storedPath);
       const sha256 = sha256Hex(item.bytes);
       hashed.push({
         path: rel,
@@ -104,7 +108,8 @@ export class AcquisitionService {
 
     for (const item of hashed) {
       try {
-        const file = await this.deps.files.ingest(actor, {
+        const ingest = item.kind === 'archive' ? this.deps.files.ingestRawOriginal.bind(this.deps.files) : this.deps.files.ingest.bind(this.deps.files);
+        const file = await ingest(actor, {
           projectId: project.id,
           path: item.storedPath,
           bytes: item.bytes,
@@ -284,7 +289,11 @@ export class AcquisitionService {
     try {
       const files: FileRecord[] = [];
       for (const fileId of fileIds) {
-        files.push(await this.deps.files.extractAndChunk(scoped, fileId, job.id));
+        const file = await this.deps.files.getMetadata(scoped, fileId);
+        if (!file) throw new AcquisitionError('not_found', GENERIC_DENY, 404);
+        files.push((ALLOWED_MIME_TYPES as readonly string[]).includes(file.mimeType)
+          ? await this.deps.files.extractAndChunk(scoped, fileId, job.id)
+          : file);
       }
       await bound.jobs.checkpoint(scoped, job.id, 'extracted', 1, { fileIds });
       await bound.jobs.complete(scoped, job.id);
@@ -309,7 +318,7 @@ export class AcquisitionService {
   }
 
   private async loadPersisted(actor: AcquisitionActor, id: string): Promise<MutableManifest | null> {
-    const projects = await this.deps.projects.list(actor);
+    const projects = await this.deps.projects.list(actor, { includeArchived: true });
     for (const project of projects) {
       const files = await this.deps.files.list(actor, project.id);
       const manifestFile = files.find((file) => file.path === manifestStoredPath(id));

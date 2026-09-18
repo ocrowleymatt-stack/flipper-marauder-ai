@@ -1,8 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { AuthenticationError } from '@atlas-vnext/auth';
 import { canonicalProposal, type OperationsDoctor, type RepairExecutor } from '@atlas-vnext/operations';
+import { GENERIC_DENIED } from './errors.ts';
 import { json, readJson, urlPath } from './http.ts';
-import { resolveActor, type WorkbenchHostOptions } from './workbench.ts';
+import { isForeignHostSession, resolveActor, type WorkbenchHostOptions } from './workbench.ts';
 
 export interface OperationsHostOptions extends WorkbenchHostOptions {
   doctor?: OperationsDoctor | null;
@@ -33,6 +34,10 @@ export async function handleOperations(
     const doctor = options.doctor;
     if (!doctor) {
       json(res, 503, { error: 'operations_unavailable' });
+      return true;
+    }
+    if (isForeignHostSession(actor, options) || !options.principalId || actor.principalId !== options.principalId) {
+      json(res, 404, { error: GENERIC_DENIED });
       return true;
     }
     json(res, 200, await doctor.inspect(principal));

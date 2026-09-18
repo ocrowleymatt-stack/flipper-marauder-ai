@@ -36,7 +36,7 @@ From a checkout of this tree on the host, **after** filling `/etc/atlas-vnext-st
 atlas-vnext/ops/staging/install-alongside.sh
 ```
 
-The script refuses to run if `:8788` is already bound. It does not restart nginx, Nexus, or original Atlas units.
+The script allows a rerun when the managed `atlas-vnext-staging` container already publishes `:8788`. An unrelated listener on that port is still refused. It does not restart nginx, Nexus, or original Atlas units.
 
 Confirm original Atlas still answers `https://atlas.ocrowley.com/auth/status` after install.
 

@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Server } from 'node:http';
 import type { PersistenceConfig } from '@atlas-vnext/persistence';
+import type { ProviderHealth, RouteDecision } from '@atlas-vnext/contracts';
 import { composeSpine, createHost, listen } from '../src/index.ts';
+import { providerHealthToCheckState } from '../src/compose.ts';
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -192,5 +194,153 @@ describe('host health and security', () => {
     });
     expect(spine.auth.cookieName).toBe('atlas_vnext_staging_session');
     expect(spine.auth.cookieHeader('sess_test').startsWith('atlas_vnext_staging_session=')).toBe(true);
+  });
+
+  it('maps provider health without treating unconfigured providers as degraded', () => {
+    const mapping: Record<ProviderHealth, ReturnType<typeof providerHealthToCheckState>> = {
+      healthy: 'ok',
+      configured: 'ok',
+      unhealthy: 'error',
+      authentication_failure: 'error',
+      unavailable: 'not_configured',
+    };
+    for (const [health, state] of Object.entries(mapping) as Array<
+      [ProviderHealth, ReturnType<typeof providerHealthToCheckState>]
+    >) {
+      expect(providerHealthToCheckState(health)).toBe(state);
+    }
+  });
+
+  it('System Doctor observes live provider health and does not propose reconfigure for unconfigured providers', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-host-doctor-'));
+    const spine = await composeSpine({
+      dataPath: join(dir, 'state.json'),
+      mode: 'mock',
+      persistence: memoryConfig('tenant_local'),
+    });
+    const server = createHost({
+      runtime: spine.runtime,
+      auth: spine.auth,
+      doctor: spine.doctor,
+      repairs: spine.repairs,
+      tenantId: spine.tenantId,
+      principalId: spine.principalId,
+    });
+    servers.push(server);
+    const bound = await listen(server, 0, '127.0.0.1');
+    const issued = await spine.auth.issueSession({
+      principalId: spine.principalId,
+      tenantId: spine.tenantId,
+    });
+    const headers = {
+      cookie: spine.auth.cookieHeader(issued.session.id),
+      'x-atlas-csrf': issued.csrfToken,
+    };
+
+    const first = await fetch(`${bound.url}/api/ops/doctor`, { headers });
+    expect(first.status).toBe(200);
+    const firstReport = (await first.json()) as {
+      state: string;
+      checks: Array<{ id: string; state: string; evidence: { providers?: Record<string, string> } }>;
+      proposals: Array<{ id: string }>;
+    };
+    const providers = firstReport.checks.find((check) => check.id === 'providers');
+    expect(providers?.state).toBe('ok');
+    expect(providers?.evidence.providers?.openai).toBe('ok');
+    expect(providers?.evidence.providers?.venice).toBe('not_configured');
+    expect(providers?.evidence.providers?.forge).toBe('not_configured');
+    expect(providers?.evidence.providers?.runpod).toBe('not_configured');
+    expect(firstReport.proposals.some((item) => item.id === 'repair.reconfigure_providers')).toBe(false);
+    expect(firstReport.state).toBe('HEALTHY');
+    expect(() => {
+      (spine.health as { openai: ProviderHealth }).openai = 'unhealthy';
+    }).toThrow();
+    expect(spine.health.openai).not.toBe('unhealthy');
+
+    spine.broker.register({
+      providerId: 'openai',
+      async *stream() {
+        throw new Error('timeout before tokens');
+      },
+    });
+    const decision: RouteDecision = {
+      target: 'nexus/fast',
+      resolvedRouteId: 'openai/gpt-4o',
+      provider: 'openai',
+      model: 'gpt-4o',
+      candidateChain: ['openai/gpt-4o'],
+      localOnly: false,
+      locality: 'public_cloud',
+      runtimeClass: 'always_available',
+      decisionReason: 'test',
+      traceId: 'trc_doctor_live',
+      evaluatedAt: new Date().toISOString(),
+      rejectedCandidates: [],
+    };
+    for (let i = 0; i < 3; i += 1) {
+      await expect(async () => {
+        for await (const _chunk of spine.broker.execute(decision, { prompt: 'x' })) {
+          void _chunk;
+        }
+      }).rejects.toThrow();
+    }
+
+    const second = await fetch(`${bound.url}/api/ops/doctor`, { headers });
+    expect(second.status).toBe(200);
+    const secondReport = (await second.json()) as {
+      state: string;
+      checks: Array<{ id: string; state: string; evidence: { providers?: Record<string, string> } }>;
+      proposals: Array<{ id: string }>;
+    };
+    const after = secondReport.checks.find((check) => check.id === 'providers');
+    expect(after?.evidence.providers?.openai).toBe('error');
+    expect(after?.evidence.providers?.venice).toBe('not_configured');
+    expect(after?.state).toBe('error');
+    expect(secondReport.proposals.some((item) => item.id === 'repair.reconfigure_providers')).toBe(true);
+
+    await spine.persistence!.ensurePrincipal({ id: 'principal_member', displayName: 'Member' });
+    await spine.persistence!.forActor({ tenantId: spine.tenantId, principalId: 'principal_member' }).directory.putTenantMembership({
+      principalId: 'principal_member',
+      tenantId: spine.tenantId,
+      role: 'member',
+      capabilities: [],
+      createdAt: new Date().toISOString(),
+    });
+    const member = await spine.auth.issueSession({ principalId: 'principal_member', tenantId: spine.tenantId });
+    const memberDoctor = await fetch(`${bound.url}/api/ops/doctor`, {
+      headers: {
+        cookie: spine.auth.cookieHeader(member.session.id),
+        'x-atlas-csrf': member.csrfToken,
+      },
+    });
+    expect(memberDoctor.status).toBe(404);
+    expect(await memberDoctor.json()).toEqual({ error: 'Permission denied.' });
+  });
+
+  it('maps live missing credentials to not_configured and probed failures to error', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-host-live-doctor-'));
+    const spine = await composeSpine({
+      dataPath: join(dir, 'live.json'),
+      mode: 'live',
+      env: {},
+      transport: {
+        async send() {
+          throw new Error('connect ECONNREFUSED');
+        },
+      },
+    });
+    expect(spine.health.openai).toBe('unavailable');
+    expect(spine.health.ollama).toBe('unhealthy');
+    const actor = { principalId: spine.principalId, kind: 'user' as const, tenantId: spine.tenantId || 'tenant_local' };
+    const report = await spine.doctor.inspect(actor);
+    const providers = report.checks.find((check) => check.id === 'providers');
+    const map = providers?.evidence.providers as Record<string, string>;
+    expect(map.openai).toBe('not_configured');
+    expect(map.venice).toBe('not_configured');
+    expect(map.forge).toBe('not_configured');
+    expect(map.runpod).toBe('not_configured');
+    expect(map.ollama).toBe('error');
+    expect(providers?.state).toBe('error');
+    expect(report.proposals.some((item) => item.id === 'repair.reconfigure_providers')).toBe(true);
   });
 });

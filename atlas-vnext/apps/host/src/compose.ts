@@ -152,6 +152,10 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   }
 
   const secrets = options.secrets ?? new EnvSecretStore(env);
+  const providerHealthLive: Record<string, ProviderHealth> = {};
+  const recordProviderHealth = (provider: string, health: ProviderHealth): void => {
+    providerHealthLive[provider] = health;
+  };
   const plane = createExecutionPlane({
     mode,
     secrets,
@@ -166,12 +170,14 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       onProviderHealth(provider, health) {
         // Observe probe results; Nexus `isRoutable` still honours the kill list.
         registry.setHealth(provider, health);
+        recordProviderHealth(provider, health);
       },
     },
   });
 
   for (const [provider, health] of Object.entries(plane.health)) {
     registry.setHealth(provider, health);
+    recordProviderHealth(provider, health);
   }
 
   if (mode === 'live') {
@@ -446,9 +452,13 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     cas,
     jobs: jobEngine,
     authority,
-    providerHealth: Object.fromEntries(
-      Object.entries(plane.health).map(([provider, health]) => [provider, providerCheckState(health)]),
-    ),
+    providerHealth: () =>
+      Object.fromEntries(
+        Object.entries(providerHealthLive).map(([provider, health]) => [
+          provider,
+          providerHealthToCheckState(health),
+        ]),
+      ),
   });
   const repairs = new RepairExecutor({ doctor, authority, jobs: jobEngine });
 
@@ -472,7 +482,9 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     router,
     registry,
     broker: plane.broker,
-    health: { ...plane.health },
+    get health() {
+      return Object.freeze({ ...providerHealthLive });
+    },
     mode,
     availableRuntimes: plane.available,
     scheduler: plane.scheduler,
@@ -506,10 +518,21 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   }
 }
 
-function providerCheckState(health: ProviderHealth): HealthCheckState {
-  if (health === 'healthy' || health === 'configured') return 'ok';
-  if (health === 'unhealthy') return 'error';
-  return 'warn';
+export function providerHealthToCheckState(health: ProviderHealth): HealthCheckState {
+  switch (health) {
+    case 'healthy':
+    case 'configured':
+      return 'ok';
+    case 'unhealthy':
+    case 'authentication_failure':
+      return 'error';
+    case 'unavailable':
+      return 'not_configured';
+    default: {
+      const _exhaustive: never = health;
+      return _exhaustive;
+    }
+  }
 }
 
 export function grantSideEffects(authority: AuthorityEngine, principalId: string, tenantId: string): void {

@@ -124,10 +124,7 @@ export class LoginService {
       : await dummyVerify(password || 'x', this.hasher);
 
     if (!credential || !passwordOk) {
-      this.identifierGuard.hit(identifierKey);
-      this.sourceGuard.hit(sourceKey);
-      logPlatform('auth.login.failure', { loginHash: hashLogin(loginIdNormalized), outcome: 'invalid_credentials' });
-      throw invalidCredentials();
+      this.recordFailure(identifierKey, sourceKey, loginIdNormalized);
     }
 
     const memberships = await this.options.auth.listTenantMemberships(credential.principalId);
@@ -136,10 +133,7 @@ export class LoginService {
       this.options.preferredTenantId,
     );
     if (!tenantId) {
-      this.identifierGuard.hit(identifierKey);
-      this.sourceGuard.hit(sourceKey);
-      logPlatform('auth.login.failure', { loginHash: hashLogin(loginIdNormalized), outcome: 'invalid_credentials' });
-      throw invalidCredentials();
+      this.recordFailure(identifierKey, sourceKey, loginIdNormalized);
     }
 
     const issued = await this.options.auth.issueSession({
@@ -161,6 +155,17 @@ export class LoginService {
       principalId: credential.principalId,
       tenantId,
     };
+  }
+
+  private recordFailure(identifierKey: string, sourceKey: string, loginIdNormalized: string): never {
+    const identifier = this.identifierGuard.hit(identifierKey);
+    const source = this.sourceGuard.hit(sourceKey);
+    if (!identifier.allowed || !source.allowed) {
+      logPlatform('auth.login.throttled', { loginHash: hashLogin(loginIdNormalized), remote: sourceKey }, 'warn');
+      throw new RateLimitedError();
+    }
+    logPlatform('auth.login.failure', { loginHash: hashLogin(loginIdNormalized), outcome: 'invalid_credentials' });
+    throw invalidCredentials();
   }
 }
 

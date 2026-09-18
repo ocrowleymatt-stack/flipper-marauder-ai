@@ -8,6 +8,7 @@ import {
   MemoryDirectoryStore,
   MemorySessionStore,
   RateLimitedError,
+  BruteForceGuard,
   isHashedPassword,
   selectTenant,
 } from '../src/index.ts';
@@ -252,5 +253,67 @@ describe('native login', () => {
     expect(selectTenant(['tenant_b', 'tenant_a'], 'tenant_a')).toBe('tenant_a');
     expect(selectTenant(['tenant_b'], 'tenant_a')).toBe('tenant_b');
     expect(selectTenant(['tenant_b', 'tenant_c'], 'tenant_a')).toBeNull();
+  });
+
+  it('does not drop the old login mapping when the new identifier is already taken', async () => {
+    const store = new MemoryCredentialStore();
+    await store.put({
+      principalId: 'principal_a',
+      loginId: 'owner',
+      loginIdNormalized: 'owner',
+      passwordHash: 'h1',
+      passwordAlgo: 'scrypt',
+      createdAt: 't',
+      updatedAt: 't',
+      rotatedAt: 't',
+    });
+    await store.put({
+      principalId: 'principal_b',
+      loginId: 'other',
+      loginIdNormalized: 'other',
+      passwordHash: 'h2',
+      passwordAlgo: 'scrypt',
+      createdAt: 't',
+      updatedAt: 't',
+      rotatedAt: 't',
+    });
+    await expect(
+      store.put({
+        principalId: 'principal_a',
+        loginId: 'other',
+        loginIdNormalized: 'other',
+        passwordHash: 'h3',
+        passwordAlgo: 'scrypt',
+        createdAt: 't',
+        updatedAt: 't',
+        rotatedAt: 't',
+      }),
+    ).rejects.toThrow(/already assigned/);
+    expect((await store.getByLogin('owner'))?.principalId).toBe('principal_a');
+    expect((await store.getByLogin('other'))?.principalId).toBe('principal_b');
+  });
+
+  it('returns 429 when a concurrent failure overflows the identifier limit', async () => {
+    const { login } = await setup();
+    const attempts = Array.from({ length: LOGIN_IDENTIFIER_LIMIT + 2 }, () =>
+      login.authenticate({
+        login: 'owner',
+        password: 'definitely-not-the-password',
+        origin: 'https://atlas.ocrowley.com',
+        sourceKey: 'ip:10.0.0.20',
+      }).then(
+        () => 'ok' as const,
+        (err: unknown) => (err instanceof RateLimitedError ? 'limited' : 'invalid'),
+      ),
+    );
+    const outcomes = await Promise.all(attempts);
+    expect(outcomes).toContain('limited');
+    expect(outcomes.filter((item) => item === 'invalid').length).toBe(LOGIN_IDENTIFIER_LIMIT);
+  });
+
+  it('bounds brute-force maps so unique identifiers cannot grow forever', () => {
+    const guard = new BruteForceGuard(5, 60_000, () => 1, 8);
+    for (let i = 0; i < 40; i += 1) guard.hit(`login:nobody${i}`);
+    expect(guard.size()).toBeLessThanOrEqual(8);
   });
 });

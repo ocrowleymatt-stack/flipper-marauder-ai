@@ -93,16 +93,34 @@ export function isTrustedProxyPeer(ip: string | null): boolean {
   return value.startsWith('fe80:') || value.startsWith('fc') || value.startsWith('fd');
 }
 
-/** First hop of X-Forwarded-For, if it parses as an IP. */
+/** First hop of X-Forwarded-For, if it parses as an IP. Arbitrary tokens are rejected. */
 export function firstForwardedHop(forwardedFor: string | undefined): string | null {
   const hop = forwardedFor?.split(',')[0]?.trim().replace(/^"|"$/g, '');
   if (!hop) return null;
   const v4 = /^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/.exec(hop);
-  if (v4) return normalizeObservedAddress(v4[1]);
+  if (v4 && isIpv4(v4[1]!)) return v4[1]!;
   const v6brack = /^\[([0-9a-f:]+)\](?::\d+)?$/i.exec(hop);
-  if (v6brack) return normalizeObservedAddress(v6brack[1]);
-  if (/^[0-9a-f:]+$/i.test(hop)) return normalizeObservedAddress(hop);
+  if (v6brack && isIpv6(v6brack[1]!)) return normalizeObservedAddress(v6brack[1]);
+  if (isIpv6(hop)) return normalizeObservedAddress(hop);
   return null;
+}
+
+function isIpv4(value: string): boolean {
+  const parts = value.split('.');
+  if (parts.length !== 4) return false;
+  return parts.every((part) => {
+    if (!/^\d{1,3}$/.test(part)) return false;
+    const n = Number(part);
+    return n >= 0 && n <= 255 && String(n) === part;
+  });
+}
+
+function isIpv6(value: string): boolean {
+  if (!value.includes(':') || value.includes('.')) return false;
+  if (!/^[0-9a-f:]+$/i.test(value)) return false;
+  const groups = value.split(':');
+  if (groups.length < 3 || groups.length > 8) return false;
+  return groups.every((group) => group === '' || /^[0-9a-f]{1,4}$/i.test(group));
 }
 
 /**

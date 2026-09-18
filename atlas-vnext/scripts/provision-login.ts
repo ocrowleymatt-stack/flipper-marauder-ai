@@ -18,7 +18,6 @@ const parsed = parseArgs({
     login: { type: 'string' },
     principal: { type: 'string' },
     tenant: { type: 'string' },
-    role: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
   },
   strict: true,
@@ -27,7 +26,7 @@ const parsed = parseArgs({
 
 if (parsed.values.help) {
   process.stderr.write(
-    'provision-login --login <id> [--principal id] [--tenant id] [--role owner]\nPassword is read from stdin.\n',
+    'provision-login --login <id> [--principal id] [--tenant id]\nPassword is read from stdin.\nRequires an existing principal and tenant membership. Does not create directory rows.\n',
   );
   process.exit(0);
 }
@@ -45,7 +44,6 @@ if (!loginId) {
 
 const tenantId = (parsed.values.tenant ?? process.env.ATLAS_TENANT_ID ?? '').trim();
 const principalId = (parsed.values.principal ?? process.env.ATLAS_PRINCIPAL_ID ?? (tenantId ? `principal_${tenantId}` : '')).trim();
-const role = (parsed.values.role ?? 'owner').trim() || 'owner';
 
 if (!tenantId || !principalId) {
   process.stderr.write('ATLAS_TENANT_ID and a principal id are required.\n');
@@ -66,18 +64,11 @@ if (config.mode !== 'postgres') {
 
 const persistence = await openPlatformPersistence(config);
 try {
-  await persistence.ensureTenant({ id: tenantId, name: tenantId });
-  await persistence.ensurePrincipal({ id: principalId, displayName: principalId });
   const bound = persistence.forActor({ tenantId, principalId });
   const existing = await bound.directory.getTenantMembership(principalId, tenantId);
   if (!existing) {
-    await bound.directory.putTenantMembership({
-      principalId,
-      tenantId,
-      role,
-      capabilities: [],
-      createdAt: new Date().toISOString(),
-    });
+    process.stderr.write('Refusing to provision: principal is not a member of the tenant. Create membership first.\n');
+    process.exit(2);
   }
   const production = process.env.NODE_ENV === 'production' || process.env.ATLAS_ENV === 'production';
   const auth = new AuthService({

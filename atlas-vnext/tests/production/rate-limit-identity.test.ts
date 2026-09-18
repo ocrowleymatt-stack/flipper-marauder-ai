@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ANONYMOUS_RATE_TENANT,
   PlatformRateLimiter,
+  firstForwardedHop,
   loginClientAddress,
   normalizeObservedAddress,
   resolveAdmissionIdentity,
@@ -414,6 +415,16 @@ describe('admission rate limit before session resolution', () => {
     expect(loginClientAddress({ remoteAddress: '192.0.2.10', forwardedFor: '203.0.113.9' })).toBe(
       '192.0.2.10',
     );
+  });
+
+  it('rejects non-IP forwarded hops instead of minting a fresh source key', () => {
+    expect(firstForwardedHop('not-an-ip')).toBeNull();
+    expect(firstForwardedHop('abcdef')).toBeNull();
+    expect(firstForwardedHop('999.999.999.999')).toBeNull();
+    expect(firstForwardedHop('203.0.113.10')).toBe('203.0.113.10');
+    expect(
+      loginClientAddress({ remoteAddress: '127.0.0.1', forwardedFor: 'attacker-token' }),
+    ).toBe('127.0.0.1');
   });
 
   it('rate-limits mutating forged cookies before CSRF session lookup', async () => {

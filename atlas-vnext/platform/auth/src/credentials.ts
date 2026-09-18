@@ -29,13 +29,13 @@ export class MemoryCredentialStore implements CredentialStore {
   }
 
   async put(record: PrincipalCredential): Promise<PrincipalCredential> {
-    const existing = this.byPrincipal.get(record.principalId);
-    if (existing && existing.loginIdNormalized !== record.loginIdNormalized) {
-      this.byLogin.delete(existing.loginIdNormalized);
-    }
     const taken = this.byLogin.get(record.loginIdNormalized);
     if (taken && taken !== record.principalId) {
       throw new Error('Login identifier is already assigned.');
+    }
+    const existing = this.byPrincipal.get(record.principalId);
+    if (existing && existing.loginIdNormalized !== record.loginIdNormalized) {
+      this.byLogin.delete(existing.loginIdNormalized);
     }
     this.byPrincipal.set(record.principalId, record);
     this.byLogin.set(record.loginIdNormalized, record.principalId);

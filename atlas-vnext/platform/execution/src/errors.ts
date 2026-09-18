@@ -61,6 +61,26 @@ export function throwIfSecretLeaked(message: string, secret: string | undefined)
 }
 
 /**
+ * Credential-shaped provider bodies. Used for HTTP 400 responses that some
+ * OpenAI-compatible hosts (notably xAI) return instead of 401, and for
+ * unclassified Error messages. Do not treat `invalid-argument` or a generic
+ * 400 as authentication failure.
+ */
+export function isAuthenticationFailureBody(body: string): boolean {
+  if (!body) return false;
+  return (
+    /incorrect api key/i.test(body) ||
+    /invalid[_ -]?api[_ -]?key/i.test(body) ||
+    /api[_ -]?key (provided|is (incorrect|invalid|not valid|revoked))/i.test(body) ||
+    /invalid (api )?credentials/i.test(body) ||
+    /incorrect (api )?credentials/i.test(body) ||
+    /authentication[_ -]?(failed|failure|error)/i.test(body) ||
+    /\bunauthorized\b/i.test(body) ||
+    /"code"\s*:\s*"invalid_api_key"/i.test(body)
+  );
+}
+
+/**
  * Retry classification: current Mountain @ 5cc7a964… provider-error taxonomy
  * (timeout/unavailable/abrupt_end retryable; invalid_request/context_length/
  * cancelled terminal) plus vNext HTTP 429/5xx → transient mapping.
@@ -86,7 +106,10 @@ export function classifyProviderFailure(err: unknown): ClassifiedFailure {
   if (/permission denied|forbidden|\b403\b/i.test(message)) {
     return { retryClass: 'terminal', code: 'permission_denied', retryable: false };
   }
-  if (/missing credentials|authentication_failure|unauthorized|\b401\b/i.test(message)) {
+  if (
+    /missing credentials|authentication_failure|unauthorized|\b401\b/i.test(message) ||
+    isAuthenticationFailureBody(message)
+  ) {
     return { retryClass: 'terminal', code: 'authentication_failure', retryable: false };
   }
   if (/\b400\b|bad request|invalid_request/i.test(message)) {
@@ -124,6 +147,9 @@ function classifyHttpStatus(status: number, body: string): { code: string; retry
   }
   if (status === 404) {
     return { code: 'not_found', retryable: false };
+  }
+  if (status === 400 && isAuthenticationFailureBody(body)) {
+    return { code: 'authentication_failure', retryable: false };
   }
   if (status === 400 && /context (length|overflow|window)|maximum context|too many tokens/i.test(body)) {
     return { code: 'context_overflow', retryable: false };

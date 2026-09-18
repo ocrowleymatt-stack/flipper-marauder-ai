@@ -57,6 +57,8 @@ Caspa passes `restrictFileIds` into platform `ContextService`. Empty selection m
 
 Backend-derived: selected files, chunks, prior revision hash, run id, route/model (via the execution spine), tools if invoked. The UI renders `GET /api/documents/:id/provenance`; it does not infer sources.
 
+`create()` opens a blank manuscript slot. Evidential provenance is recorded when a revision is committed (`generate` / edit / restore). Empty provenance on create is expected: Caspa is a creative-writing dungeon, not Investigation. Do not invent evidential sources for imaginative prose. Creative lineage (project → manuscript → outline/story bible → characters/world → source revision → execution → new revision) is later work, not a create-time requirement.
+
 ## Authority
 
 Server-side `AuthorityEngine.decide` on actor + tenant + resource + action. Buttons, frontend flags, and guessed ids are not permission. Cross-tenant reads/mutations return generic `Permission denied.`

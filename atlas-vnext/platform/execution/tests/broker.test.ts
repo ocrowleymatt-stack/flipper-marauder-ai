@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RouteDecision, StreamChunk } from '@atlas-vnext/contracts';
-import { CircuitBreaker, ExecutionBroker, type ProviderAdapter } from '@atlas-vnext/execution';
+import { CircuitBreaker, ExecutionBroker, ProviderHttpError, httpFailure, type ProviderAdapter } from '@atlas-vnext/execution';
 
 function decision(chain: string[]): RouteDecision {
   const [primary] = chain;
@@ -292,5 +292,79 @@ describe('Execution broker (transport, retry, streaming)', () => {
     expect(chunks).toEqual([]);
     expect(attempts.some((attempt) => attempt.provider === 'ollama')).toBe(false);
     expect(attempts.map((attempt) => attempt.index)).toEqual([3, 3]);
+  });
+
+  it('reports authentication_failure to the health observer and skips later models on the same provider', async () => {
+    const health: Array<{ provider: string; health: string }> = [];
+    const broker = new ExecutionBroker(2, {
+      health: {
+        onProviderHealth(provider, status) {
+          health.push({ provider, health: status });
+        },
+      },
+    });
+    let xaiCalls = 0;
+    let anthropicCalls = 0;
+    broker.register({
+      providerId: 'xai',
+      async *stream() {
+        xaiCalls += 1;
+        throw new ProviderHttpError(httpFailure('xai', 400, 'Incorrect API key provided.'));
+      },
+    });
+    broker.register({
+      providerId: 'anthropic',
+      async *stream() {
+        anthropicCalls += 1;
+        yield { type: 'text', text: 'ok' };
+      },
+    });
+    const chunks: StreamChunk[] = [];
+    const attempts: string[] = [];
+    for await (const chunk of broker.execute(
+      decision(['xai/grok-a', 'xai/grok-b', 'anthropic/claude']),
+      { prompt: 'hi' },
+      {
+        onAttempt: (attempt) => attempts.push(`${attempt.outcome}:${attempt.provider}:${attempt.error?.code ?? ''}`),
+      },
+    )) {
+      chunks.push(chunk);
+    }
+    expect(xaiCalls).toBe(1);
+    expect(anthropicCalls).toBe(1);
+    expect(chunks).toEqual([{ type: 'text', text: 'ok' }]);
+    expect(health.some((entry) => entry.provider === 'xai' && entry.health === 'authentication_failure')).toBe(true);
+    expect(attempts.some((entry) => entry.startsWith('skipped:xai:authentication_failure'))).toBe(true);
+    expect(attempts.some((entry) => entry.startsWith('succeeded:anthropic'))).toBe(true);
+  });
+
+  it('does not treat a generic HTTP 400 as authentication_failure and still failovers before visible output', async () => {
+    const health: Array<{ provider: string; health: string }> = [];
+    const broker = new ExecutionBroker(1, {
+      health: {
+        onProviderHealth(provider, status) {
+          health.push({ provider, health: status });
+        },
+      },
+    });
+    broker.register({
+      providerId: 'openai',
+      async *stream() {
+        throw new ProviderHttpError(httpFailure('openai', 400, 'bad request'));
+      },
+    });
+    broker.register({
+      providerId: 'ollama',
+      async *stream() {
+        yield { type: 'text', text: 'local' };
+      },
+    });
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of broker.execute(decision(['openai/gpt-4o', 'ollama/llama3.2']), { prompt: 'hi' })) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toEqual([{ type: 'text', text: 'local' }]);
+    expect(health.some((entry) => entry.health === 'authentication_failure')).toBe(false);
+    expect(health.some((entry) => entry.provider === 'ollama' && entry.health === 'healthy')).toBe(true);
   });
 });

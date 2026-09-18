@@ -180,6 +180,21 @@ function withInjectedWritingProvenanceFailure(persistence: PlatformPersistence):
 }
 
 describe('Caspa writing service', () => {
+  it('create is a blank manuscript slot with no evidential provenance until a revision is committed', async () => {
+    const { writing, actor, project } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'unused' };
+    });
+    const created = await writing.create(actor, {
+      projectId: project.id,
+      title: 'Blank chapter',
+      instruction: 'Write from imagination',
+    });
+    expect(created.currentVersion).toBe(0);
+    expect(created.content ?? '').toBe('');
+    const provenance = await writing.provenance(actor, created.id);
+    expect(provenance).toEqual([]);
+  });
+
   it('creates, generates, versions, continues, and restores a document', async () => {
     const { writing, actor, project } = await makeWriting(async function* (prompt) {
       yield { type: 'text', text: `Draft from ${prompt.slice(0, 24)}` };

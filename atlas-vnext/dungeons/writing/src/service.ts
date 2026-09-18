@@ -53,6 +53,12 @@ export class WritingService {
     },
   ) {}
 
+  /**
+   * Open a blank manuscript slot. No evidential provenance is recorded here:
+   * create does not generate prose, attach sources, or commit a revision.
+   * Provenance is written in `commitRevision` on generate/edit/restore.
+   * Empty provenance after create is expected for a creative-writing dungeon.
+   */
   async create(
     actor: WritingActor,
     input: { projectId: string; title?: string; instruction?: string },

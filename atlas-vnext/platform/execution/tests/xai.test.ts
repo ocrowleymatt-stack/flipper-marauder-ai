@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { StreamChunk } from '@atlas-vnext/contracts';
 import {
   MapSecretStore,
+  ProviderHttpError,
   createExecutionPlane,
   createXaiAdapter,
   responseFromText,
@@ -130,6 +131,48 @@ describe('xAI Grok adapter', () => {
     await expect(collect(adapter.stream('grok-4.6', { prompt: 'hi', signal: controller.signal }))).rejects.toThrow(
       /aborted/i,
     );
+  });
+
+  it('classifies HTTP 400 Incorrect API key as authentication_failure without leaking the secret', async () => {
+    const adapter = createXaiAdapter({
+      secrets: new MapSecretStore({ XAI_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://api.x.ai/v1',
+      transport: transportFor(() => ({
+        status: 400,
+        body: '{"code":"invalid-argument","error":"Incorrect API key provided. You can obtain an API key from https://console.x.ai."}',
+      })),
+    });
+    try {
+      await collect(adapter.stream('grok-4.20-fast', { prompt: 'hi' }));
+      throw new Error('expected authentication failure');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ProviderHttpError);
+      const failure = (err as ProviderHttpError).failure;
+      expect(failure.code).toBe('authentication_failure');
+      expect(failure.retryable).toBe(false);
+      expect(failure.message).toMatch(/HTTP 400/);
+      expect(failure.message).not.toContain(KEY);
+    }
+  });
+
+  it('does not classify an unrelated xAI HTTP 400 as authentication_failure', async () => {
+    const adapter = createXaiAdapter({
+      secrets: new MapSecretStore({ XAI_API_KEY: KEY }),
+      timeoutMs: 5_000,
+      baseUrl: 'https://api.x.ai/v1',
+      transport: transportFor(() => ({
+        status: 400,
+        body: '{"code":"invalid-argument","error":"messages is required"}',
+      })),
+    });
+    try {
+      await collect(adapter.stream('grok-4.20-fast', { prompt: 'hi' }));
+      throw new Error('expected provider error');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ProviderHttpError);
+      expect((err as ProviderHttpError).failure.code).toBe('provider_error');
+    }
   });
 
   it('marks xai unavailable without credentials rather than crashing startup', () => {

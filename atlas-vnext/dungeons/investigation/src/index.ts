@@ -1,13 +1,18 @@
 import type { DungeonId, DungeonRegistration } from '@atlas-vnext/contracts';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
+import type { ContextService } from '@atlas-vnext/context';
 import type { FilesService } from '@atlas-vnext/files';
 import type { DungeonRecordRow, PlatformPersistence } from '@atlas-vnext/persistence';
 import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import type { ProjectService } from '@atlas-vnext/projects';
+import { InvestigationAnalysis } from './analysis.ts';
 import { GENERIC_DENY, InvestigationError, type InvestigationActor } from './errors.ts';
+import { EvidenceLedger } from './ledger.ts';
 
 export { GENERIC_DENY, InvestigationError, type InvestigationActor } from './errors.ts';
 export { EvidenceLedger, EVIDENCE_KINDS } from './ledger.ts';
+export { InvestigationAnalysis } from './analysis.ts';
+export { reconstructThreads } from './threads.ts';
 export {
   assertEpistemicClassImmutable,
   assertFactLineage,
@@ -36,23 +41,42 @@ export const INVESTIGATION_DUNGEON: DungeonRegistration = {
     list: '/api/projects/:projectId/cases',
     item: '/api/cases/:id',
     challenge: '/api/cases/:id/challenge',
+    views: '/api/cases/:id/views',
+    aliasCandidates: '/api/cases/:id/alias-candidates',
+    hypothesisTests: '/api/cases/:id/hypothesis-tests',
   },
   capabilities: ['project.read', 'artifact.read', 'artifact.write', 'file.read'],
   permissions: { read: 'artifact.read', write: 'artifact.write' },
   featureAvailable: true,
 };
 
+type InvestigationDeps = {
+  persistence: PlatformPersistence;
+  projects: ProjectService;
+  files: FilesService;
+  runtime: ConversationRuntime;
+  authority: AuthorityEngine;
+  policy: EffectivePolicyEngine;
+  context?: ContextService | null;
+};
+
 export class InvestigationService {
-  constructor(
-    private readonly deps: {
-      persistence: PlatformPersistence;
-      projects: ProjectService;
-      files: FilesService;
-      runtime: ConversationRuntime;
-      authority: AuthorityEngine;
-      policy: EffectivePolicyEngine;
-    },
-  ) {}
+  readonly ledger: EvidenceLedger;
+  readonly analysis: InvestigationAnalysis;
+
+  constructor(private readonly deps: InvestigationDeps) {
+    this.ledger = new EvidenceLedger({
+      persistence: deps.persistence,
+      projects: deps.projects,
+      files: deps.files,
+      authority: deps.authority,
+      policy: deps.policy,
+    });
+    this.analysis = new InvestigationAnalysis({
+      ledger: this.ledger,
+      context: deps.context ?? null,
+    });
+  }
 
   async listCases(actor: InvestigationActor, projectId: string): Promise<DungeonRecordRow[]> {
     await this.requireProject(actor, projectId, 'artifact.read');

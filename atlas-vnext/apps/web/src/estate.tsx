@@ -10,6 +10,7 @@ import {
   explainPolicy,
   generateSite,
   getEffectivePolicy,
+  getCaseViews,
   listCases,
   listCompositions,
   listOsintTargets,
@@ -24,6 +25,7 @@ import {
   updatePolicy,
   type DungeonRecord,
   type EffectivePolicyView,
+  type InvestigationViews,
   type PolicyExplanation,
   type ProjectFile,
 } from './api';
@@ -178,6 +180,7 @@ function InvestigationPanel({
   const [findingIds, setFindingIds] = useState('');
   const [cases, setCases] = useState<DungeonRecord[]>([]);
   const [active, setActive] = useState<DungeonRecord | null>(null);
+  const [views, setViews] = useState<InvestigationViews | null>(null);
 
   const reload = useCallback(async () => {
     setCases(await listCases(projectId));
@@ -186,6 +189,16 @@ function InvestigationPanel({
   useEffect(() => {
     void reload().catch((err) => onError(err instanceof Error ? err.message : String(err)));
   }, [reload, onError]);
+
+  useEffect(() => {
+    if (!active) {
+      setViews(null);
+      return;
+    }
+    void getCaseViews(active.id)
+      .then(setViews)
+      .catch((err) => onError(err instanceof Error ? err.message : String(err)));
+  }, [active, onError]);
 
   async function onCreate(event: FormEvent) {
     event.preventDefault();
@@ -255,8 +268,63 @@ function InvestigationPanel({
             </button>
           </div>
         ) : null}
+        {views ? <InvestigationViewsPanel views={views} /> : null}
       </section>
     </main>
+  );
+}
+
+function InvestigationViewsPanel({ views }: { views: InvestigationViews }) {
+  return (
+    <div className="stack" aria-label="Investigation views">
+      <h3>Timeline</h3>
+      <p className="hint">Thread turns stay source assertions. Facts are only those already recorded as facts.</p>
+      {views.timeline.groups.map((group) => (
+        <div key={group.date}>
+          <strong>{group.date}</strong>
+          <ul>
+            {group.items.slice(0, 12).map((item) => (
+              <li key={item.id}>
+                <span className="pill">{item.epistemicClass}</span> {item.description}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      <h3>Network</h3>
+      <ul>
+        {views.network.nodes.map((node) => (
+          <li key={node.id}>
+            {node.canonicalName} ({node.kind}, {node.status})
+          </li>
+        ))}
+      </ul>
+      {views.network.aliasCandidates.length > 0 ? (
+        <p className="hint">
+          Alias candidates are proposals until accepted. Confidence is evidence-backed, not Authority.
+        </p>
+      ) : null}
+      <h3>Claim / evidence matrix</h3>
+      <ul>
+        {views.matrix.claims.map((claim) => (
+          <li key={claim.id}>
+            {claim.kind}: {claim.statement}
+            <ul>
+              {views.matrix.cells
+                .filter((cell) => cell.claimId === claim.id)
+                .map((cell) => (
+                  <li key={`${cell.claimId}:${cell.evidenceId}`}>
+                    {cell.role} → {cell.evidenceId}
+                  </li>
+                ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+      {views.gaps.length > 0 ? (
+        <p className="hint">Gaps: {views.gaps.map((gap) => gap.kind).join(', ')}</p>
+      ) : null}
+    </div>
   );
 }
 

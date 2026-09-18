@@ -12,6 +12,8 @@ import {
   factSchema,
   findingSchema,
   hypothesisSchema,
+  hypothesisTestSchema,
+  aliasCandidateSchema,
   inferenceSchema,
   relationshipSchema,
   sourceAssertionSchema,
@@ -28,6 +30,8 @@ import {
   type EpistemicClass,
   type Fact,
   type Hypothesis,
+  type HypothesisTest,
+  type AliasCandidate,
   type Inference,
   type SourceAssertion,
   type SourceLocation,
@@ -60,6 +64,8 @@ export const EVIDENCE_KINDS = {
   claim: 'claim',
   link: 'evidence_link',
   finding: 'finding',
+  aliasCandidate: 'alias_candidate',
+  hypothesisTest: 'hypothesis_test',
 } as const;
 
 type LedgerDeps = {
@@ -510,6 +516,126 @@ export class EvidenceLedger {
     return findingSchema.parse(finding);
   }
 
+  async recordAliasCandidate(
+    actor: InvestigationActor,
+    input: Omit<AliasCandidate, 'id' | 'generation' | 'staleAt' | 'staleReason' | 'dependsOn'> & {
+      dependsOn?: string[];
+    },
+  ): Promise<AliasCandidate> {
+    const caseRow = await this.requireCase(actor, input.caseId, 'artifact.write');
+    const bind = this.caseBind(caseRow);
+    await this.requireKind(actor, input.leftEntityId, EVIDENCE_KINDS.entity, 'artifact.read', bind);
+    await this.requireKind(actor, input.rightEntityId, EVIDENCE_KINDS.entity, 'artifact.read', bind);
+    await this.requirePeers(actor, input.evidenceObjectIds, 'artifact.read', bind);
+    const existing = (await this.listKind(actor, caseRow.id, EVIDENCE_KINDS.aliasCandidate)).map((row) =>
+      aliasCandidateSchema.parse(row.payload),
+    );
+    const duplicate = existing.find(
+      (item) =>
+        item.leftEntityId === input.leftEntityId &&
+        item.rightEntityId === input.rightEntityId &&
+        normaliseAlias(item.surface) === normaliseAlias(input.surface) &&
+        item.status !== 'reverted',
+    );
+    if (duplicate) return duplicate;
+    const candidate: AliasCandidate = {
+      id: `alc_${randomUUID()}`,
+      caseId: caseRow.id,
+      leftEntityId: input.leftEntityId,
+      rightEntityId: input.rightEntityId,
+      surface: input.surface,
+      confidence: input.confidence,
+      confidenceBasis: input.confidenceBasis,
+      producer: input.producer,
+      status: input.status,
+      evidenceObjectIds: input.evidenceObjectIds,
+      addedAlias: input.addedAlias ?? null,
+      dependsOn: unique([
+        input.leftEntityId,
+        input.rightEntityId,
+        ...(input.dependsOn ?? []),
+        ...input.evidenceObjectIds,
+      ]),
+      generation: 1,
+      staleAt: null,
+      staleReason: null,
+    };
+    await this.insert(actor, caseRow, EVIDENCE_KINDS.aliasCandidate, candidate.surface, candidate);
+    return aliasCandidateSchema.parse(candidate);
+  }
+
+  async setAliasCandidateStatus(
+    actor: InvestigationActor,
+    candidateId: string,
+    status: AliasCandidate['status'],
+  ): Promise<AliasCandidate> {
+    const row = await this.requireKind(actor, candidateId, EVIDENCE_KINDS.aliasCandidate, 'artifact.write');
+    const current = aliasCandidateSchema.parse(row.payload);
+    const caseRow = await this.requireCase(actor, current.caseId, 'artifact.write');
+    const leftRow = await this.requireKind(
+      actor,
+      current.leftEntityId,
+      EVIDENCE_KINDS.entity,
+      'artifact.write',
+      this.caseBind(caseRow),
+    );
+    const left = entitySchema.parse(leftRow.payload);
+    let addedAlias = current.addedAlias;
+    const aliases = [...left.aliases];
+    if (status === 'accepted' && current.status === 'proposed') {
+      const alias = current.surface.trim();
+      if (alias && !aliases.some((item) => normaliseAlias(item) === normaliseAlias(alias))) {
+        aliases.push(alias);
+        addedAlias = alias;
+      }
+      await this.patchPayload(actor, leftRow, { ...left, aliases });
+    }
+    if (status === 'reverted' && current.status === 'accepted' && current.addedAlias) {
+      await this.patchPayload(actor, leftRow, {
+        ...left,
+        aliases: aliases.filter((item) => item !== current.addedAlias),
+      });
+      addedAlias = null;
+    }
+    const next: AliasCandidate = { ...current, status, addedAlias };
+    await this.patchPayload(actor, row, next);
+    return aliasCandidateSchema.parse(next);
+  }
+
+  async recordHypothesisTest(
+    actor: InvestigationActor,
+    input: Omit<HypothesisTest, 'id' | 'generation' | 'staleAt' | 'staleReason' | 'method' | 'producer' | 'dependsOn'> & {
+      dependsOn?: string[];
+    },
+  ): Promise<HypothesisTest> {
+    const caseRow = await this.requireCase(actor, input.caseId, 'artifact.write');
+    const bind = this.caseBind(caseRow);
+    await this.requireKind(actor, input.hypothesisId, EVIDENCE_KINDS.hypothesis, 'artifact.read', bind);
+    await this.requirePeers(
+      actor,
+      [...input.supportingIds, ...input.contradictingIds],
+      'artifact.read',
+      bind,
+    );
+    const test: HypothesisTest = {
+      id: `hyt_${randomUUID()}`,
+      caseId: caseRow.id,
+      hypothesisId: input.hypothesisId,
+      result: input.result,
+      method: 'deterministic_coverage',
+      producer: 'deterministic',
+      supportingIds: input.supportingIds,
+      contradictingIds: input.contradictingIds,
+      gap: input.gap,
+      dependsOn: unique([input.hypothesisId, ...(input.dependsOn ?? []), ...input.supportingIds, ...input.contradictingIds]),
+      generation: 1,
+      staleAt: null,
+      staleReason: null,
+    };
+    await this.insert(actor, caseRow, EVIDENCE_KINDS.hypothesisTest, `${test.result}:${test.hypothesisId}`, test);
+    return hypothesisTestSchema.parse(test);
+  }
+
   /**
    * Refuses to rewrite class. Callers must insert a new record.
    */
@@ -784,6 +910,10 @@ function maxGeneration(rows: DungeonRecordRow[]): number {
 
 function unique(ids: string[]): string[] {
   return [...new Set(ids)];
+}
+
+function normaliseAlias(value: string): string {
+  return value.trim().toLowerCase().replace(/[._-]+/g, ' ').replace(/\s+/g, ' ');
 }
 
 function timestampMs(value: string | null): number | null {

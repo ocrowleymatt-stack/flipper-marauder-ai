@@ -252,5 +252,7 @@ export const INVESTIGATION_RECORD_KINDS = [
   'claim',
   'evidence_link',
   'finding',
+  'alias_candidate',
+  'hypothesis_test',
 ] as const;
 export type InvestigationRecordKind = (typeof INVESTIGATION_RECORD_KINDS)[number];

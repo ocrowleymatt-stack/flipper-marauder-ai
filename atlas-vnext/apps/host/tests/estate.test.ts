@@ -139,6 +139,12 @@ describe('Dungeon estate host', () => {
     });
     expect(challenge.status).toBe(201);
 
+    const views = await fetch(`${url}/api/cases/${caseboard.id}/views`, { headers: auth(session) });
+    expect(views.status).toBe(200);
+    const snapshot = (await views.json()) as { timeline: { groups: unknown[] }; matrix: { claims: unknown[] } };
+    expect(Array.isArray(snapshot.timeline.groups)).toBe(true);
+    expect(Array.isArray(snapshot.matrix.claims)).toBe(true);
+
     await fetch(`${url}/api/projects/${project.id}/files`, {
       method: 'POST',
       headers: auth(session),

@@ -8,8 +8,8 @@ import { CasNotFoundError, sha256Hex } from '@atlas-vnext/storage';
 import { CHUNKER_ID, CHUNKER_VERSION, chunkBlocks } from './chunk.ts';
 import { CasMissingError, FilesAccessError, IngestionError } from './errors.ts';
 import { EXTRACTOR_ID, EXTRACTOR_VERSION, extractBytes, estimateTokens } from './extract/index.ts';
-import { resolveMime, type AllowedMime } from './mime.ts';
-import { displayNameFromPath, sanitiseRelPath } from './path.ts';
+import { resolveMime, sniffMime, type AllowedMime } from './mime.ts';
+import { displayNameFromPath, isAcquisitionStoredPath, sanitiseRelPath } from './path.ts';
 import {
   DEFAULT_SITE_RETENTION,
   SiteService,
@@ -50,7 +50,49 @@ export class FilesService {
   async ingest(actor: PersistenceActor, input: IngestInput): Promise<FileRecord> {
     const scoped = this.scoped(actor, 'ingest file');
     const path = sanitiseRelPath(input.path);
+    this.refuseOrdinaryAcquisitionWrite(path);
     const mime = resolveMime({ bytes: input.bytes, filename: path, declared: input.declaredMime });
+    return this.storeOriginal(scoped, input, path, mime, true);
+  }
+
+  /** Preserve opaque archive bytes in shared CAS without scheduling extraction. */
+  async ingestRawOriginal(actor: PersistenceActor, input: IngestInput): Promise<FileRecord> {
+    const scoped = this.scoped(actor, 'ingest raw original');
+    const path = sanitiseRelPath(input.path);
+    this.refuseOrdinaryAcquisitionWrite(path);
+    const mime = sniffMime(input.bytes) === 'application/zip' ? 'application/zip' : 'application/octet-stream';
+    return this.storeOriginal(scoped, input, path, mime, false);
+  }
+
+  /**
+   * Privileged writer for the reserved `acquisition/` namespace.
+   * Creates a new path only; never updates an existing acquisition original or manifest.
+   */
+  async ingestAcquisitionOriginal(
+    actor: PersistenceActor,
+    input: IngestInput,
+    extract: boolean,
+  ): Promise<FileRecord> {
+    const scoped = this.scoped(actor, 'ingest acquisition original');
+    const path = sanitiseRelPath(input.path);
+    if (!isAcquisitionStoredPath(path)) {
+      throw new IngestionError('Acquisition originals must be stored under the acquisition/ prefix.');
+    }
+    const mime = extract
+      ? resolveMime({ bytes: input.bytes, filename: path, declared: input.declaredMime })
+      : sniffMime(input.bytes) === 'application/zip'
+        ? 'application/zip'
+        : 'application/octet-stream';
+    return this.storeOriginal(scoped, input, path, mime, extract);
+  }
+
+  private refuseOrdinaryAcquisitionWrite(path: string): void {
+    if (isAcquisitionStoredPath(path)) {
+      throw new IngestionError('The acquisition/ path prefix is reserved for append-only acquisition originals.');
+    }
+  }
+
+  private async storeOriginal(scoped: PersistenceActor, input: IngestInput, path: string, mime: string, extract: boolean): Promise<FileRecord> {
     const workspace = await this.requireProject(scoped, input.projectId);
     logPlatform('files.ingest.start', {
       tenantId: scoped.tenantId,
@@ -59,6 +101,10 @@ export class FilesService {
       mimeType: mime,
       sizeBytes: input.bytes.byteLength,
     });
+    const existingBeforePut = await this.persistence.forActor(scoped).files.getByPath(scoped, workspace.id, path);
+    if (existingBeforePut && isAcquisitionStoredPath(path)) {
+      throw new IngestionError('Acquisition originals are append-only and cannot be overwritten.');
+    }
     const put = await this.cas.put(input.bytes);
     if (put.sha256 !== sha256Hex(input.bytes)) {
       throw new IngestionError('CAS hash verification failed after put.');
@@ -67,6 +113,9 @@ export class FilesService {
       const bound = this.persistence.forActor(scoped);
       await bound.casRefs.ensureObject(put.sha256, put.sizeBytes);
       const existing = await bound.files.getByPath(scoped, workspace.id, path);
+      if (existing && isAcquisitionStoredPath(path)) {
+        throw new IngestionError('Acquisition originals are append-only and cannot be overwritten.');
+      }
       const artefact = await this.persistence.artefacts.record(scoped, {
         id: existing?.artefactId ?? `art_${randomUUID()}`,
         workspaceId: workspace.id,
@@ -117,7 +166,7 @@ export class FilesService {
         kind: 'file',
         ownerId: file.id,
       });
-      await bound.jobs.enqueue(scoped, {
+      if (extract) await bound.jobs.enqueue(scoped, {
         dungeon: FILE_JOB_DUNGEON,
         type: FILE_JOB_INGEST,
         workspaceId: workspace.id,
@@ -203,6 +252,10 @@ export class FilesService {
     const scoped = this.scoped(actor, 'delete file');
     return this.persistence.run(async () => {
       const bound = this.persistence.forActor(scoped);
+      const existing = await bound.files.get(scoped, fileId);
+      if (existing && !existing.deletedAt && isAcquisitionStoredPath(existing.path)) {
+        throw new IngestionError('Acquisition originals are append-only and cannot be deleted.');
+      }
       const file = await bound.files.logicalDelete(scoped, fileId);
       await bound.casRefs.removeRef(scoped, 'file', file.id, file.contentHash);
       logPlatform('files.deleted', { tenantId: scoped.tenantId, fileId: file.id, contentHash: file.contentHash });
@@ -265,7 +318,9 @@ export class FilesService {
   async processNextJob(actor: PersistenceActor, workerId: string, leaseMs = 30_000): Promise<FilesJobOutcome | null> {
     const scoped = this.scoped(actor, 'process file job');
     const bound = this.persistence.forActor(scoped);
-    const job = await bound.jobs.claimNext(scoped, workerId, leaseMs);
+    const job = await bound.jobs.claimNext(scoped, workerId, leaseMs, {
+      types: [FILE_JOB_INGEST, STORAGE_JOB_RETAIN, STORAGE_JOB_GC],
+    });
     if (!job) return null;
     if (job.type === STORAGE_JOB_RETAIN) {
       try {

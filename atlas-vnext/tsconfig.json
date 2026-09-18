@@ -29,6 +29,7 @@
       "@atlas-vnext/observability": ["./platform/observability/src/index.ts"],
       "@atlas-vnext/storage": ["./platform/storage/src/index.ts"],
       "@atlas-vnext/files": ["./platform/files/src/index.ts"],
+      "@atlas-vnext/acquisition": ["./platform/acquisition/src/index.ts"],
       "@atlas-vnext/context": ["./platform/context/src/index.ts"],
       "@atlas-vnext/auth": ["./platform/auth/src/index.ts"],
       "@atlas-vnext/tools": ["./platform/tools/src/index.ts"],

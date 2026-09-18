@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { PathSafetyError, UnsupportedMediaError, resolveMime, sanitiseRelPath } from '@atlas-vnext/files';
+import {
+  PathSafetyError,
+  UnsupportedMediaError,
+  isAcquisitionStoredPath,
+  resolveMime,
+  sanitiseRelPath,
+} from '@atlas-vnext/files';
 
 describe('path sanitisation and MIME', () => {
   it('rejects traversal, absolute paths, and control characters', () => {
@@ -8,6 +14,10 @@ describe('path sanitisation and MIME', () => {
     expect(() => sanitiseRelPath('/etc/passwd')).toThrow(PathSafetyError);
     expect(() => sanitiseRelPath('a\\..\\b')).toThrow(PathSafetyError);
     expect(() => sanitiseRelPath('ok/\0x')).toThrow(PathSafetyError);
+    expect(isAcquisitionStoredPath('acquisition')).toBe(true);
+    expect(isAcquisitionStoredPath('acquisition/acq_1/manifest.json')).toBe(true);
+    expect(isAcquisitionStoredPath('acquisition/acq_1/originals/note.txt')).toBe(true);
+    expect(isAcquisitionStoredPath('notes/acquisition/note.txt')).toBe(false);
   });
 
   it('sniffs MIME instead of trusting extension, and refuses macros/scripts', () => {

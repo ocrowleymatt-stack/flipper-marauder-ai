@@ -36,3 +36,8 @@ export function displayNameFromPath(path: string): string {
   const segment = path.split('/').at(-1);
   return segment && segment.length > 0 ? segment : path;
 }
+
+/** Reserved namespace for append-only acquisition originals and manifests. */
+export function isAcquisitionStoredPath(path: string): boolean {
+  return path === 'acquisition' || path.startsWith('acquisition/');
+}

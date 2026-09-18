@@ -104,7 +104,10 @@ export function resolveRateLimitIdentity(input: {
   }
   const ip = normalizeObservedAddress(input.remoteAddress);
   const host = ip ? `ip:${ip}` : 'unknown';
-  const bootstrap = input.pathname === '/api/session' || input.pathname.startsWith('/api/session/');
+  const bootstrap =
+    input.pathname === '/api/session' ||
+    input.pathname.startsWith('/api/session/') ||
+    input.pathname === '/api/auth/login';
   return {
     kind: bootstrap ? 'bootstrap' : 'anonymous',
     tenantId: ANONYMOUS_RATE_TENANT,
@@ -127,7 +130,10 @@ export function resolveAdmissionIdentity(input: {
 }): RateLimitIdentity {
   const ip = normalizeObservedAddress(input.remoteAddress);
   const host = ip ? `ip:${ip}` : 'unknown';
-  const bootstrap = input.pathname === '/api/session' || input.pathname.startsWith('/api/session/');
+  const bootstrap =
+    input.pathname === '/api/session' ||
+    input.pathname.startsWith('/api/session/') ||
+    input.pathname === '/api/auth/login';
   if (bootstrap) {
     return {
       kind: 'bootstrap',
@@ -355,7 +361,7 @@ export class ResourceGuard {
 export function rateClassForPath(pathname: string, method = 'GET'): RateClass | null {
   if (pathname.startsWith('/api/health') || pathname.startsWith('/api/metrics')) return null;
   if (pathname.startsWith('/api/ops/')) return 'tools';
-  if (pathname.startsWith('/api/session')) return 'auth';
+  if (pathname.startsWith('/api/session') || pathname === '/api/auth/login') return 'auth';
   if (pathname.includes('/generate') || (pathname.includes('/messages') && method === 'POST')) return 'generation';
   if (pathname.includes('/files') && (method === 'POST' || method === 'PUT')) return 'upload';
   if (pathname.startsWith('/api/context')) return 'retrieval';

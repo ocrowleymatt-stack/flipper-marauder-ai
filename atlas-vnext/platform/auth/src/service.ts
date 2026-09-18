@@ -266,6 +266,14 @@ export class AuthService {
     return count;
   }
 
+  async listTenantMemberships(principalId: string): Promise<TenantMembership[]> {
+    return this.options.directory.listTenantMemberships(principalId);
+  }
+
+  guardOrigin(origin: string | null | undefined): void {
+    this.assertOrigin(origin);
+  }
+
   cookieHeader(sessionId: string, secure = this.production): string {
     const parts = [
       `${this.cookieName}=${sessionId}`,
@@ -337,10 +345,17 @@ export class BruteForceGuard {
     private readonly now: () => number = Date.now,
   ) {}
 
+  peek(key: string): { allowed: boolean; remaining: number } {
+    const row = this.current(key);
+    if (!row) return { allowed: true, remaining: this.limit };
+    if (row.count >= this.limit) return { allowed: false, remaining: 0 };
+    return { allowed: true, remaining: this.limit - row.count };
+  }
+
   hit(key: string): { allowed: boolean; remaining: number } {
     const now = this.now();
-    const row = this.hits.get(key);
-    if (!row || row.resetAt <= now) {
+    const row = this.current(key);
+    if (!row) {
       this.hits.set(key, { count: 1, resetAt: now + this.windowMs });
       return { allowed: true, remaining: this.limit - 1 };
     }
@@ -348,4 +363,19 @@ export class BruteForceGuard {
     if (row.count > this.limit) return { allowed: false, remaining: 0 };
     return { allowed: true, remaining: this.limit - row.count };
   }
+
+  reset(key: string): void {
+    this.hits.delete(key);
+  }
+
+  private current(key: string): { count: number; resetAt: number } | undefined {
+    const row = this.hits.get(key);
+    if (!row) return undefined;
+    if (row.resetAt <= this.now()) {
+      this.hits.delete(key);
+      return undefined;
+    }
+    return row;
+  }
 }
+

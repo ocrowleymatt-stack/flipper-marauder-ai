@@ -21,6 +21,7 @@ import {
   sendMessage,
   uploadTextFile,
   isProjectsUnavailable,
+  revokeSession,
   type AssembledContext,
   type Capability,
   type Conversation,
@@ -33,6 +34,7 @@ import {
 } from './api';
 import { CaspaPanel } from './caspa';
 import { EstatePanel } from './estate';
+import { LoginForm } from './login';
 import { playCue, prefersReducedMotion, setSoundEnabled, soundEnabled } from './experience';
 import { applyStream, emptyView, runStatusLabel, viewFromSnapshot, type StreamView } from './stream';
 
@@ -124,42 +126,51 @@ export function App() {
     [loadConversation],
   );
 
+  const enterWorkbench = useCallback(
+    async (next: SessionState) => {
+      setSession(next);
+      setSessionError(null);
+      let projectItems: Project[] | null = null;
+      try {
+        projectItems = await loadProjects();
+      } catch (err) {
+        if (!isProjectsUnavailable(err)) throw err;
+      }
+      const registered = await listDungeons().catch(() => []);
+      setDungeons(registered);
+      setSoundOn(soundEnabled());
+      if (projectItems) {
+        setProjectsAvailable(true);
+        const first = projectItems[0]?.id ?? null;
+        setProjectId(first);
+        if (first) await loadProject(first);
+        setStatus(first ? 'Workbench ready.' : 'Create a project to begin.');
+      } else {
+        setProjectsAvailable(false);
+        setSurface('conversation');
+        const convos = await listConversations();
+        setConversations(convos);
+        const nextId = convos[0]?.id ?? null;
+        setActiveConversationId(nextId);
+        if (nextId) await loadConversation(nextId);
+        setStatus('Conversation-only mode.');
+      }
+    },
+    [loadConversation, loadProject, loadProjects],
+  );
+
   useEffect(() => {
     void (async () => {
       try {
         const next = await bootstrapSession();
-        setSession(next);
         if (!next.authenticated) {
+          setSession(next);
           setSessionError('Authentication required. Workbench cannot guess a tenant.');
           setStatus('Signed out.');
           setLoading(false);
           return;
         }
-        let projectItems: Project[] | null = null;
-        try {
-          projectItems = await loadProjects();
-        } catch (err) {
-          if (!isProjectsUnavailable(err)) throw err;
-        }
-        const registered = await listDungeons().catch(() => []);
-        setDungeons(registered);
-        setSoundOn(soundEnabled());
-        if (projectItems) {
-          setProjectsAvailable(true);
-          const first = projectItems[0]?.id ?? null;
-          setProjectId(first);
-          if (first) await loadProject(first);
-          setStatus(first ? 'Workbench ready.' : 'Create a project to begin.');
-        } else {
-          setProjectsAvailable(false);
-          setSurface('conversation');
-          const convos = await listConversations();
-          setConversations(convos);
-          const nextId = convos[0]?.id ?? null;
-          setActiveConversationId(nextId);
-          if (nextId) await loadConversation(nextId);
-          setStatus('Conversation-only mode.');
-        }
+        await enterWorkbench(next);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         setStatus('Workbench failed to load.');
@@ -167,7 +178,7 @@ export function App() {
         setLoading(false);
       }
     })();
-  }, [loadConversation, loadProject, loadProjects]);
+  }, [enterWorkbench]);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' });
@@ -397,10 +408,20 @@ export function App() {
 
   if (!session?.authenticated) {
     return (
-      <main className="boot" aria-labelledby="signed-out-title">
-        <h1 id="signed-out-title">Atlas Workbench</h1>
-        <p role="alert">{sessionError ?? 'Authentication required.'}</p>
-      </main>
+      <LoginForm
+        onAuthenticated={async (next) => {
+          setLoading(true);
+          setError(null);
+          try {
+            await enterWorkbench(next);
+          } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+            setStatus('Workbench failed to load.');
+          } finally {
+            setLoading(false);
+          }
+        }}
+      />
     );
   }
 
@@ -451,6 +472,23 @@ export function App() {
           </button>
           <button type="button" className="ghost" onClick={() => void refreshAll()} disabled={busy}>
             Reload
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => {
+              void (async () => {
+                await revokeSession();
+                setSession({ authenticated: false, bootstrapAllowed: false, loginAvailable: true, csrfToken: null, principal: null });
+                setSessionError(null);
+                setProjects([]);
+                setConversations([]);
+                setView(null);
+                setStatus('Signed out.');
+              })();
+            }}
+          >
+            Sign out
           </button>
         </div>
       </header>

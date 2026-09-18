@@ -53,6 +53,7 @@ export async function startProductionHost(input: {
   const server = createHost({
     runtime: spine.runtime,
     auth: spine.auth,
+    login: spine.login,
     tools: spine.tools,
     projects: spine.projects,
     files: spine.files,

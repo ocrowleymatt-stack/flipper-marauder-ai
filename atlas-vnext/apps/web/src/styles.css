@@ -73,6 +73,36 @@ input {
   padding: 32px;
 }
 
+.login-screen {
+  gap: 16px;
+}
+
+.login-form {
+  display: grid;
+  gap: 8px;
+  text-align: left;
+  min-width: min(360px, 100%);
+}
+
+.login-form input {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+
+.login-form .primary {
+  margin-top: 8px;
+}
+
+.login-error,
+.login-rate {
+  color: var(--danger);
+  margin: 4px 0 0;
+}
+
+
 .shell {
   height: 100%;
   display: flex;

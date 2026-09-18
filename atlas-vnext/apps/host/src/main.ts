@@ -32,6 +32,7 @@ const server = createHost({
   probe: spine.healthProbe,
   shutdown: spine.shutdown,
   auth: spine.auth,
+  login: spine.login,
   tools: spine.tools,
   projects: spine.projects,
   files: spine.files,

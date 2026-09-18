@@ -4,9 +4,12 @@ import type { HealthCheckState, OperationalLimits, ProviderHealth } from '@atlas
 import { ConversationRuntime, type ToolOrchestrator } from '@atlas-vnext/conversation';
 import {
   AuthService,
+  LoginService,
+  MemoryCredentialStore,
   MemoryDirectoryStore,
   MemorySessionStore,
   userPrincipal,
+  type CredentialStore,
 } from '@atlas-vnext/auth';
 import {
   createExecutionPlane,
@@ -86,6 +89,7 @@ export interface Spine {
   runtimeSnapshot: () => RuntimeSnapshot | null;
   tools: ToolEngine;
   auth: AuthService;
+  login: LoginService;
   authority: AuthorityEngine;
   plugins: PluginRegistry;
   shutdown: ShutdownController;
@@ -242,6 +246,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   const toolApprovals = new MemoryToolApprovalStore();
   const directory = new MemoryDirectoryStore();
   const sessions = new MemorySessionStore();
+  let credentials: CredentialStore = new MemoryCredentialStore();
   await directory.putTenantMembership({
     principalId,
     tenantId: tenantId || 'tenant_local',
@@ -326,6 +331,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       directory: bound.directory,
       ...authOptions,
     });
+    credentials = bound.credentials;
     tools = new ToolEngine({
       registry: toolRegistry,
       invocations: bound.toolInvocations,
@@ -416,6 +422,12 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     await raceStartup(signal, tools.reconcile(), budgetMs);
   }
 
+  const login = new LoginService({
+    auth,
+    credentials,
+    preferredTenantId: tenantId || null,
+  });
+
   const healthProbe: HealthProbe = {
     live: () => true,
     async dependencies() {
@@ -491,6 +503,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     runtimeSnapshot: () => plane.runtimeSnapshot(),
     tools,
     auth,
+    login,
     authority,
     plugins,
     shutdown,

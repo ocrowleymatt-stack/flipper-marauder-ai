@@ -2,8 +2,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { GeneratedOutputLimitError, type ConversationRuntime } from '@atlas-vnext/conversation';
 import type { DungeonRegistration, ProviderHealth } from '@atlas-vnext/contracts';
 import { sanitizeText, type RuntimeSnapshot } from '@atlas-vnext/execution';
-import type { AuthService } from '@atlas-vnext/auth';
-import { CsrfError, OriginError, AuthenticationError } from '@atlas-vnext/auth';
+import type { AuthService, LoginService } from '@atlas-vnext/auth';
+import { CsrfError, OriginError, AuthenticationError, RateLimitedError } from '@atlas-vnext/auth';
 import type { ContextService } from '@atlas-vnext/context';
 import type { FilesService } from '@atlas-vnext/files';
 import { CasMissingError } from '@atlas-vnext/files';
@@ -82,6 +82,7 @@ export interface HostOptions {
   probe?: HealthProbe;
   shutdown?: ShutdownController;
   auth?: AuthService;
+  login?: LoginService;
   tools?: ToolEngine;
   projects?: ProjectService | null;
   files?: FilesService | null;
@@ -468,7 +469,7 @@ async function enforceAdmissionRateLimit(req: IncomingMessage, options: HostOpti
 async function enforceCsrfIfNeeded(req: IncomingMessage, options: HostOptions): Promise<void> {
   if (!options.auth || !isMutating(req.method)) return;
   const pathname = urlPath(req);
-  if (pathname === '/api/session' || pathname === '/api/session/revoke') return;
+  if (pathname === '/api/session' || pathname === '/api/session/revoke' || pathname === '/api/auth/login') return;
   const cookie = options.auth.parseCookie(header(req, 'cookie'));
   if (!cookie) return;
   await options.auth.resolve({
@@ -557,6 +558,9 @@ function writeClassifiedError(res: ServerResponse, err: unknown): void {
 function classifyError(err: unknown): { status: number; code: PlatformErrorCode; message: string } {
   if (err instanceof PlatformHttpError) {
     return { status: err.httpStatus, code: err.code, message: err.message };
+  }
+  if (err instanceof RateLimitedError) {
+    return { status: 429, code: 'rate_limit', message: err.message };
   }
   if (err instanceof CsrfError || err instanceof OriginError) {
     return { status: 403, code: 'unauthorised', message: err.message };

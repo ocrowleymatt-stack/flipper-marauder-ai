@@ -18,6 +18,7 @@ export const CAPABILITIES: Array<{ id: Capability; label: string }> = [
 export interface SessionState {
   authenticated: boolean;
   bootstrapAllowed: boolean;
+  loginAvailable?: boolean;
   csrfToken: string | null;
   principal: { id: string; kind?: string; tenantBound: boolean } | null;
 }
@@ -238,6 +239,23 @@ export async function bootstrapSession(): Promise<SessionState> {
       body: JSON.stringify({}),
     }),
   );
+  setCsrfToken(issued.csrfToken);
+  return issued;
+}
+
+export async function loginWithPassword(login: string, password: string): Promise<SessionState> {
+  const response = await fetch('/api/auth/login', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ login, password }),
+  });
+  if (response.status === 429) {
+    const error = new Error(await readError(response)) as Error & { status: number };
+    error.status = 429;
+    throw error;
+  }
+  const issued = await parseJson<SessionState>(response);
   setCsrfToken(issued.csrfToken);
   return issued;
 }

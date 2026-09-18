@@ -27,3 +27,10 @@ export class OriginError extends AuthenticationError {
     this.name = 'OriginError';
   }
 }
+
+export class RateLimitedError extends AuthenticationError {
+  constructor(message = 'Too many login attempts. Try again later.') {
+    super('rate_limited', message);
+    this.name = 'RateLimitedError';
+  }
+}

@@ -27,7 +27,7 @@ import type {
 } from './file-types.ts';
 import type { DocumentStore } from './document-types.ts';
 import type { SiteStore } from './site-types.ts';
-import type { DirectoryStore, SessionStore } from '@atlas-vnext/auth';
+import type { DirectoryStore, SessionStore, CredentialStore } from '@atlas-vnext/auth';
 import type { ToolApprovalStore, ToolInvocationStore } from '@atlas-vnext/tools';
 import type { DungeonRecordStore, PrivacyStore } from './dungeon-types.ts';
 
@@ -216,6 +216,7 @@ export interface ActorBoundPersistence {
   sites: SiteStore;
   sessions: SessionStore;
   directory: DirectoryStore;
+  credentials: CredentialStore;
   toolInvocations: ToolInvocationStore;
   toolApprovals: ToolApprovalStore;
   documents: DocumentStore;

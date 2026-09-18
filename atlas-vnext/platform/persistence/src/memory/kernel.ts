@@ -13,7 +13,7 @@ import {
 import { UuidIdFactory, type ConversationRepository, type ExecutionRepository, type MessageRepository, type ProvenanceWriter } from '@atlas-vnext/conversation';
 import { MemoryEventBus, type EventBus } from '@atlas-vnext/events';
 import { createJobEngine, MemoryJobStore, type DurableJobEngine } from '@atlas-vnext/jobs';
-import { MemoryDirectoryStore, MemorySessionStore } from '@atlas-vnext/auth';
+import { MemoryCredentialStore, MemoryDirectoryStore, MemorySessionStore } from '@atlas-vnext/auth';
 import { MemoryToolApprovalStore, MemoryToolInvocationStore } from '@atlas-vnext/tools';
 import { BehaviourPolicyError, TenantIsolationError } from '@atlas-vnext/permissions';
 import { logPlatform } from '@atlas-vnext/observability';
@@ -79,6 +79,7 @@ export class MemoryPersistence implements PlatformPersistence {
   private readonly siteStores = createMemorySiteStores(() => this.clock());
   private readonly sessions = new MemorySessionStore();
   private readonly directory = new MemoryDirectoryStore();
+  private readonly credentials = new MemoryCredentialStore();
   private readonly toolInvocations = new MemoryToolInvocationStore();
   private readonly toolApprovals = new MemoryToolApprovalStore();
   private readonly documentStore = createMemoryDocumentStore(() => this.clock());
@@ -137,6 +138,7 @@ export class MemoryPersistence implements PlatformPersistence {
       sites: this.siteStores.sites,
       sessions: this.sessions,
       directory: this.directory,
+      credentials: this.credentials,
       toolInvocations: this.toolInvocations,
       toolApprovals: this.toolApprovals,
       documents: this.documentStore,

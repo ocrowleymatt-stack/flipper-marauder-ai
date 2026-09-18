@@ -60,7 +60,7 @@ Production **fails loud** without: PostgreSQL URL, `ATLAS_TENANT_ID`, `ATLAS_SES
 
 ## 7. Migrations
 
-Ordered `001`–`008`, transactional, checksummed, forward-only. Failed SQL rolls back that version and is not recorded. Empty→latest, v1→latest, pre-vNext `007`→`008` rehearsal, interrupted migration, and checksum mismatch are tested. Migration `008` is additive (`dungeon_records` plus owner-only privacy policy/audit/proposal tables) and does not rewrite Projects, Files, CAS, context, or provenance rows. **No DROP DATABASE / DROP SCHEMA as recovery.** Destructive table drops are not part of this product.
+Ordered `001`–`009`, transactional, checksummed, forward-only. Failed SQL rolls back that version and is not recorded. Empty→latest, v1→latest, pre-vNext `007`→`008` rehearsal, interrupted migration, and checksum mismatch are tested. Migration `009` adds `principal_credentials` (login identifier + scrypt hash) and does not rewrite Projects, Files, CAS, context, or provenance rows. **No DROP DATABASE / DROP SCHEMA as recovery.** Destructive table drops are not part of this product.
 
 ## 8. DB connections
 

@@ -85,11 +85,7 @@ export function dockerInspectPublishesHostPort(inspect, hostPort) {
 }
 
 export function defaultReadSs() {
-  try {
-    return execFileSync('ss', ['-lnt'], { encoding: 'utf8' });
-  } catch {
-    return '';
-  }
+  return execFileSync('ss', ['-lnt'], { encoding: 'utf8' });
 }
 
 /** @param {string} name */
@@ -119,7 +115,15 @@ const isMain =
   Boolean(process.argv[1]) && fileURLToPath(import.meta.url) === process.argv[1];
 
 if (isMain) {
-  const decision = decideStagingPort(probeOccupancy());
+  let occupancy;
+  try {
+    occupancy = probeOccupancy();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`atlas-vnext-staging: occupancy probe failed: ${message}`);
+    process.exit(1);
+  }
+  const decision = decideStagingPort(occupancy);
   if (decision.action === 'abort') {
     console.error(`atlas-vnext-staging: ${decision.reason}`);
     process.exit(1);

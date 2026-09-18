@@ -88,6 +88,17 @@ describe('staging port policy', () => {
     expect(decideStagingPort(occupancy).action).toBe('abort');
   });
 
+  it('fails closed when ss cannot inspect host sockets', () => {
+    expect(() =>
+      probeOccupancy({
+        readSs: () => {
+          throw new Error('ss: command not found');
+        },
+        inspectContainer: () => null,
+      }),
+    ).toThrow(/ss/);
+  });
+
   it('parses ss listen addresses including ipv6 without treating original Atlas ports as staging', () => {
     expect(ssOutputBindsPort(SS_FREE, 8788)).toBe(false);
     expect(ssOutputBindsPort(SS_FREE, 80)).toBe(true);

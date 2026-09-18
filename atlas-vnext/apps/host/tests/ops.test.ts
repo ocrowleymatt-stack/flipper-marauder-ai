@@ -252,6 +252,10 @@ describe('host health and security', () => {
     expect(providers?.evidence.providers?.runpod).toBe('not_configured');
     expect(firstReport.proposals.some((item) => item.id === 'repair.reconfigure_providers')).toBe(false);
     expect(firstReport.state).toBe('HEALTHY');
+    expect(() => {
+      (spine.health as { openai: ProviderHealth }).openai = 'unhealthy';
+    }).toThrow();
+    expect(spine.health.openai).not.toBe('unhealthy');
 
     spine.broker.register({
       providerId: 'openai',

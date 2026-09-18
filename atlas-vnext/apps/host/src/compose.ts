@@ -482,7 +482,9 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     router,
     registry,
     broker: plane.broker,
-    health: providerHealthLive,
+    get health() {
+      return Object.freeze({ ...providerHealthLive });
+    },
     mode,
     availableRuntimes: plane.available,
     scheduler: plane.scheduler,

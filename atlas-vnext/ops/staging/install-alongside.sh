@@ -24,6 +24,7 @@ fail() { echo "atlas-vnext-staging: $*" >&2; exit 1; }
 [[ "$(id -u)" -eq 0 ]] || fail "run as root on the Hetzner host"
 [[ -f "$COMPOSE" ]] || fail "compose file missing: $COMPOSE"
 command -v docker >/dev/null || fail "docker is required for isolated postgres/host"
+command -v node >/dev/null || fail "node is required to evaluate staging port policy"
 
 for path in "${PROTECTED_PATHS[@]}"; do
   if [[ -e "$path" ]]; then
@@ -43,8 +44,10 @@ for port in "${PROTECTED_PORTS[@]}"; do
   fi
 done
 
-if ss -lnt | awk '{print $4}' | grep -Eq ':8788$'; then
-  fail "host port 8788 is already in use; pick a free port via ATLAS_STAGING_BIND/compose override rather than colliding"
+POLICY="$ROOT_DIR/ops/staging/port-policy.mjs"
+[[ -f "$POLICY" ]] || fail "port policy missing: $POLICY"
+if ! node "$POLICY"; then
+  exit 1
 fi
 
 install -d -m 0750 -o root -g root /etc/atlas-vnext-staging

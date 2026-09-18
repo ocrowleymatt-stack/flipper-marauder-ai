@@ -176,6 +176,58 @@ describe('OperationsDoctor', () => {
     expect(injected.proposals.some((item) => item.id === 'repair.reconfigure_providers')).toBe(true);
   });
 
+  it('re-reads a providerHealth getter on each inspect so live updates are visible', async () => {
+    const live: Record<string, 'ok' | 'warn' | 'error' | 'not_configured'> = {
+      openai: 'ok',
+      venice: 'not_configured',
+    };
+    const doctor = new OperationsDoctor({
+      authority: new AuthorityEngine(),
+      providerHealth: () => ({ ...live }),
+    });
+    const first = await doctor.inspect(actor);
+    const firstProviders = first.checks.find((item) => item.id === 'providers');
+    expect(firstProviders?.state).toBe('ok');
+    expect(firstProviders?.evidence.providers).toEqual({ openai: 'ok', venice: 'not_configured' });
+    expect(first.proposals.some((item) => item.id === 'repair.reconfigure_providers')).toBe(false);
+
+    live.openai = 'error';
+    const second = await doctor.inspect(actor);
+    const secondProviders = second.checks.find((item) => item.id === 'providers');
+    expect(secondProviders?.state).toBe('error');
+    expect(secondProviders?.evidence.providers).toEqual({ openai: 'error', venice: 'not_configured' });
+    expect(second.proposals.some((item) => item.id === 'repair.reconfigure_providers')).toBe(true);
+  });
+
+  it('treats a mix of ok and not_configured providers as ok without proposing reconfigure', async () => {
+    const report = await new OperationsDoctor({
+      authority: new AuthorityEngine(),
+      providerHealth: { openai: 'ok', venice: 'not_configured', forge: 'not_configured' },
+    }).inspect(actor);
+    expect(report.checks.find((item) => item.id === 'providers')?.state).toBe('ok');
+    expect(report.state).toBe('HEALTHY');
+    expect(report.proposals.some((item) => item.id === 'repair.reconfigure_providers')).toBe(false);
+  });
+
+  it('does not propose reconfigure when every injected provider is not_configured', async () => {
+    const report = await new OperationsDoctor({
+      authority: new AuthorityEngine(),
+      providerHealth: { venice: 'not_configured', forge: 'not_configured', runpod: 'not_configured' },
+    }).inspect(actor);
+    expect(report.checks.find((item) => item.id === 'providers')?.state).toBe('not_configured');
+    expect(report.state).toBe('HEALTHY');
+    expect(report.proposals.some((item) => item.id === 'repair.reconfigure_providers')).toBe(false);
+  });
+
+  it('still proposes reconfigure for a configured-but-unhealthy provider', async () => {
+    const report = await new OperationsDoctor({
+      authority: new AuthorityEngine(),
+      providerHealth: { openai: 'error', venice: 'not_configured' },
+    }).inspect(actor);
+    expect(report.checks.find((item) => item.id === 'providers')?.state).toBe('error');
+    expect(report.proposals.some((item) => item.id === 'repair.reconfigure_providers')).toBe(true);
+  });
+
   it('records jobs as ok when an engine is present and architecture as not a CI replacement', async () => {
     const report = await new OperationsDoctor({
       jobs: jobsStub(),

@@ -36,8 +36,12 @@ export interface OperationsDoctorDeps {
   listStuckJobs?: () => Promise<Array<{ id: string }>>;
   retrievalProbe?: () => Promise<Pick<HealthCheckResult, 'state' | 'summary' | 'evidence'>>;
   backupProbe?: () => Promise<Pick<HealthCheckResult, 'state' | 'summary' | 'evidence'>>;
-  /** Host-owned Nexus health snapshot. Do not import nexus from this package. */
-  providerHealth?: Record<string, HealthCheckState>;
+  /**
+   * Host-owned provider health. Record or getter; getter is resolved on each
+   * inspect so Doctor observes live updates after startup. Do not import nexus
+   * or execution from this package.
+   */
+  providerHealth?: Record<string, HealthCheckState> | (() => Record<string, HealthCheckState>);
   flags?: FeatureFlagStore | null;
 }
 
@@ -244,7 +248,7 @@ export class OperationsDoctor {
   }
 
   private checkProviders(at: string): HealthCheckResult {
-    const map = this.deps.providerHealth;
+    const map = resolveProviderHealth(this.deps.providerHealth);
     if (!map || Object.keys(map).length === 0) {
       return result('providers', 'not_configured', 'Provider health is host-owned and was not injected.', { at });
     }
@@ -321,6 +325,13 @@ function proposeRepairs(
     proposals.push(reconfigureProvidersProposal());
   }
   return proposals;
+}
+
+function resolveProviderHealth(
+  raw: OperationsDoctorDeps['providerHealth'],
+): Record<string, HealthCheckState> | undefined {
+  if (!raw) return undefined;
+  return typeof raw === 'function' ? raw() : raw;
 }
 
 function result(

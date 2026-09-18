@@ -83,10 +83,15 @@ export class LoginService {
       rotatedAt: now,
     };
     await this.options.credentials.put(record);
+    let revokedSessions = 0;
+    if (existing) {
+      revokedSessions = await this.options.auth.revokeAll(input.principalId);
+    }
     logPlatform('auth.credential.provisioned', {
       principalId: input.principalId,
       loginHash: hashLogin(loginIdNormalized),
       rotated: Boolean(existing),
+      revokedSessions,
     });
     return {
       principalId: input.principalId,

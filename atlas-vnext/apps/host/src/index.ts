@@ -21,6 +21,7 @@ export {
   ResourceGuard,
   normalizeContextFileIds,
   normalizeObservedAddress,
+  loginClientAddress,
   resolveAdmissionIdentity,
   resolveRateLimitIdentity,
   sameRateLimitIdentity,

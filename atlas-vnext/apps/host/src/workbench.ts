@@ -11,7 +11,7 @@ import type { ProjectService } from '@atlas-vnext/projects';
 import { ToolError, type ToolEngine } from '@atlas-vnext/tools';
 import { DEFAULT_OPERATIONAL_LIMITS } from '@atlas-vnext/contracts';
 import { header, isMutating, json, publicFile, readJson, readRaw, urlPath, urlQuery } from './http.ts';
-import { normalizeObservedAddress } from './limits.ts';
+import { loginClientAddress } from './limits.ts';
 
 export interface WorkbenchHostOptions {
   runtime: ConversationRuntime;
@@ -551,14 +551,11 @@ async function handleNativeLogin(req: IncomingMessage, res: ServerResponse, opti
 }
 
 function loginSourceKey(req: IncomingMessage): string {
-  const observed = normalizeObservedAddress(req.socket?.remoteAddress);
-  const loopback = observed === '127.0.0.1' || observed === '::1';
-  if (loopback) {
-    const forwarded = header(req, 'x-forwarded-for')?.split(',')[0]?.trim();
-    const forwardedIp = normalizeObservedAddress(forwarded);
-    if (forwardedIp) return `ip:${forwardedIp}`;
-  }
-  return observed ? `ip:${observed}` : 'ip:unknown';
+  const ip = loginClientAddress({
+    remoteAddress: req.socket?.remoteAddress,
+    forwardedFor: header(req, 'x-forwarded-for'),
+  });
+  return ip ? `ip:${ip}` : 'ip:unknown';
 }
 
 async function handleIssueSession(req: IncomingMessage, res: ServerResponse, options: WorkbenchHostOptions): Promise<void> {

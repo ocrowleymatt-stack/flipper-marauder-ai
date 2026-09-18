@@ -223,6 +223,31 @@ describe('native login', () => {
     ).rejects.toBeInstanceOf(RateLimitedError);
   });
 
+  it('revokes active sessions when the operator rotates the credential', async () => {
+    const { login, auth } = await setup();
+    const issued = await login.authenticate({
+      login: 'owner',
+      password: PASSWORD,
+      origin: 'https://atlas.ocrowley.com',
+      sourceKey: 'ip:10.0.0.10',
+    });
+    await login.provision({
+      principalId: 'principal_owner',
+      login: 'owner',
+      password: 'new-correct-horse-battery',
+    });
+    await expect(auth.resolve({ sessionId: issued.sessionId, mutating: false })).rejects.toThrow(/revoked/i);
+    const next = await login.authenticate({
+      login: 'owner',
+      password: 'new-correct-horse-battery',
+      origin: 'https://atlas.ocrowley.com',
+      sourceKey: 'ip:10.0.0.10',
+    });
+    expect(next.sessionId).not.toBe(issued.sessionId);
+    const resolved = await auth.resolve({ sessionId: next.sessionId, mutating: false });
+    expect(resolved.actor.principalId).toBe('principal_owner');
+  });
+
   it('selects the preferred tenant when the principal is a member of several', () => {
     expect(selectTenant(['tenant_b', 'tenant_a'], 'tenant_a')).toBe('tenant_a');
     expect(selectTenant(['tenant_b'], 'tenant_a')).toBe('tenant_b');

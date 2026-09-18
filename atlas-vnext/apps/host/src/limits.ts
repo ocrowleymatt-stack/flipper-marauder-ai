@@ -78,6 +78,66 @@ export function normalizeObservedAddress(remoteAddress: string | undefined): str
   return raw;
 }
 
+/** Loopback or private peer that may be nginx/Docker in front of the host. */
+export function isTrustedProxyPeer(ip: string | null): boolean {
+  if (!ip) return false;
+  const value = ip.toLowerCase();
+  if (value === '127.0.0.1' || value === '::1') return true;
+  const parts = value.split('.').map((item) => Number(item));
+  if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
+    if (parts[0] === 10) return true;
+    if (parts[0] === 192 && parts[1] === 168) return true;
+    if (parts[0] === 172 && (parts[1] ?? 0) >= 16 && (parts[1] ?? 0) <= 31) return true;
+    if (parts[0] === 169 && parts[1] === 254) return true;
+  }
+  return value.startsWith('fe80:') || value.startsWith('fc') || value.startsWith('fd');
+}
+
+/** First hop of X-Forwarded-For, if it parses as an IP. */
+export function firstForwardedHop(forwardedFor: string | undefined): string | null {
+  const hop = forwardedFor?.split(',')[0]?.trim().replace(/^"|"$/g, '');
+  if (!hop) return null;
+  const v4 = /^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/.exec(hop);
+  if (v4) return normalizeObservedAddress(v4[1]);
+  const v6brack = /^\[([0-9a-f:]+)\](?::\d+)?$/i.exec(hop);
+  if (v6brack) return normalizeObservedAddress(v6brack[1]);
+  if (/^[0-9a-f:]+$/i.test(hop)) return normalizeObservedAddress(hop);
+  return null;
+}
+
+/**
+ * Client address for native login throttling.
+ *
+ * Public sockets stay on the observed peer (forwarding headers are ignored).
+ * When the peer is a trusted local proxy (loopback / Docker / RFC1918), the
+ * first sanitized X-Forwarded-For hop is used so nginx-to-Docker does not
+ * collapse every browser into one shared bucket. Identifier throttle remains
+ * the non-spoofable brute-force control.
+ */
+export function loginClientAddress(input: {
+  remoteAddress?: string;
+  forwardedFor?: string;
+}): string | null {
+  const peer = normalizeObservedAddress(input.remoteAddress);
+  if (isTrustedProxyPeer(peer)) {
+    const forwarded = firstForwardedHop(input.forwardedFor);
+    if (forwarded) return forwarded;
+  }
+  return peer;
+}
+
+function observedHost(input: {
+  pathname: string;
+  remoteAddress?: string;
+  forwardedFor?: string;
+}): string {
+  const ip =
+    input.pathname === '/api/auth/login'
+      ? loginClientAddress({ remoteAddress: input.remoteAddress, forwardedFor: input.forwardedFor })
+      : normalizeObservedAddress(input.remoteAddress);
+  return ip ? `ip:${ip}` : 'unknown';
+}
+
 /**
  * Server-derived rate-limit identity.
  *
@@ -85,13 +145,15 @@ export function normalizeObservedAddress(remoteAddress: string | undefined): str
  * Local (auth not wired): the host bootstrap identity is the only identity.
  * Unauthenticated: anonymous or pre-auth bootstrap, keyed by the observed
  * socket address — never `options.tenantId` / `options.principalId`, never a
- * client-supplied tenant/principal, never a spoofable forwarding header.
+ * client-supplied tenant/principal. `/api/auth/login` is the exception: when
+ * the socket peer is a trusted proxy, identity uses a sanitized forwarded hop.
  */
 export function resolveRateLimitIdentity(input: {
   actor: { tenantId: string; principalId: string; sessionId: string | null } | null;
   authWired: boolean;
   pathname: string;
   remoteAddress?: string;
+  forwardedFor?: string;
 }): RateLimitIdentity {
   const tenant = input.actor?.tenantId?.trim() ?? '';
   const principal = input.actor?.principalId?.trim() ?? '';
@@ -102,8 +164,7 @@ export function resolveRateLimitIdentity(input: {
   if (!input.authWired && tenant && principal) {
     return { kind: 'local', tenantId: tenant, actorId: principal };
   }
-  const ip = normalizeObservedAddress(input.remoteAddress);
-  const host = ip ? `ip:${ip}` : 'unknown';
+  const host = observedHost(input);
   const bootstrap =
     input.pathname === '/api/session' ||
     input.pathname.startsWith('/api/session/') ||
@@ -121,15 +182,15 @@ export function resolveRateLimitIdentity(input: {
  * Cookie presence is a local parse of the Cookie header — the session is not
  * loaded. Unique forged cookies from one socket still share one `*:cookie`
  * bucket so they cannot flood session storage. Forwarding headers are never
- * consulted.
+ * consulted except on `/api/auth/login` behind a trusted proxy peer.
  */
 export function resolveAdmissionIdentity(input: {
   pathname: string;
   remoteAddress?: string;
+  forwardedFor?: string;
   cookiePresent: boolean;
 }): RateLimitIdentity {
-  const ip = normalizeObservedAddress(input.remoteAddress);
-  const host = ip ? `ip:${ip}` : 'unknown';
+  const host = observedHost(input);
   const bootstrap =
     input.pathname === '/api/session' ||
     input.pathname.startsWith('/api/session/') ||

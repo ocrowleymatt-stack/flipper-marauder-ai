@@ -461,6 +461,7 @@ async function enforceAdmissionRateLimit(req: IncomingMessage, options: HostOpti
   const identity = resolveAdmissionIdentity({
     pathname,
     remoteAddress: req.socket?.remoteAddress,
+    forwardedFor: header(req, 'x-forwarded-for'),
     cookiePresent: cookiePresent(req, options),
   });
   options.rateLimiter.hit(rateClass, identity.tenantId, identity.actorId);
@@ -491,10 +492,12 @@ async function enforceAuthenticatedRateLimit(req: IncomingMessage, options: Host
     authWired: Boolean(options.auth),
     pathname,
     remoteAddress: req.socket?.remoteAddress,
+    forwardedFor: header(req, 'x-forwarded-for'),
   });
   const admission = resolveAdmissionIdentity({
     pathname,
     remoteAddress: req.socket?.remoteAddress,
+    forwardedFor: header(req, 'x-forwarded-for'),
     cookiePresent: cookiePresent(req, options),
   });
   if (sameRateLimitIdentity(identity, admission)) return;

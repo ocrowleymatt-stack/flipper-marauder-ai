@@ -60,6 +60,7 @@ export class ExecutionBroker {
     let lastError: Error | null = null;
     let attemptIndex = Math.max(0, context.attemptIndexBase ?? 0);
     let visibleOutputEver = context.visibleOutputAlready === true;
+    const authFailedProviders = new Set<string>();
 
     for (const candidate of decision.candidateChain) {
       const slash = candidate.indexOf('/');
@@ -76,6 +77,23 @@ export class ExecutionBroker {
           model,
           outcome: 'skipped',
           error: failure('no_adapter', `No adapter registered for ${provider}.`, false),
+          emittedVisibleOutput: false,
+        });
+        continue;
+      }
+
+      if (authFailedProviders.has(provider)) {
+        attemptIndex += 1;
+        observer?.onAttempt({
+          index: attemptIndex,
+          provider,
+          model,
+          outcome: 'skipped',
+          error: failure(
+            'authentication_failure',
+            `Skipping ${provider}: authentication already failed.`,
+            false,
+          ),
           emittedVisibleOutput: false,
         });
         continue;
@@ -149,24 +167,25 @@ export class ExecutionBroker {
           lastError = err instanceof Error ? err : new Error(String(err));
           const aborted = context.signal?.aborted || lastError.message === 'Execution aborted.';
           const classified = classifyProviderFailure(err);
+          const code =
+            aborted
+              ? 'cancelled'
+              : err instanceof ProviderHttpError
+                ? err.failure.code
+                : classified.code;
           const retryable = !visibleOutput && !aborted && classified.retryable;
           observer?.onAttempt({
             index: attemptIndex,
             provider,
             model,
             outcome: aborted ? 'cancelled' : 'failed',
-            error: failure(
-              aborted
-                ? 'cancelled'
-                : err instanceof ProviderHttpError
-                  ? err.failure.code
-                  : classified.code,
-              lastError.message,
-              retryable,
-            ),
+            error: failure(code, lastError.message, retryable),
             emittedVisibleOutput: visibleOutput,
           });
-          if (breaker.isOpen()) {
+          if (code === 'authentication_failure') {
+            authFailedProviders.add(provider);
+            this.options.health?.onProviderHealth(provider, 'authentication_failure');
+          } else if (breaker.isOpen()) {
             this.options.health?.onProviderHealth(provider, 'unhealthy', 'circuit_open');
           }
 

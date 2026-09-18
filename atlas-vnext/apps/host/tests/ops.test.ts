@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { Server } from 'node:http';
 import type { PersistenceConfig } from '@atlas-vnext/persistence';
 import type { ProviderHealth, RouteDecision } from '@atlas-vnext/contracts';
+import { httpFailure, ProviderHttpError } from '@atlas-vnext/execution';
 import { composeSpine, createHost, listen } from '../src/index.ts';
 import { providerHealthToCheckState } from '../src/compose.ts';
 
@@ -317,6 +318,75 @@ describe('host health and security', () => {
     expect(await memberDoctor.json()).toEqual({ error: 'Permission denied.' });
   });
 
+  it('System Doctor maps a single authentication_failure to error without waiting for the circuit', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-host-doctor-auth-'));
+    const spine = await composeSpine({
+      dataPath: join(dir, 'state.json'),
+      mode: 'mock',
+      persistence: memoryConfig('tenant_local'),
+    });
+    const server = createHost({
+      runtime: spine.runtime,
+      auth: spine.auth,
+      doctor: spine.doctor,
+      repairs: spine.repairs,
+      tenantId: spine.tenantId,
+      principalId: spine.principalId,
+    });
+    servers.push(server);
+    const bound = await listen(server, 0, '127.0.0.1');
+    const issued = await spine.auth.issueSession({
+      principalId: spine.principalId,
+      tenantId: spine.tenantId,
+    });
+    const headers = {
+      cookie: spine.auth.cookieHeader(issued.session.id),
+      'x-atlas-csrf': issued.csrfToken,
+    };
+
+    spine.broker.register({
+      providerId: 'xai',
+      async *stream() {
+        throw new ProviderHttpError(
+          httpFailure(
+            'xai',
+            400,
+            '{"code":"invalid-argument","error":"Incorrect API key provided. You can obtain an API key from https://console.x.ai."}',
+          ),
+        );
+      },
+    });
+    const decision: RouteDecision = {
+      target: 'nexus/fast',
+      resolvedRouteId: 'xai/grok-4.20-fast',
+      provider: 'xai',
+      model: 'grok-4.20-fast',
+      candidateChain: ['xai/grok-4.20-fast'],
+      localOnly: false,
+      locality: 'public_cloud',
+      runtimeClass: 'always_available',
+      decisionReason: 'test',
+      traceId: 'trc_doctor_auth',
+      evaluatedAt: new Date().toISOString(),
+      rejectedCandidates: [],
+    };
+    await expect(async () => {
+      for await (const _chunk of spine.broker.execute(decision, { prompt: 'x' })) {
+        void _chunk;
+      }
+    }).rejects.toThrow();
+
+    const report = await fetch(`${bound.url}/api/ops/doctor`, { headers });
+    expect(report.status).toBe(200);
+    const body = (await report.json()) as {
+      state: string;
+      checks: Array<{ id: string; state: string; evidence: { providers?: Record<string, string> } }>;
+    };
+    const providers = body.checks.find((check) => check.id === 'providers');
+    expect(providers?.evidence.providers?.xai).toBe('error');
+    expect(providers?.state).toBe('error');
+  });
+
   it('maps live missing credentials to not_configured and probed failures to error', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'atlas-host-live-doctor-'));
     const spine = await composeSpine({
@@ -339,6 +409,7 @@ describe('host health and security', () => {
     expect(map.venice).toBe('not_configured');
     expect(map.forge).toBe('not_configured');
     expect(map.runpod).toBe('not_configured');
+    expect(map.xai).toBe('not_configured');
     expect(map.ollama).toBe('error');
     expect(providers?.state).toBe('error');
     expect(report.proposals.some((item) => item.id === 'repair.reconfigure_providers')).toBe(true);

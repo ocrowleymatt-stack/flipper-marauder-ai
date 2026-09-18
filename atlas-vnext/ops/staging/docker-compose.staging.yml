@@ -1,0 +1,90 @@
+# Isolated Atlas vNext Private Staging v1.
+# MUST NOT share names, volumes, ports, DB, or CAS with original Atlas Mountain.
+#
+# Existing Atlas (do not touch):
+#   nginx :80/:443, atlas.ocrowley.com, 127.0.0.1:43101 Nexus, 127.0.0.1:43105 auth
+#   /opt/atlas-mountain, /opt/atlas, /var/lib/atlas, /etc/atlas
+#
+# This file only creates:
+#   containers: atlas-vnext-staging, atlas-vnext-staging-pg
+#   network: atlas-vnext-staging
+#   volumes: atlas-vnext-staging-pgdata, atlas-vnext-staging-cas
+#   host port: 8788 (loopback by default; firewall must stay closed on 43100-43109)
+
+name: atlas-vnext-staging
+
+services:
+  postgres:
+    image: postgres:16-bookworm
+    container_name: atlas-vnext-staging-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: atlas_vnext_staging
+      POSTGRES_USER: atlas_vnext_staging
+      POSTGRES_PASSWORD: ${ATLAS_STAGING_PG_PASSWORD}
+    volumes:
+      - atlas-vnext-staging-pgdata:/var/lib/postgresql/data
+    networks:
+      - atlas-vnext-staging
+    mem_limit: 512m
+    cpus: '0.50'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U atlas_vnext_staging -d atlas_vnext_staging']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # Database is not published on the host.
+
+  host:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: atlas-vnext-staging:${ATLAS_SOURCE_SHA:-local}
+    container_name: atlas-vnext-staging
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: staging
+      ATLAS_ENV: staging
+      ATLAS_PERSISTENCE: postgres
+      ATLAS_DATABASE_URL: postgres://atlas_vnext_staging:${ATLAS_STAGING_PG_PASSWORD}@postgres:5432/atlas_vnext_staging
+      ATLAS_TENANT_ID: tenant_staging_owner
+      ATLAS_PRINCIPAL_ID: principal_staging_owner
+      ATLAS_SESSION_SECRET: ${ATLAS_SESSION_SECRET}
+      ATLAS_SESSION_COOKIE: atlas_vnext_staging_session
+      ATLAS_ALLOWED_ORIGINS: ${ATLAS_ALLOWED_ORIGINS}
+      ATLAS_CAS_ROOT: /var/lib/atlas-vnext-staging/cas
+      ATLAS_BIND_HOST: 0.0.0.0
+      PORT: '8787'
+      ATLAS_SOURCE_SHA: ${ATLAS_SOURCE_SHA}
+      ATLAS_BUILD_ID: ${ATLAS_BUILD_ID}
+      ATLAS_USE_MOCK_PROVIDERS: ${ATLAS_USE_MOCK_PROVIDERS:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - atlas-vnext-staging-cas:/var/lib/atlas-vnext-staging/cas
+    ports:
+      - '${ATLAS_STAGING_BIND:-127.0.0.1}:8788:8787'
+    networks:
+      - atlas-vnext-staging
+    mem_limit: 1g
+    cpus: '1.00'
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8787/api/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+networks:
+  atlas-vnext-staging:
+    name: atlas-vnext-staging
+    driver: bridge
+
+volumes:
+  atlas-vnext-staging-pgdata:
+    name: atlas-vnext-staging-pgdata
+  atlas-vnext-staging-cas:
+    name: atlas-vnext-staging-cas

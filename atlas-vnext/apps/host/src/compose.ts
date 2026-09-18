@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { OperationalLimits, ProviderHealth } from '@atlas-vnext/contracts';
+import type { HealthCheckState, OperationalLimits, ProviderHealth } from '@atlas-vnext/contracts';
 import { ConversationRuntime, type ToolOrchestrator } from '@atlas-vnext/conversation';
 import {
   AuthService,
@@ -50,6 +50,8 @@ import { PrivacyService } from '@atlas-vnext/dungeon-privacy';
 import { EnvFlagStore, type KillSwitchState } from '@atlas-vnext/flags';
 import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import { logPlatform } from '@atlas-vnext/observability';
+import { OperationsDoctor, RepairExecutor } from '@atlas-vnext/operations';
+import type { DurableJobEngine } from '@atlas-vnext/jobs';
 import { MODEL_CATALOGUE } from './catalogue.ts';
 import { ShutdownController, readOperationalLimits, type HealthProbe } from './ops.ts';
 import { PlatformRateLimiter, ResourceGuard } from './limits.ts';
@@ -72,6 +74,8 @@ export interface Spine {
   music: MusicService | null;
   privacy: PrivacyService | null;
   cas: CasStore | null;
+  doctor: OperationsDoctor;
+  repairs: RepairExecutor;
   router: NexusRouter;
   registry: NexusRegistry;
   broker: ReturnType<typeof createExecutionPlane>['broker'];
@@ -194,6 +198,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   let music: MusicService | null = null;
   let privacy: PrivacyService | null = null;
   let cas: CasStore | null = null;
+  let jobEngine: DurableJobEngine | null = null;
   let runtime: ConversationRuntime;
   const tenantId = persistenceConfig.defaultTenantId ?? (persistenceConfig.production ? '' : 'tenant_local');
   const principalId = env.ATLAS_PRINCIPAL_ID?.trim() || (tenantId ? `principal_${tenantId}` : 'principal_local');
@@ -246,6 +251,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       .map((item) => item.trim())
       .filter(Boolean),
     sessionTtlMs: limits.sessionTtlMs,
+    cookieName: env.ATLAS_SESSION_COOKIE?.trim() || 'atlas_session',
   };
   let auth = new AuthService({
     sessions,
@@ -301,6 +307,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     await persistence.ensureTenant({ id: tenantId, name: tenantId });
     await persistence.ensurePrincipal({ id: principalId, displayName: principalId });
     const bound = persistence.forActor({ tenantId, principalId });
+    jobEngine = bound.jobs;
     await bound.directory.putTenantMembership({
       principalId,
       tenantId,
@@ -434,6 +441,17 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     },
   };
 
+  const doctor = new OperationsDoctor({
+    persistence,
+    cas,
+    jobs: jobEngine,
+    authority,
+    providerHealth: Object.fromEntries(
+      Object.entries(plane.health).map(([provider, health]) => [provider, providerCheckState(health)]),
+    ),
+  });
+  const repairs = new RepairExecutor({ doctor, authority, jobs: jobEngine });
+
   return {
     runtime,
     store,
@@ -449,6 +467,8 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     music,
     privacy,
     cas,
+    doctor,
+    repairs,
     router,
     registry,
     broker: plane.broker,
@@ -484,6 +504,12 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     }
     throw err;
   }
+}
+
+function providerCheckState(health: ProviderHealth): HealthCheckState {
+  if (health === 'healthy' || health === 'configured') return 'ok';
+  if (health === 'unhealthy') return 'error';
+  return 'warn';
 }
 
 export function grantSideEffects(authority: AuthorityEngine, principalId: string, tenantId: string): void {

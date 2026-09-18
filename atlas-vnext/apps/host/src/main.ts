@@ -44,6 +44,8 @@ const server = createHost({
   websiteStudio: spine.websiteStudio,
   music: spine.music,
   privacy: spine.privacy,
+  doctor: spine.doctor,
+  repairs: spine.repairs,
   tenantId: spine.tenantId,
   principalId: spine.principalId,
   production: hostConfig.production,

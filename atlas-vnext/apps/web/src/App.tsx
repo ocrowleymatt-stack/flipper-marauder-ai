@@ -37,7 +37,7 @@ import { playCue, prefersReducedMotion, setSoundEnabled, soundEnabled } from './
 import { applyStream, emptyView, runStatusLabel, viewFromSnapshot, type StreamView } from './stream';
 
 type InspectorTab = 'run' | 'files' | 'context' | 'tools';
-type Surface = 'conversation' | 'writing' | 'osint' | 'investigation' | 'research' | 'website' | 'music' | 'privacy';
+type Surface = 'conversation' | 'writing' | 'osint' | 'investigation' | 'research' | 'website' | 'music' | 'privacy' | 'operations';
 
 export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
@@ -376,6 +376,7 @@ export function App() {
     const q = paletteQuery.trim().toLowerCase();
     const surfaces: Array<{ id: Surface; label: string }> = [
       { id: 'conversation', label: 'Conversation' },
+      { id: 'operations', label: 'Help & Repair' },
       ...dungeons.filter((item) => item.featureAvailable).map((item) => ({ id: item.id as Surface, label: item.navLabel })),
     ];
     return [
@@ -497,6 +498,11 @@ export function App() {
                 Conversation
               </button>
             </li>
+            <li>
+              <button type="button" className={surface === 'operations' ? 'active' : ''} onClick={() => openSurface('operations')}>
+                Help & Repair
+              </button>
+            </li>
             {dungeons
               .filter((item) => item.featureAvailable)
               .map((item) => (
@@ -540,6 +546,16 @@ export function App() {
         </nav>
         {surface === 'writing' && projectId ? (
           <CaspaPanel
+            projectId={projectId}
+            files={files}
+            busy={busy}
+            setBusy={setBusy}
+            onStatus={setStatus}
+            onError={setError}
+          />
+        ) : surface === 'operations' ? (
+          <EstatePanel
+            dungeonId="operations"
             projectId={projectId}
             files={files}
             busy={busy}

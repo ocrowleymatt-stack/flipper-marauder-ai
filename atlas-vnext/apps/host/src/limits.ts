@@ -354,6 +354,7 @@ export class ResourceGuard {
 
 export function rateClassForPath(pathname: string, method = 'GET'): RateClass | null {
   if (pathname.startsWith('/api/health') || pathname.startsWith('/api/metrics')) return null;
+  if (pathname.startsWith('/api/ops/')) return 'tools';
   if (pathname.startsWith('/api/session')) return 'auth';
   if (pathname.includes('/generate') || (pathname.includes('/messages') && method === 'POST')) return 'generation';
   if (pathname.includes('/files') && (method === 'POST' || method === 'PUT')) return 'upload';

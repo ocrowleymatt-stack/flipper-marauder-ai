@@ -181,6 +181,10 @@ describe('files ingest, retrieval, context, artefacts', () => {
     const listed = await files.list(actor, project.id);
     expect(listed.find((file) => file.path === path)?.contentHash).toBe(stored.contentHash);
     expect(new TextDecoder().decode(await files.readBytes(actor, stored.id))).toBe('harbour original');
+    await expect(files.logicalDelete(actor, stored.id)).rejects.toMatchObject({
+      name: 'IngestionError',
+      message: /append-only/,
+    });
     await files.gcUnreferenced();
     expect(new TextDecoder().decode(await files.readBytes(actor, stored.id))).toBe('harbour original');
     await persistence.close();

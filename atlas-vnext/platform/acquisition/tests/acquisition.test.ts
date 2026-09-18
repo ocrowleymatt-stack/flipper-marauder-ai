@@ -356,6 +356,13 @@ describe('local data acquisition substrate', () => {
       httpStatus: 404,
       message: GENERIC_DENY,
     });
+    await expect(stack.acquisition.processNext(noRead, 'acq-worker')).rejects.toMatchObject({
+      httpStatus: 404,
+      message: GENERIC_DENY,
+      code: 'permission_denied',
+    });
+    const processed = await stack.acquisition.processNext(stack.actor, 'acq-worker');
+    expect(Array.isArray(processed) ? processed[0]?.id : processed?.id).toBe(source!.id);
     await stack.persistence.close();
   });
   it('rejects normalized duplicate paths before storing originals', async () => {
@@ -450,6 +457,8 @@ describe('local data acquisition substrate', () => {
       'authorised notes from the quay watch',
     );
 
+    await expect(stack.files.logicalDelete(stack.actor, original.id)).rejects.toBeInstanceOf(IngestionError);
+    await expect(stack.files.logicalDelete(stack.actor, manifest.id)).rejects.toBeInstanceOf(IngestionError);
     await stack.files.gcUnreferenced();
     expect(await stack.cas.has(original.contentHash)).toBe(true);
     expect(new TextDecoder().decode(await stack.files.readBytes(stack.actor, original.id))).toBe(

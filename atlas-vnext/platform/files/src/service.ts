@@ -252,6 +252,10 @@ export class FilesService {
     const scoped = this.scoped(actor, 'delete file');
     return this.persistence.run(async () => {
       const bound = this.persistence.forActor(scoped);
+      const existing = await bound.files.get(scoped, fileId);
+      if (existing && !existing.deletedAt && isAcquisitionStoredPath(existing.path)) {
+        throw new IngestionError('Acquisition originals are append-only and cannot be deleted.');
+      }
       const file = await bound.files.logicalDelete(scoped, fileId);
       await bound.casRefs.removeRef(scoped, 'file', file.id, file.contentHash);
       logPlatform('files.deleted', { tenantId: scoped.tenantId, fileId: file.id, contentHash: file.contentHash });

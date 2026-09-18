@@ -279,6 +279,29 @@ export class AcquisitionService {
       types: [ACQUISITION_JOB_PROCESS, FILE_JOB_INGEST],
     });
     if (!job) return null;
+    const workspaceId = job.workspaceId ?? job.projectId;
+    if (!workspaceId) {
+      await bound.jobs.fail(scoped, job.id, {
+        code: 'unsupported_job',
+        message: `Acquisition worker does not handle ${job.type}`,
+        retryable: false,
+      });
+      return null;
+    }
+    try {
+      await this.requireProject(actor, workspaceId, 'file.read');
+    } catch (err) {
+      if (err instanceof AcquisitionError && err.code === 'permission_denied') {
+        await bound.jobs.releaseWorker(workerId);
+        throw err;
+      }
+      await bound.jobs.fail(scoped, job.id, {
+        code: 'acquisition.process_failed',
+        message: err instanceof Error ? err.message : String(err),
+        retryable: true,
+      });
+      throw err;
+    }
     const fileIds =
       job.type === ACQUISITION_JOB_PROCESS
         ? ((job.checkpoint.fileIds as string[] | undefined) ?? [])
@@ -297,7 +320,9 @@ export class AcquisitionService {
       const files: FileRecord[] = [];
       for (const fileId of fileIds) {
         const file = await this.deps.files.getMetadata(scoped, fileId);
-        if (!file) throw new AcquisitionError('not_found', GENERIC_DENY, 404);
+        if (!file || file.workspaceId !== workspaceId) {
+          throw new AcquisitionError('not_found', GENERIC_DENY, 404);
+        }
         files.push((ALLOWED_MIME_TYPES as readonly string[]).includes(file.mimeType)
           ? await this.deps.files.extractAndChunk(scoped, fileId, job.id)
           : file);

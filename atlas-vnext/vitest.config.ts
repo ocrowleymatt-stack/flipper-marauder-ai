@@ -38,6 +38,7 @@ export default defineConfig({
       '@atlas-vnext/flags': resolve(root, 'platform/flags/src/index.ts'),
       '@atlas-vnext/storage': resolve(root, 'platform/storage/src/index.ts'),
       '@atlas-vnext/files': resolve(root, 'platform/files/src/index.ts'),
+      '@atlas-vnext/acquisition': resolve(root, 'platform/acquisition/src/index.ts'),
       '@atlas-vnext/context': resolve(root, 'platform/context/src/index.ts'),
       '@atlas-vnext/auth': resolve(root, 'platform/auth/src/index.ts'),
       '@atlas-vnext/tools': resolve(root, 'platform/tools/src/index.ts'),

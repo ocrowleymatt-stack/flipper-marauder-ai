@@ -7,7 +7,7 @@ export {
   FilesAccessError,
   CasMissingError,
 } from './errors.ts';
-export { sanitiseRelPath, displayNameFromPath } from './path.ts';
+export { sanitiseRelPath, displayNameFromPath, isAcquisitionStoredPath } from './path.ts';
 export { ALLOWED_MIME_TYPES, resolveMime, sniffMime } from './mime.ts';
 export type { AllowedMime } from './mime.ts';
 export { extractBytes, EXTRACTOR_ID, EXTRACTOR_VERSION, estimateTokens, buildSimplePdf, buildSimpleDocx } from './extract/index.ts';

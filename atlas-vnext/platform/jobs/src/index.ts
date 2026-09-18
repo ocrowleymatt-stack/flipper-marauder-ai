@@ -16,6 +16,7 @@ export type {
   JobAttemptOutcome,
   JobAttemptRecord,
   JobCheckpointRecord,
+  JobClaimFilter,
   JobEngine,
   JobEnqueueInput,
   JobEventSink,

@@ -366,7 +366,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       policy,
       collector: new NodePublicLookup(),
     });
-    investigation = new InvestigationService({ persistence, projects, files, runtime, authority, policy });
+    investigation = new InvestigationService({ persistence, projects, files, runtime, authority, policy, context });
     research = new ResearchService({ persistence, projects, files, context, runtime, authority, policy });
     websiteStudio = new WebsiteStudioService({ persistence, projects, files, runtime, authority, policy });
     music = new MusicService({ persistence, projects, files, runtime, authority, policy });

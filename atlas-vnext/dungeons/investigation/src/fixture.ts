@@ -37,17 +37,20 @@ export interface HarbourFixture {
     jordan: string;
     priya: string;
     alex: string;
+    jordanhHandle: string;
   };
   assertionIds: {
     mayaFriday: string;
     haleThursday: string;
     swipe: string;
     gps: string;
+    priyaMissing: string;
   };
   factId: string;
   contradictionId: string;
   hypothesisId: string;
   inferenceId: string;
+  claimId: string;
   findingIds: {
     presence: string;
     weekday: string;
@@ -257,10 +260,22 @@ Hale: I'm at the barrier now. Thursday 16:30 handoff.
       aliases: [],
       status: 'unresolved',
     }),
+    jordanhHandle: await input.ledger.addEntity(actor, {
+      caseId: created.id,
+      kind: 'account',
+      canonicalName: 'jordanh',
+      aliases: ['jordanh'],
+      status: 'unresolved',
+    }),
   };
 
   await input.ledger.addMention(actor, {
     entityId: entities.jordan.id,
+    evidenceObjectId: objects.messages.id,
+    surface: 'jordanh',
+  });
+  await input.ledger.addMention(actor, {
+    entityId: entities.jordanhHandle.id,
     evidenceObjectId: objects.messages.id,
     surface: 'jordanh',
   });
@@ -301,6 +316,11 @@ Hale: I'm at the barrier now. Thursday 16:30 handoff.
     assertedBy: 'device-gps',
     producer: 'deterministic',
     statement: 'Device jordanh at east quay 2026-03-12T16:22:40Z.',
+  });
+  const priyaMissing = await input.ledger.recordAssertion(actor, {
+    evidenceObjectId: objects.messages.id,
+    assertedBy: 'Priya Shah',
+    statement: 'I have not seen HL-4419 on the tray.',
   });
 
   const presenceFact = await input.ledger.recordFact(actor, {
@@ -362,10 +382,16 @@ Hale: I'm at the barrier now. Thursday 16:30 handoff.
     kind: 'called',
     epistemicClass: 'source_assertion',
   });
-  await input.ledger.addClaim(actor, {
+  const claim = await input.ledger.addClaim(actor, {
     caseId: created.id,
     kind: 'allegation',
     statement: 'Invoice HL-4419 was not posted to finance.',
+  });
+  await input.ledger.link(actor, {
+    caseId: created.id,
+    fromId: claim.id,
+    toId: priyaMissing.id,
+    role: 'supports',
   });
 
   const factFinding = await input.ledger.recordFinding(actor, {
@@ -428,17 +454,20 @@ Hale: I'm at the barrier now. Thursday 16:30 handoff.
       jordan: entities.jordan.id,
       priya: entities.priya.id,
       alex: entities.alex.id,
+      jordanhHandle: entities.jordanhHandle.id,
     },
     assertionIds: {
       mayaFriday: mayaFriday.id,
       haleThursday: haleThursday.id,
       swipe: swipeAssert.id,
       gps: gpsAssert.id,
+      priyaMissing: priyaMissing.id,
     },
     factId: presenceFact.id,
     contradictionId: contradiction.id,
     hypothesisId: hypothesis.id,
     inferenceId: inference.id,
+    claimId: claim.id,
     findingIds: {
       presence: factFinding.id,
       weekday: contradictionFinding.id,

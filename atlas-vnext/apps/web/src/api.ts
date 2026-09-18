@@ -684,6 +684,37 @@ export async function challengeCase(id: string, stance: 'advocate' | 'challenger
   );
 }
 
+export interface InvestigationViews {
+  timeline: {
+    caseId: string;
+    groups: Array<{
+      date: string;
+      items: Array<{ id: string; description: string; epistemicClass: string; occurredAt: string | null }>;
+    }>;
+    threads: Array<{ id: string; title: string; turns: Array<{ speaker: string; text: string; epistemicClass: string }> }>;
+  };
+  network: {
+    caseId: string;
+    nodes: Array<{ id: string; canonicalName: string; kind: string; status: string }>;
+    edges: Array<{ id: string; fromId: string; toId: string; kind: string; epistemicClass: string }>;
+    aliasCandidates: Array<{ id: string; surface: string; status: string; confidence: number }>;
+  };
+  matrix: {
+    caseId: string;
+    claims: Array<{ id: string; statement: string; kind: string }>;
+    cells: Array<{ claimId: string; evidenceId: string; role: string }>;
+    unmappedEvidenceIds: string[];
+    unsupportedClaimIds: string[];
+  };
+  relations: Array<{ kind: string; statement: string; epistemicClass: string }>;
+  gaps: Array<{ kind: string; statement: string }>;
+  hypothesisTests: Array<{ id: string; result: string; gap: string | null }>;
+}
+
+export async function getCaseViews(id: string): Promise<InvestigationViews> {
+  return parseJson(await fetch(`/api/cases/${encodeURIComponent(id)}/views`, { credentials: 'include' }));
+}
+
 export async function listResearch(projectId: string): Promise<DungeonRecord[]> {
   return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/research`, { credentials: 'include' }));
 }

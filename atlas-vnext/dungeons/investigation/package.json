@@ -7,6 +7,7 @@
   "dependencies": {
     "@atlas-vnext/contracts": "*",
     "@atlas-vnext/conversation": "*",
+    "@atlas-vnext/context": "*",
     "@atlas-vnext/files": "*",
     "@atlas-vnext/persistence": "*",
     "@atlas-vnext/permissions": "*",

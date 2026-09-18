@@ -113,9 +113,13 @@ async function handleInvestigation(
   actor: Awaited<ReturnType<typeof resolveActor>>,
 ): Promise<boolean> {
   const list = pathname.match(/^\/api\/projects\/([^/]+)\/cases$/);
+  const views = pathname.match(/^\/api\/cases\/([^/]+)\/views(?:\/(timeline|network|matrix))?$/);
+  const aliases = pathname.match(/^\/api\/cases\/([^/]+)\/alias-candidates$/);
+  const aliasAct = pathname.match(/^\/api\/cases\/([^/]+)\/alias-candidates\/([^/]+)\/(accept|reject|revert)$/);
+  const tests = pathname.match(/^\/api\/cases\/([^/]+)\/hypothesis-tests$/);
   const item = pathname.match(/^\/api\/cases\/([^/]+)$/);
   const challenge = pathname.match(/^\/api\/cases\/([^/]+)\/challenge$/);
-  if (!list && !item && !challenge) return false;
+  if (!list && !item && !challenge && !views && !aliases && !aliasAct && !tests) return false;
   const resolved = requireActor(actor);
   const service = requireService(options.investigation, 'investigation');
   const writingActor = { tenantId: resolved.tenantId, principalId: resolved.principalId };
@@ -134,6 +138,45 @@ async function handleInvestigation(
         question: typeof body.question === 'string' ? body.question : '',
         findingIds: Array.isArray(body.findingIds) ? body.findingIds.map(String) : [],
       }),
+    );
+    return true;
+  }
+  if (req.method === 'GET' && views) {
+    const snapshot = await service.analysis.views(writingActor, decodeURIComponent(views[1]!));
+    const named = views[2];
+    json(
+      res,
+      200,
+      named === 'timeline' ? snapshot.timeline : named === 'network' ? snapshot.network : named === 'matrix' ? snapshot.matrix : snapshot,
+    );
+    return true;
+  }
+  if (req.method === 'POST' && aliases) {
+    json(res, 201, await service.analysis.proposeAliasCandidates(writingActor, decodeURIComponent(aliases[1]!)));
+    return true;
+  }
+  if (req.method === 'POST' && aliasAct) {
+    const id = decodeURIComponent(aliasAct[2]!);
+    const action = aliasAct[3];
+    const result =
+      action === 'accept'
+        ? await service.analysis.acceptAlias(writingActor, id)
+        : action === 'reject'
+          ? await service.analysis.rejectAlias(writingActor, id)
+          : await service.analysis.revertAlias(writingActor, id);
+    json(res, 200, result);
+    return true;
+  }
+  if (req.method === 'POST' && tests) {
+    const body = await readJson(req, options.maxRequestBytes);
+    json(
+      res,
+      201,
+      await service.analysis.testHypothesis(
+        writingActor,
+        decodeURIComponent(tests[1]!),
+        typeof body.hypothesisId === 'string' ? body.hypothesisId : '',
+      ),
     );
     return true;
   }

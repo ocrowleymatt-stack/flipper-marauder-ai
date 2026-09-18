@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -112,5 +112,9 @@ describe('staging installer isolation', () => {
     expect(compose).toContain('atlas_vnext_staging_session');
     expect(compose).toMatch(/127\.0\.0\.1\}:8788:8787/);
     expect(compose).not.toContain('43101:43101');
+  });
+
+  it('keeps the documented installer executable', () => {
+    expect(statSync(join(root, 'ops/staging/install-alongside.sh')).mode & 0o111).toBeTruthy();
   });
 });

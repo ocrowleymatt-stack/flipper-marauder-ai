@@ -11,6 +11,8 @@ import {
   generateSite,
   getEffectivePolicy,
   getCaseViews,
+  getDoctorReport,
+  applyRepair,
   listCases,
   listCompositions,
   listOsintTargets,
@@ -26,6 +28,7 @@ import {
   type DungeonRecord,
   type EffectivePolicyView,
   type InvestigationViews,
+  type DoctorReport,
   type PolicyExplanation,
   type ProjectFile,
 } from './api';
@@ -50,6 +53,9 @@ export function EstatePanel({
 }) {
   if (dungeonId === 'privacy') {
     return <PrivacyPanel busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
+  }
+  if (dungeonId === 'operations') {
+    return <OperationsPanel busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
   }
   if (!projectId) {
     return (
@@ -78,6 +84,95 @@ export function EstatePanel({
         <h3>Unknown dungeon</h3>
         <p>The host catalogue did not provide a surface for this id.</p>
       </div>
+    </main>
+  );
+}
+
+function OperationsPanel({
+  busy,
+  setBusy,
+  onStatus,
+  onError,
+}: {
+  busy: boolean;
+  setBusy: (value: boolean) => void;
+  onStatus: (value: string) => void;
+  onError: (value: string | null) => void;
+}) {
+  const [report, setReport] = useState<DoctorReport | null>(null);
+  const [identity, setIdentity] = useState<{ sourceSha: string; buildId: string | null; profile: string } | null>(null);
+
+  const reload = useCallback(async () => {
+    setReport(await getDoctorReport());
+  }, []);
+
+  useEffect(() => {
+    void reload().catch((err) => onError(err instanceof Error ? err.message : String(err)));
+  }, [reload, onError]);
+
+  useEffect(() => {
+    void fetch('/api/health', { credentials: 'include' })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const body = (await response.json()) as { identity?: { sourceSha: string; buildId: string | null; profile: string } };
+        if (body.identity) setIdentity(body.identity);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  async function onApply(id: string) {
+    setBusy(true);
+    onError(null);
+    try {
+      const result = await applyRepair(id);
+      onStatus(`Repair ${result.proposalId}: ${result.status} (${result.authorityDecision}).`);
+      await reload();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="workspace" aria-label="Help and Repair">
+      <section className="stack">
+        <h2>System Doctor</h2>
+        <p className="hint">Deterministic checks. AI does not apply repairs. Authority stays server-side.</p>
+        <p>
+          State: <span className="pill">{report?.state ?? 'loading'}</span>
+          {identity ? (
+            <>
+              {' '}
+              SHA: <span className="pill">{identity.sourceSha.slice(0, 12)}</span>
+              {' '}
+              profile: <span className="pill">{identity.profile}</span>
+            </>
+          ) : null}
+        </p>
+        <ul>
+          {(report?.checks ?? []).map((check) => (
+            <li key={check.id}>
+              <span className="pill">{check.state}</span> {check.id}: {check.summary}
+            </li>
+          ))}
+        </ul>
+        {(report?.proposals ?? []).length > 0 ? (
+          <>
+            <h3>Proposed repairs</h3>
+            <ul>
+              {report!.proposals.map((proposal) => (
+                <li key={proposal.id}>
+                  {proposal.title} ({proposal.repairClass})
+                  <button type="button" className="ghost compact" disabled={busy} onClick={() => void onApply(proposal.id)}>
+                    Apply
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : null}
+      </section>
     </main>
   );
 }

@@ -51,6 +51,8 @@ import {
 } from './workbench.ts';
 import { handleCaspa } from './caspa.ts';
 import { handleEstate } from './estate.ts';
+import { handleOperations } from './operations.ts';
+import type { OperationsDoctor, RepairExecutor } from '@atlas-vnext/operations';
 import type { WritingService } from '@atlas-vnext/dungeon-writing';
 import type { OsintService } from '@atlas-vnext/dungeon-osint';
 import type { InvestigationService } from '@atlas-vnext/dungeon-investigation';
@@ -92,6 +94,8 @@ export interface HostOptions {
   websiteStudio?: WebsiteStudioService | null;
   music?: MusicService | null;
   privacy?: PrivacyService | null;
+  doctor?: OperationsDoctor | null;
+  repairs?: RepairExecutor | null;
   dungeons?: DungeonRegistration[];
   tenantId?: string;
   principalId?: string;
@@ -212,6 +216,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
         ready,
         dependencies: probed?.dependencies ?? null,
         ...SINGLE_INSTANCE_TOPOLOGY,
+        identity: {
+          sourceSha: process.env.ATLAS_SOURCE_SHA ?? 'unknown',
+          buildId: process.env.ATLAS_BUILD_ID ?? null,
+          profile: process.env.ATLAS_ENV ?? (options.production ? 'production' : 'dev'),
+        },
       });
       return;
     }
@@ -228,6 +237,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
     if (await handleWorkbench(req, res, options)) return;
     if (await handleCaspa(req, res, options)) return;
     if (await handleEstate(req, res, options)) return;
+    if (await handleOperations(req, res, options)) return;
 
     const conversationActor = await resolveActor(req, options);
     if (conversationActor) {

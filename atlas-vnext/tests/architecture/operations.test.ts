@@ -18,4 +18,17 @@ describe('operations package boundaries', () => {
       expect(mod.fetchCalls).toBe(false);
     }
   });
+
+  it('keeps Help & Repair on the host, not as a dungeon', () => {
+    const report = analyzeGraph(root);
+    const hostOps = report.modules.filter((mod) => mod.relPath.replaceAll('\\', '/') === 'apps/host/src/operations.ts');
+    expect(hostOps.length).toBe(1);
+    for (const mod of hostOps) {
+      expect(mod.specifiers.some((item) => item === '@atlas-vnext/nexus' || item === '@atlas-vnext/execution')).toBe(
+        false,
+      );
+      expect(mod.specifiers.some((item) => item.startsWith('@atlas-vnext/dungeon-'))).toBe(false);
+      expect(mod.dungeon).toBeUndefined();
+    }
+  });
 });

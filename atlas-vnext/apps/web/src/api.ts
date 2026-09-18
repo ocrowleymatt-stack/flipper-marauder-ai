@@ -715,6 +715,34 @@ export async function getCaseViews(id: string): Promise<InvestigationViews> {
   return parseJson(await fetch(`/api/cases/${encodeURIComponent(id)}/views`, { credentials: 'include' }));
 }
 
+export interface DoctorReport {
+  state: string;
+  checks: Array<{ id: string; state: string; summary: string }>;
+  proposals: Array<{ id: string; title: string; repairClass: string }>;
+  notes: Array<{ kind: string; summary: string }>;
+}
+
+export interface RepairExecution {
+  proposalId: string;
+  status: string;
+  authorityDecision: string;
+}
+
+export async function getDoctorReport(): Promise<DoctorReport> {
+  return parseJson(await fetch('/api/ops/doctor', { credentials: 'include' }));
+}
+
+export async function applyRepair(proposalId: string): Promise<RepairExecution> {
+  return parseJson(
+    await fetch(`/api/ops/repairs/${encodeURIComponent(proposalId)}/apply`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: '{}',
+    }),
+  );
+}
+
 export async function listResearch(projectId: string): Promise<DungeonRecord[]> {
   return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/research`, { credentials: 'include' }));
 }

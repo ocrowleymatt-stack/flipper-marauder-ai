@@ -37,10 +37,13 @@ describe('host health and security', () => {
       ok: boolean;
       ready: boolean;
       dependencies: { postgres: string };
+      identity?: { sourceSha: string; profile: string };
     };
     expect(health.ok).toBe(true);
     expect(health.ready).toBe(true);
     expect(health.dependencies.postgres).toBe('not_configured');
+    expect(typeof health.identity?.sourceSha).toBe('string');
+    expect(typeof health.identity?.profile).toBe('string');
     spine.shutdown.begin();
     const stopped = await fetch(`${bound.url}/api/health/ready`);
     expect(stopped.status).toBe(503);
@@ -77,5 +80,61 @@ describe('host health and security', () => {
     expect(missing.status).toBe(404);
     const body = (await missing.json()) as { error: string };
     expect(body.error).toBe('Permission denied.');
+  });
+
+  it('exposes System Doctor only to the session principal and never auto-applies consequential repairs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-host-'));
+    const spine = await composeSpine({ dataPath: join(dir, 'state.json'), mode: 'mock' });
+    const server = createHost({
+      runtime: spine.runtime,
+      auth: spine.auth,
+      doctor: spine.doctor,
+      repairs: spine.repairs,
+      tenantId: spine.tenantId,
+      principalId: spine.principalId,
+    });
+    servers.push(server);
+    const bound = await listen(server, 0, '127.0.0.1');
+    const anon = await fetch(`${bound.url}/api/ops/doctor`);
+    expect(anon.status).toBe(401);
+    const issued = await spine.auth.issueSession({
+      principalId: spine.principalId,
+      tenantId: spine.tenantId,
+    });
+    const headers = {
+      cookie: spine.auth.cookieHeader(issued.session.id),
+      'x-atlas-csrf': issued.csrfToken,
+    };
+    const doctor = await fetch(`${bound.url}/api/ops/doctor`, { headers });
+    expect(doctor.status).toBe(200);
+    const report = (await doctor.json()) as { state: string; checks: Array<{ id: string }> };
+    expect(typeof report.state).toBe('string');
+    expect(report.checks.some((check) => check.id === 'architecture')).toBe(true);
+    const apply = await fetch(`${bound.url}/api/ops/repairs/repair.migrate_schema/apply`, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(apply.status).toBe(200);
+    const execution = (await apply.json()) as { status: string; authorityDecision: string };
+    expect(execution.status === 'denied' || execution.status === 'proposed').toBe(true);
+    expect(execution.status).not.toBe('applied');
+    const unknown = await fetch(`${bound.url}/api/ops/repairs/not-a-repair/apply`, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(unknown.status).toBe(404);
+  });
+
+  it('honours ATLAS_SESSION_COOKIE so staging cannot collide with original Atlas cookies', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-host-cookie-'));
+    const spine = await composeSpine({
+      dataPath: join(dir, 'state.json'),
+      mode: 'mock',
+      env: { ATLAS_SESSION_COOKIE: 'atlas_vnext_staging_session' },
+    });
+    expect(spine.auth.cookieName).toBe('atlas_vnext_staging_session');
+    expect(spine.auth.cookieHeader('sess_test').startsWith('atlas_vnext_staging_session=')).toBe(true);
   });
 });

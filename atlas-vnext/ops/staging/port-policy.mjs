@@ -51,9 +51,9 @@ export function ssOutputBindsPort(ssOutput, port) {
 }
 
 /**
- * True when the inspected container is running and publishes `hostPort`
- * via live NetworkSettings.Ports or HostConfig.PortBindings.
- * Stopped containers do not occupy the host port.
+ * True when the inspected container is running and currently publishes `hostPort`
+ * via live NetworkSettings.Ports. HostConfig.PortBindings is configured intent,
+ * not occupancy, so it is ignored. Stopped containers do not occupy the host port.
  * @param {unknown} inspect
  * @param {number} hostPort
  */
@@ -64,19 +64,15 @@ export function dockerInspectPublishesHostPort(inspect, hostPort) {
     if (!doc || typeof doc !== 'object') continue;
     const state = /** @type {{ State?: { Running?: boolean } }} */ (doc).State;
     if (state && state.Running === false) continue;
-    const record = /** @type {{ NetworkSettings?: { Ports?: unknown }, HostConfig?: { PortBindings?: unknown } }} */ (
-      doc
-    );
-    const maps = [record.NetworkSettings?.Ports, record.HostConfig?.PortBindings];
-    for (const map of maps) {
-      if (!map || typeof map !== 'object') continue;
-      for (const entries of Object.values(/** @type {Record<string, unknown>} */ (map))) {
-        if (!Array.isArray(entries)) continue;
-        for (const entry of entries) {
-          if (!entry || typeof entry !== 'object') continue;
-          if (String(/** @type {{ HostPort?: unknown }} */ (entry).HostPort ?? '') === wanted) {
-            return true;
-          }
+    const record = /** @type {{ NetworkSettings?: { Ports?: unknown } }} */ (doc);
+    const map = record.NetworkSettings?.Ports;
+    if (!map || typeof map !== 'object') continue;
+    for (const entries of Object.values(/** @type {Record<string, unknown>} */ (map))) {
+      if (!Array.isArray(entries)) continue;
+      for (const entry of entries) {
+        if (!entry || typeof entry !== 'object') continue;
+        if (String(/** @type {{ HostPort?: unknown }} */ (entry).HostPort ?? '') === wanted) {
+          return true;
         }
       }
     }

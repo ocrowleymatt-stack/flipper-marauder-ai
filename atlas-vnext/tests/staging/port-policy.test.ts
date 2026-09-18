@@ -88,6 +88,46 @@ describe('staging port policy', () => {
     expect(decideStagingPort(occupancy).action).toBe('abort');
   });
 
+  it('does not treat HostConfig.PortBindings as live occupancy', () => {
+    const inspect = [
+      {
+        Name: `/${MANAGED_CONTAINER}`,
+        State: { Running: true },
+        HostConfig: {
+          PortBindings: {
+            '8787/tcp': [{ HostIp: '127.0.0.1', HostPort: String(STAGING_PORT) }],
+          },
+        },
+        NetworkSettings: { Ports: null },
+      },
+    ];
+    expect(dockerInspectPublishesHostPort(inspect, STAGING_PORT)).toBe(false);
+    const occupancy = probeOccupancy({
+      readSs: () => SS_STAGING,
+      inspectContainer: () => inspect,
+    });
+    expect(occupancy).toEqual({ portBound: true, managedPublishesPort: false });
+    expect(decideStagingPort(occupancy).action).toBe('abort');
+  });
+
+  it('treats live NetworkSettings.Ports as occupancy without HostConfig', () => {
+    const inspect = [
+      {
+        Name: `/${MANAGED_CONTAINER}`,
+        State: { Running: true },
+        NetworkSettings: {
+          Ports: { '8787/tcp': [{ HostIp: '127.0.0.1', HostPort: String(STAGING_PORT) }] },
+        },
+      },
+    ];
+    expect(dockerInspectPublishesHostPort(inspect, STAGING_PORT)).toBe(true);
+    const occupancy = probeOccupancy({
+      readSs: () => SS_STAGING,
+      inspectContainer: () => inspect,
+    });
+    expect(decideStagingPort(occupancy).action).toBe('update');
+  });
+
   it('fails closed when ss cannot inspect host sockets', () => {
     expect(() =>
       probeOccupancy({

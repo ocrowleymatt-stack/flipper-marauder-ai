@@ -316,8 +316,9 @@ describe('Wave 1 security', () => {
       }),
     });
     const text = await assistantText(response);
-    expect(text).not.toMatch(/Sources inspected/i);
-    expect(text).not.toMatch(/Strongest finding:/i);
+    expect(response.ok).toBe(true);
+    expect(text).toMatch(/Public network access denied/i);
+    expect(text).not.toMatch(/https?:\/\//);
 
     const records = await spine.persistence
       ?.forActor({ tenantId: spine.tenantId, principalId: spine.principalId })

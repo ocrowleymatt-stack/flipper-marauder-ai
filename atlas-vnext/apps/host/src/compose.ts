@@ -46,7 +46,7 @@ import {
 import { WritingService } from '@atlas-vnext/dungeon-writing';
 import { OsintService } from '@atlas-vnext/dungeon-osint';
 import { InvestigationService } from '@atlas-vnext/dungeon-investigation';
-import { ResearchService } from '@atlas-vnext/dungeon-research';
+import { ResearchError, ResearchService } from '@atlas-vnext/dungeon-research';
 import { WebsiteStudioService } from '@atlas-vnext/dungeon-website';
 import { MusicService } from '@atlas-vnext/dungeon-music';
 import { PrivacyService } from '@atlas-vnext/dungeon-privacy';
@@ -409,15 +409,25 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     runtime.setWorkHandler(async (input) => {
       const actorPrincipal = input.principalId?.trim();
       if (!actorPrincipal) return { handled: false };
-      return research!.maybeRunFromConversation(
-        { tenantId: input.tenantId?.trim() || tenantId, principalId: actorPrincipal },
-        {
-          conversationId: input.conversationId,
-          projectId: input.projectId,
-          question: input.content,
-          signal: input.signal,
-        },
-      );
+      try {
+        return await research!.maybeRunFromConversation(
+          { tenantId: input.tenantId?.trim() || tenantId, principalId: actorPrincipal },
+          {
+            conversationId: input.conversationId,
+            projectId: input.projectId,
+            question: input.content,
+            signal: input.signal,
+          },
+        );
+      } catch (err) {
+        if (err instanceof ResearchError && err.code === 'insufficient_evidence') {
+          return { handled: true, text: err.message };
+        }
+        if (err instanceof ResearchError && (err.code === 'permission_denied' || err.code === 'not_found')) {
+          return { handled: false };
+        }
+        throw err;
+      }
     });
     websiteStudio = new WebsiteStudioService({ persistence, projects, files, runtime, authority, policy });
     music = new MusicService({ persistence, projects, files, runtime, authority, policy });

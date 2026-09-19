@@ -30,6 +30,16 @@ describe('execution failure classification', () => {
     expect(httpFailure('anthropic', 403, 'unauthorized').code).toBe('authentication_failure');
   });
 
+  it('classifies xAI content-filter HTTP 400 as content_filter, not auth', () => {
+    const body =
+      '{ "code": "Client specified an invalid argument", "error": "The response was filtered by the content filter. Please modify the prompt and try again." }';
+    expect(httpFailure('xai', 400, body).code).toBe('content_filter');
+    expect(httpFailure('xai', 400, body).retryable).toBe(false);
+    expect(classifyProviderFailure(new Error('OpenAI-compatible request failed (400): content filter')).code).toBe(
+      'content_filter',
+    );
+  });
+
   it('does not treat generic HTTP 400 or invalid-argument as authentication failure', () => {
     expect(httpFailure('xai', 400, '{"code":"invalid-argument","error":"messages is required"}').code).toBe(
       'provider_error',
@@ -44,7 +54,6 @@ describe('execution failure classification', () => {
       'provider_error',
     );
   });
-
   it('keeps context overflow and unsupported 400s on their existing codes', () => {
     expect(httpFailure('openai', 400, 'maximum context length exceeded').code).toBe('context_overflow');
     expect(httpFailure('openai', 400, 'unsupported model').code).toBe('unsupported');

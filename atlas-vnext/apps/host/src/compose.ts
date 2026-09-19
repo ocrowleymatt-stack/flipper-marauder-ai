@@ -47,7 +47,7 @@ import { WritingService } from '@atlas-vnext/dungeon-writing';
 import { OsintService } from '@atlas-vnext/dungeon-osint';
 import { InvestigationService } from '@atlas-vnext/dungeon-investigation';
 import { ResearchError, ResearchService } from '@atlas-vnext/dungeon-research';
-import { WebsiteStudioService } from '@atlas-vnext/dungeon-website';
+import { WebsiteError, WebsiteStudioService, looksLikeWebsiteFollowup, looksLikeWebsiteRequest } from '@atlas-vnext/dungeon-website';
 import { MusicService } from '@atlas-vnext/dungeon-music';
 import { PrivacyService } from '@atlas-vnext/dungeon-privacy';
 import { EnvFlagStore, type KillSwitchState } from '@atlas-vnext/flags';
@@ -64,6 +64,7 @@ import { NodePublicLookup } from './collectors.ts';
 import { NodeFederatedSearch, searchEnginesFromEnv } from './search.ts';
 import { FixtureInspect, NodeSourceInspect } from './inspect.ts';
 import { productionToolAdapters } from './web-tools.ts';
+import { NodeSiteGenerate } from './site-generate.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
@@ -409,19 +410,42 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       search: searchPort,
       inspect: inspectPort,
     });
+    websiteStudio = new WebsiteStudioService({
+      persistence,
+      projects,
+      files,
+      runtime,
+      authority,
+      policy,
+      generate: new NodeSiteGenerate(router, plane.broker),
+    });
     runtime.setWorkHandler(async (input) => {
       const actorPrincipal = input.principalId?.trim();
       if (!actorPrincipal) return { handled: false };
-      try {
-        return await research!.maybeRunFromConversation(
-          { tenantId: input.tenantId?.trim() || tenantId, principalId: actorPrincipal },
-          {
+      const actor = { tenantId: input.tenantId?.trim() || tenantId, principalId: actorPrincipal };
+      if (looksLikeWebsiteRequest(input.content) || looksLikeWebsiteFollowup(input.content)) {
+        try {
+          const website = await websiteStudio!.maybeRunFromConversation(actor, {
             conversationId: input.conversationId,
             projectId: input.projectId,
             question: input.content,
             signal: input.signal,
-          },
-        );
+          });
+          if (website.handled) return website;
+        } catch (err) {
+          if (err instanceof WebsiteError && (err.code === 'permission_denied' || err.code === 'not_found')) {
+            return { handled: true, failed: true, text: err.message };
+          }
+          throw err;
+        }
+      }
+      try {
+        return await research!.maybeRunFromConversation(actor, {
+          conversationId: input.conversationId,
+          projectId: input.projectId,
+          question: input.content,
+          signal: input.signal,
+        });
       } catch (err) {
         if (err instanceof ResearchError && err.code === 'insufficient_evidence') {
           return { handled: true, failed: true, text: err.message };
@@ -435,7 +459,6 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
         throw err;
       }
     });
-    websiteStudio = new WebsiteStudioService({ persistence, projects, files, runtime, authority, policy });
     music = new MusicService({ persistence, projects, files, runtime, authority, policy });
   } else {
     store = openDurableStore(options.dataPath);

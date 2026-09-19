@@ -606,7 +606,7 @@ function WebsitePanel({
       <header className="thread-header">
         <div>
           <h2>Website</h2>
-          <p className="hint">Create a site for this project. Preview is temporary. Publishing is an owner action.</p>
+          <p className="hint">Ask Atlas in chat to build a site, or create one here. Preview is temporary. Publishing is an owner action.</p>
         </div>
       </header>
       <section className="estate-body">

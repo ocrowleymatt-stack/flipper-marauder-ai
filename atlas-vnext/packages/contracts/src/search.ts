@@ -73,6 +73,15 @@ export interface SourceInspectPort {
   inspect(input: { url: string; signal?: AbortSignal }): Promise<InspectedSource>;
 }
 
+/** Host-injected HTML generation. Dungeons must not call Execution or fetch. */
+export interface SiteGeneratePort {
+  generateHtml(input: {
+    brief: string;
+    signal?: AbortSignal;
+    privacy?: 'any' | 'local_only';
+  }): Promise<{ html: string; model?: string }>;
+}
+
 export interface ConversationHistoryTurn {
   role: 'user' | 'assistant' | 'system';
   content: string;

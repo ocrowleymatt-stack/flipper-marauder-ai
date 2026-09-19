@@ -55,7 +55,7 @@ export {
 } from './tool-call-buffer.ts';
 export type { OpenAIToolCallDelta, GeminiFunctionCallPart } from './tool-call-buffer.ts';
 export { sanitizeText, sanitizeUnknown } from './sanitize.ts';
-export { ProviderHttpError, httpFailure, connectionFailure, isRetryableError, classifyProviderFailure, isAuthenticationFailureBody } from './errors.ts';
+export { ProviderHttpError, httpFailure, connectionFailure, isRetryableError, classifyProviderFailure, isAuthenticationFailureBody, isContentFilterBody } from './errors.ts';
 export { RuntimeScheduler, waitingCopy, MAX_KEEP_WARM_SECONDS } from './runtime/scheduler.ts';
 export { MAX_RUNTIME_EVENTS } from './runtime/observer.ts';
 export type { RuntimeJobRequest, RuntimeSchedulerOptions } from './runtime/scheduler.ts';

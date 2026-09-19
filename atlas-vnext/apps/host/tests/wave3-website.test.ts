@@ -147,6 +147,9 @@ describe('Wave 3 Website Studio recovery', () => {
 
     const preview = await fetch(`${url}/api/sites/${sites[0]!.id}/preview`, { headers: { cookie: session.cookie } });
     expect(preview.status).toBe(200);
+    expect(preview.headers.get('content-type')).toMatch(/text\/html/);
+    expect(preview.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(preview.headers.get('content-security-policy')).toMatch(/sandbox/);
     const html = await preview.text();
     expect(html).toMatch(/<!doctype html>/i);
     expect(html).toMatch(/circus/i);

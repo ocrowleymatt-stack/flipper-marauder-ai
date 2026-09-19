@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { WebsiteStudioService } from '../src/index.ts';
+import { WebsiteStudioService, assembleSiteHtml, escapeHtml } from '../src/index.ts';
 import { closePersistence, openDungeonStack } from '../../../tests/helpers/dungeon-stack.ts';
 import type { PlatformPersistence } from '@atlas-vnext/persistence';
 
@@ -138,6 +138,54 @@ describe('Website Studio dungeon', () => {
     });
     expect(follow.handled).toBe(true);
     expect(follow.text).toMatch(/preview is ready/i);
+  });
+
+  it('escapes brief HTML in the assembler instead of injecting it', () => {
+    expect(escapeHtml(`<img src=x onerror=alert(1)> & "quotes"`)).toBe(
+      '&lt;img src=x onerror=alert(1)&gt; &amp; &quot;quotes&quot;',
+    );
+    const html = assembleSiteHtml('Build a website about <script>alert(1)</script> tents');
+    expect(html).toMatch(/&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+    expect(html).not.toMatch(/<script>alert\(1\)<\/script>/);
+  });
+
+  it('reuses the canonical project site and fails closed on abort', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const website = new WebsiteStudioService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      runtime: stack.runtime,
+      authority: stack.authority,
+      policy: stack.policy,
+    });
+    const conversation = await stack.runtime.createConversation({ title: 'Chat', projectId: stack.project.id });
+    await website.maybeRunFromConversation(stack.actor, {
+      conversationId: conversation.id,
+      projectId: stack.project.id,
+      question: 'Build a website about a neighbourhood circus with tents and tickets',
+    });
+    await website.maybeRunFromConversation(stack.actor, {
+      conversationId: conversation.id,
+      projectId: stack.project.id,
+      question: 'Build a website about cocoa and lanterns for the same circus',
+    });
+    expect(await website.list(stack.actor, stack.project.id)).toHaveLength(1);
+    const rebuilt = await website.maybeRunFromConversation(stack.actor, {
+      conversationId: conversation.id,
+      projectId: stack.project.id,
+      question: 'Rebuild the site',
+    });
+    expect(rebuilt.handled).toBe(true);
+    expect(rebuilt.text).toMatch(/Website preview ready/i);
+    const cancelled = await website.maybeRunFromConversation(stack.actor, {
+      conversationId: conversation.id,
+      projectId: stack.project.id,
+      question: 'Build a website about a cancelled brief with tents',
+      signal: AbortSignal.abort(),
+    });
+    expect(cancelled).toEqual({ handled: true, failed: true, text: 'Website generation was cancelled.' });
   });
 
   it('does not treat ordinary research questions as website work', async () => {

@@ -295,7 +295,13 @@ async function handleWebsite(
   }
   if (req.method === 'GET' && preview) {
     const previewBody = await service.preview(writingActor, decodeURIComponent(preview[1]!));
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-Atlas-Concern': 'preview_deployment' });
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; sandbox",
+      'Cache-Control': 'no-store',
+      'X-Atlas-Concern': 'preview_deployment',
+    });
     res.end(previewBody.html);
     return true;
   }

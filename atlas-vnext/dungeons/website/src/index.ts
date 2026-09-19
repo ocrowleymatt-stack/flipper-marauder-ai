@@ -126,11 +126,7 @@ export class WebsiteStudioService {
     }
     if (!looksLikeWebsiteRequest(input.question)) return { handled: false };
     try {
-      const site = await this.create(actor, {
-        projectId: input.projectId,
-        name: titleFromBrief(input.question),
-        brief: input.question,
-      });
+      const site = await this.canonicalSite(actor, input.projectId, input.question);
       const generated = await this.generate(actor, site.id, input.question, {
         conversationId: input.conversationId,
         signal: input.signal,
@@ -139,6 +135,9 @@ export class WebsiteStudioService {
     } catch (err) {
       if (err instanceof WebsiteError && (err.code === 'permission_denied' || err.code === 'not_found')) {
         return { handled: true, failed: true, text: err.message };
+      }
+      if (isAbortError(err)) {
+        return { handled: true, failed: true, text: 'Website generation was cancelled.' };
       }
       throw err;
     }
@@ -150,6 +149,7 @@ export class WebsiteStudioService {
     brief: string,
     options: { conversationId?: string | null; signal?: AbortSignal } = {},
   ): Promise<SiteGenerateResult> {
+    if (options.signal?.aborted) throw new Error('aborted');
     const site = await this.get(actor, id);
     this.authorize(actor, 'artifact.write', site.workspaceId, site.tenantId);
     const policy = await this.effectivePolicy(actor);
@@ -308,6 +308,11 @@ export class WebsiteStudioService {
     if (!siteId) return { handled: false };
     const preview = await this.preview(actor, siteId);
     const q = input.question.toLowerCase();
+    if (/\b(regenerate|try again|rebuild)\b/.test(q)) {
+      const brief = typeof latest.payload.brief === 'string' && latest.payload.brief.trim() ? latest.payload.brief : latest.title;
+      const generated = await this.generate(actor, siteId, brief, { conversationId: input.conversationId });
+      return { handled: true, text: generated.reportText };
+    }
     if (/\bpublish|promote\b/.test(q)) {
       return {
         handled: true,
@@ -321,10 +326,18 @@ export class WebsiteStudioService {
     return { handled: true, text: `Preview is ready for ${latest.title}. ${excerpt}` };
   }
 
+  private async canonicalSite(actor: WebsiteActor, projectId: string, brief: string) {
+    const existing = await this.list(actor, projectId);
+    const latest = [...existing].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (latest) return latest;
+    return this.create(actor, { projectId, name: titleFromBrief(brief), brief });
+  }
+
   private async produceHtml(
     brief: string,
     signal?: AbortSignal,
   ): Promise<{ html: string; source: 'model' | 'assembler'; audit: SiteAudit; note?: string }> {
+    if (signal?.aborted) throw new Error('aborted');
     let note: string | undefined;
     let html = '';
     let source: 'model' | 'assembler' = 'assembler';
@@ -334,6 +347,7 @@ export class WebsiteStudioService {
         html = sanitizeSiteHtml(generated.html);
         source = 'model';
       } catch (err) {
+        if (isAbortError(err) || signal?.aborted) throw isAbortError(err) ? err : new Error('aborted');
         source = 'assembler';
         note = isContentFilterError(err)
           ? 'The model declined this brief. Atlas assembled a first draft instead of failing the run.'
@@ -376,7 +390,11 @@ export class WebsiteStudioService {
 }
 
 export { looksLikeWebsiteFollowup, looksLikeWebsiteRequest, titleFromBrief } from './intent.ts';
-export { assembleSiteHtml } from './assemble.ts';
+export { assembleSiteHtml, escapeHtml } from './assemble.ts';
 export { auditSiteHtml, sanitizeSiteHtml } from './audit.ts';
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && /aborted|AbortError/i.test(err.name + err.message);
+}
 
 export type { DungeonRecordRow };

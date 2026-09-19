@@ -2,10 +2,10 @@ import { titleFromBrief } from './intent.ts';
 
 export function escapeHtml(value: string): string {
   return value
-    .replace(/&/g, '&')
-    .replace(/</g, '<')
-    .replace(/>/g, '>')
-    .replace(/"/g, '"')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
 

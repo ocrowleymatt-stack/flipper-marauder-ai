@@ -661,6 +661,29 @@ select,
   grid-template-columns: 200px minmax(0, 1fr) 240px;
 }
 
+.caspa-surfaces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.caspa-surfaces button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-radius: 999px;
+}
+
+.caspa-surfaces button.active {
+  color: var(--text);
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+
 .caspa-list,
 .caspa-editor,
 .caspa-meta {

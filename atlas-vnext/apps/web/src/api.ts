@@ -600,7 +600,7 @@ export async function getDocumentProvenance(id: string): Promise<WritingProvenan
 
 export async function* generateDocument(
   id: string,
-  input: { operation: string; instruction: string; fileIds: string[]; expectedRevision: number },
+  input: { operation: string; instruction: string; fileIds: string[]; expectedRevision: number; selection?: string },
 ): AsyncGenerator<StreamEvent> {
   const response = await fetch(`/api/documents/${encodeURIComponent(id)}/generate`, {
     method: 'POST',
@@ -642,7 +642,7 @@ export async function listCompanions(id: string): Promise<DungeonRecord[]> {
 
 export async function saveCompanion(
   id: string,
-  input: { kind: 'outline' | 'canon' | 'claims' | 'quality'; title: string; text: string },
+  input: { kind: string; title: string; text: string },
 ): Promise<DungeonRecord> {
   return parseJson(
     await fetch(`/api/documents/${encodeURIComponent(id)}/companions`, {
@@ -653,6 +653,78 @@ export async function saveCompanion(
     }),
   );
 }
+
+export async function getStoryBible(projectId: string): Promise<DungeonRecord | null> {
+  return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/story-bible`, { credentials: 'include' }));
+}
+
+export async function saveStoryBible(
+  projectId: string,
+  input: Record<string, unknown>,
+): Promise<DungeonRecord> {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/story-bible`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function listCharacters(projectId: string): Promise<DungeonRecord[]> {
+  return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/characters`, { credentials: 'include' }));
+}
+
+export async function saveCharacter(projectId: string, input: Record<string, unknown>): Promise<DungeonRecord> {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/characters`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function getStructure(projectId: string): Promise<DungeonRecord | null> {
+  return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/structure`, { credentials: 'include' }));
+}
+
+export async function saveStructure(projectId: string, input: Record<string, unknown>): Promise<DungeonRecord> {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/structure`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function listContinuity(projectId: string): Promise<DungeonRecord[]> {
+  return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/continuity`, { credentials: 'include' }));
+}
+
+export async function listWorld(projectId: string): Promise<DungeonRecord[]> {
+  return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/world`, { credentials: 'include' }));
+}
+
+export async function saveWorld(projectId: string, input: Record<string, unknown>): Promise<DungeonRecord> {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/world`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function listLineage(documentId: string): Promise<DungeonRecord[]> {
+  return parseJson(await fetch(`/api/documents/${encodeURIComponent(documentId)}/lineage`, { credentials: 'include' }));
+}
+
 
 export async function commissionDocument(
   id: string,

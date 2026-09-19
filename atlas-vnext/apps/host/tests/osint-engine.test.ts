@@ -2,10 +2,12 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { InspectedSource, SourceInspectPort } from '@atlas-vnext/contracts';
 import { NodePublicLookup } from '../src/collectors.ts';
+import { tlsCertificateObservation } from '../src/osint/engine.ts';
 import { correlateObservations } from '../src/osint/correlate.ts';
 import { looksLikeOsintQuestion, parseOsintTarget, usernameVariants } from '../src/osint/who-parse.ts';
 import { USERNAME_SITES } from '../src/osint/catalog.ts';
 import { probeSpiderfoot } from '../src/osint/spiderfoot.ts';
+import { rateClassForPath } from '../src/limits.ts';
 
 function inspectScript(
   script: (url: string) => { status: number; text: string; finalUrl?: string } | 'private',
@@ -198,5 +200,41 @@ describe('Wave 2 OSINT engine', () => {
     const ptr = hits.find((hit) => hit.probe === 'ip.ptr');
     expect(ptr?.status).toBe('error');
     expect(ptr?.evidence).toMatch(/aborted/);
+  });
+
+  it('rate-limits POST OSINT scans as generation traffic', () => {
+    expect(rateClassForPath('/api/projects/wks_x/osint/scans', 'POST')).toBe('generation');
+    expect(rateClassForPath('/api/projects/wks_x/osint/scans', 'GET')).toBeNull();
+    expect(rateClassForPath('/api/osint/rec_x', 'GET')).toBeNull();
+  });
+
+  it('does not label an unverified TLS certificate as confirmed', () => {
+    const cert = {
+      subject: { CN: 'intranet.example' },
+      issuer: { CN: 'Evil CA' },
+      valid_from: 'Sep  1 00:00:00 2026 GMT',
+      valid_to: 'Sep  1 00:00:00 2027 GMT',
+    } as import('node:tls').PeerCertificate;
+    const unverified = tlsCertificateObservation({
+      hostname: 'intranet.example',
+      address: '203.0.113.8',
+      cert,
+      authorized: false,
+      authorizationError: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+      now: '2026-09-19T17:00:00.000Z',
+    });
+    expect(unverified?.status).toBe('unknown');
+    expect(unverified?.confidence).toBe('possible');
+    expect(unverified?.summary).toMatch(/not verified/);
+    expect(JSON.parse(unverified?.evidence ?? '{}').authorized).toBe(false);
+    const verified = tlsCertificateObservation({
+      hostname: 'intranet.example',
+      address: '203.0.113.8',
+      cert,
+      authorized: true,
+      now: '2026-09-19T17:00:00.000Z',
+    });
+    expect(verified?.status).toBe('confirmed');
+    expect(verified?.confidence).toBe('confirmed');
   });
 });

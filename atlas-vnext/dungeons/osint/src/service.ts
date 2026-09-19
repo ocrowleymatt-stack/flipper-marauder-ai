@@ -59,11 +59,11 @@ export class OsintService {
     },
   ): Promise<{ handled: boolean; text?: string; failed?: boolean }> {
     if (!input.projectId) return { handled: false };
-    if (looksLikeOsintFollowup(input.question) && !looksLikeOsintRequest(input.question)) {
-      const text = await this.answerFollowup(actor, input.projectId, input.conversationId, input.question);
-      return text ? { handled: true, text } : { handled: false };
-    }
     try {
+      if (looksLikeOsintFollowup(input.question) && !looksLikeOsintRequest(input.question)) {
+        const text = await this.answerFollowup(actor, input.projectId, input.conversationId, input.question);
+        return text ? { handled: true, text } : { handled: false };
+      }
       const parsed = parseQuestionTarget(input.question);
       const result = await this.scan(actor, {
         projectId: input.projectId,
@@ -221,6 +221,7 @@ export class OsintService {
     conversationId: string,
     question: string,
   ): Promise<string | null> {
+    await this.requireProject(actor, projectId, 'artifact.read');
     const targets = await this.records(actor).list(actor, { workspaceId: projectId, dungeon: 'osint', kind: 'target' });
     const latest = [...targets]
       .filter((row) => row.conversationId === conversationId && row.status === 'completed')

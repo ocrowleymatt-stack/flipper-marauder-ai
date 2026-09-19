@@ -409,4 +409,47 @@ describe('OSINT dungeon', () => {
     });
     expect(sources.handled).toBe(false);
   });
+
+  it('denies OSINT follow-ups when the actor lacks artifact.read on the project', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const osint = new OsintService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      runtime: stack.runtime,
+      authority: stack.authority,
+      policy: stack.policy,
+      collector: collector([
+        {
+          source: 'GitHub',
+          probe: 'username.github',
+          url: 'https://github.com/octocat',
+          summary: 'GitHub profile observed at https://github.com/octocat',
+          confidence: 'confirmed',
+          status: 'confirmed',
+          evidence: '{"url":"https://github.com/octocat"}',
+          contentHash: 'a'.repeat(64),
+          epistemicKind: 'observation',
+        },
+      ]),
+    });
+    const conversation = await stack.runtime.createConversation({ projectId: stack.project.id });
+    const handled = await osint.maybeRunFromConversation(stack.actor, {
+      conversationId: conversation.id,
+      projectId: stack.project.id,
+      question: 'Run OSINT on octocat',
+    });
+    expect(handled.handled).toBe(true);
+    await stack.persistence.ensurePrincipal({ id: 'principal_b', displayName: 'B' });
+    const outsider = { tenantId: 'tenant_a', principalId: 'principal_b' };
+    const sources = await osint.maybeRunFromConversation(outsider, {
+      conversationId: conversation.id,
+      projectId: stack.project.id,
+      question: 'Which sources support it?',
+    });
+    expect(sources.handled).toBe(true);
+    expect(sources.failed).toBe(true);
+    expect(sources.text).toMatch(/Permission denied/i);
+  });
 });

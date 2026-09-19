@@ -455,29 +455,17 @@ function readPublicCertificate(hostname: string, address: string, now: string): 
       { host: address, port: 443, servername: hostname, rejectUnauthorized: false, timeout: 8000 },
       () => {
         const cert = socket.getPeerCertificate();
+        const authorized = socket.authorized;
+        const authorizationError = socket.authorizationError;
         socket.end();
-        if (!cert || Object.keys(cert).length === 0) {
-          resolve(null);
-          return;
-        }
-        const subject = certificateCommonName(cert.subject);
-        const issuer = certificateCommonName(cert.issuer);
         resolve(
-          observation({
-            source: 'tls.cert',
-            probe: 'domain.tls',
-            summary: `${hostname} certificate ${subject} issued by ${issuer}`,
-            confidence: 'confirmed',
-            status: 'confirmed',
-            evidence: JSON.stringify({
-              hostname,
-              address,
-              subject: cert.subject,
-              issuer: cert.issuer,
-              valid_from: cert.valid_from,
-              valid_to: cert.valid_to,
-            }),
-            observedAt: now,
+          tlsCertificateObservation({
+            hostname,
+            address,
+            cert,
+            authorized,
+            authorizationError,
+            now,
           }),
         );
       },
@@ -487,6 +475,46 @@ function readPublicCertificate(hostname: string, address: string, now: string): 
       socket.destroy();
       resolve(null);
     });
+  });
+}
+
+export function tlsCertificateObservation(input: {
+  hostname: string;
+  address: string;
+  cert: tls.PeerCertificate;
+  authorized: boolean;
+  authorizationError?: Error | string | null;
+  now: string;
+}): PublicLookupResult | null {
+  if (!input.cert || Object.keys(input.cert).length === 0) return null;
+  const subject = certificateCommonName(input.cert.subject);
+  const issuer = certificateCommonName(input.cert.issuer);
+  const verified = input.authorized === true;
+  const authorizationError =
+    input.authorizationError instanceof Error
+      ? input.authorizationError.message
+      : input.authorizationError
+        ? String(input.authorizationError)
+        : null;
+  return observation({
+    source: 'tls.cert',
+    probe: 'domain.tls',
+    summary: verified
+      ? `${input.hostname} certificate ${subject} issued by ${issuer}`
+      : `${input.hostname} presented certificate ${subject} issued by ${issuer} (chain not verified)`,
+    confidence: verified ? 'confirmed' : 'possible',
+    status: verified ? 'confirmed' : 'unknown',
+    evidence: JSON.stringify({
+      hostname: input.hostname,
+      address: input.address,
+      subject: input.cert.subject,
+      issuer: input.cert.issuer,
+      valid_from: input.cert.valid_from,
+      valid_to: input.cert.valid_to,
+      authorized: verified,
+      authorizationError,
+    }),
+    observedAt: input.now,
   });
 }
 

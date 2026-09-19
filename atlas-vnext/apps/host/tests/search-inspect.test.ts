@@ -66,6 +66,16 @@ describe('source inspect SSRF', () => {
     await expect(inspect.inspect({ url: 'https://public.test/rebind' })).rejects.toThrow(/private/i);
   });
 
+  it('rejects IPv4-mapped IPv6 hex encodings of private IPv4 before connect', async () => {
+    for (const address of ['::ffff:7f00:1', '::ffff:a9fe:a9fe', '0:0:0:0:0:ffff:7f00:1'] as const) {
+      const inspect = new NodeSourceInspect({
+        lookupImpl: async () => [{ address, family: 6 }],
+        fetchImpl: async () => new Response('secret', { status: 200, headers: { 'content-type': 'text/plain' } }),
+      });
+      await expect(inspect.inspect({ url: 'https://public.test/rebind' })).rejects.toThrow(/private/i);
+    }
+  });
+
   it('rejects redirects onto the private network', async () => {
     const inspect = new NodeSourceInspect({
       lookupImpl: async (hostname) =>

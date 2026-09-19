@@ -96,6 +96,18 @@ function encodedIpv4(address: string): string | null {
     const [c, d] = octet(groups[7] ?? 0);
     return `${a}.${b}.${c}.${d}`;
   }
+  if (
+    groups[0] === 0 &&
+    groups[1] === 0 &&
+    groups[2] === 0 &&
+    groups[3] === 0 &&
+    groups[4] === 0 &&
+    groups[5] === 0xffff
+  ) {
+    const [a, b] = octet(groups[6] ?? 0);
+    const [c, d] = octet(groups[7] ?? 0);
+    return `${a}.${b}.${c}.${d}`;
+  }
   return null;
 }
 

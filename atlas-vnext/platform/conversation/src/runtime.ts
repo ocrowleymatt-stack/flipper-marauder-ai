@@ -96,6 +96,7 @@ export interface ConversationWorkHandler {
     content: string;
     projectId: string | null;
     tenantId?: string;
+    principalId?: string;
     signal?: AbortSignal;
   }): Promise<{ handled: boolean; text?: string } | void>;
 }
@@ -220,6 +221,10 @@ export class ConversationRuntime {
       privacy?: 'any' | 'local_only';
       systemPrompt?: string;
       contextTokens?: number;
+      /** Session actor for this turn. Never fall back to the host owner. */
+      principalId?: string;
+      /** Session tenant for this turn. */
+      tenantId?: string;
       requireTools?: boolean;
       /** Product opt-in to advertise and execute tools. Distinct from Nexus `requireTools`. */
       allowTools?: boolean;
@@ -345,7 +350,8 @@ export class ConversationRuntime {
           conversationId,
           content,
           projectId: conversation.projectId ?? null,
-          tenantId: conversation.tenantId,
+          tenantId: input.tenantId ?? conversation.tenantId,
+          principalId: input.principalId,
           signal: controller.signal,
         });
         if (work && work.handled) {

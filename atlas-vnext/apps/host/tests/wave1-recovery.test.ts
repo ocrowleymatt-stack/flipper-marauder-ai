@@ -272,4 +272,59 @@ describe('Wave 1 security', () => {
     });
     await expect(inspect.inspect({ url: 'http://127.0.0.1/latest/meta-data/' })).rejects.toThrow();
   });
+
+  it('does not run owner-scoped web research for a same-tenant member', async () => {
+    const { url, spine } = await startHost();
+    const owner = await bootstrap(url);
+    const project = (await (
+      await fetch(`${url}/api/projects`, { method: 'POST', headers: auth(owner), body: JSON.stringify({ name: 'Wave1' }) })
+    ).json()) as { id: string };
+    const conversation = (await (
+      await fetch(`${url}/api/projects/${project.id}/conversations`, {
+        method: 'POST',
+        headers: auth(owner),
+        body: JSON.stringify({}),
+      })
+    ).json()) as { id: string };
+
+    await spine.persistence!.ensurePrincipal({ id: 'principal_member', displayName: 'member' });
+    await spine.persistence!.forActor({ tenantId: spine.tenantId, principalId: 'principal_member' }).directory.putTenantMembership({
+      principalId: 'principal_member',
+      tenantId: spine.tenantId,
+      role: 'member',
+      capabilities: [],
+      createdAt: new Date().toISOString(),
+    });
+    spine.authority.grantMembership('principal_member', spine.tenantId);
+    for (const cap of ['artifact.read', 'artifact.write', 'project.read', 'file.read', 'conversation.read', 'conversation.write'] as const) {
+      spine.authority.grantTo({ principalId: 'principal_member', tenantId: spine.tenantId, capability: cap });
+    }
+    const member = await spine.auth.issueSession({ principalId: 'principal_member', tenantId: spine.tenantId });
+    const memberAuth = {
+      cookie: spine.auth.cookieHeader(member.session.id),
+      'x-atlas-csrf': member.csrfToken,
+      'content-type': 'application/json',
+    };
+    const response = await fetch(`${url}/api/conversations/${conversation.id}/messages`, {
+      method: 'POST',
+      headers: memberAuth,
+      body: JSON.stringify({
+        content:
+          'Research the history of the World Wide Web using multiple independent sources. Tell me what is strongly established, where sources disagree, and what remains uncertain.',
+        capability: 'nexus/fast',
+        tools: true,
+      }),
+    });
+    const text = await assistantText(response);
+    expect(text).not.toMatch(/Sources inspected/i);
+    expect(text).not.toMatch(/Strongest finding:/i);
+
+    const records = await spine.persistence
+      ?.forActor({ tenantId: spine.tenantId, principalId: spine.principalId })
+      .dungeonRecords.list(
+        { tenantId: spine.tenantId, principalId: spine.principalId },
+        { workspaceId: project.id, dungeon: 'research', kind: 'synthesis' },
+      );
+    expect(records ?? []).toEqual([]);
+  });
 });

@@ -99,6 +99,10 @@ describe('search primitives', () => {
     expect(isPrivateAddress('8.8.8.8')).toBe(false);
     expect(isPrivateAddress('::ffff:10.0.0.1')).toBe(true);
     expect(isPrivateAddress('::ffff:8.8.8.8')).toBe(false);
+    expect(isPrivateAddress('::ffff:7f00:1')).toBe(true);
+    expect(isPrivateAddress('::ffff:a9fe:a9fe')).toBe(true);
+    expect(isPrivateAddress('0:0:0:0:0:ffff:7f00:1')).toBe(true);
+    expect(isPrivateAddress('::ffff:808:808')).toBe(false);
     expect(isPrivateAddress('64:ff9b::7f00:1')).toBe(true);
     expect(isPrivateAddress('2002:c0a8:1::')).toBe(true);
     expect(isPrivateAddress('64:ff9b::808:808')).toBe(false);

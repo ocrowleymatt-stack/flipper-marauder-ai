@@ -406,17 +406,19 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       search: searchPort,
       inspect: inspectPort,
     });
-    runtime.setWorkHandler(async (input) =>
-      research!.maybeRunFromConversation(
-        { tenantId: input.tenantId || tenantId, principalId },
+    runtime.setWorkHandler(async (input) => {
+      const actorPrincipal = input.principalId?.trim();
+      if (!actorPrincipal) return { handled: false };
+      return research!.maybeRunFromConversation(
+        { tenantId: input.tenantId?.trim() || tenantId, principalId: actorPrincipal },
         {
           conversationId: input.conversationId,
           projectId: input.projectId,
           question: input.content,
           signal: input.signal,
         },
-      ),
-    );
+      );
+    });
     websiteStudio = new WebsiteStudioService({ persistence, projects, files, runtime, authority, policy });
     music = new MusicService({ persistence, projects, files, runtime, authority, policy });
   } else {

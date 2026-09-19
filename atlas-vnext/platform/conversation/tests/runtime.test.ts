@@ -659,6 +659,48 @@ describe('true-delta streaming, bounded persistence, and abort teardown', () => 
   });
 });
 
+describe('conversation work handler identity', () => {
+  it('passes the requesting principal and never the host owner fallback', async () => {
+    const stores = memoryStores();
+    const events = new MemoryEventBus();
+    const seen: Array<{ principalId?: string; tenantId?: string }> = [];
+    const runtime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events,
+      principalId: 'principal_host_owner',
+      router: fakeRouter((target) => decision(target, ['openai/gpt-4o'])),
+      executor: fakeExecutor(async function* () {
+        yield { type: 'text', text: 'nexus fallback' };
+      }),
+      workHandler: async (input) => {
+        seen.push({ principalId: input.principalId, tenantId: input.tenantId });
+        return { handled: false };
+      },
+    });
+    const conversation = await runtime.createConversation();
+    for await (const _ of runtime.sendMessage(conversation.id, {
+      content: 'Research the history of the World Wide Web using multiple independent sources.',
+      principalId: 'principal_member',
+      tenantId: 'tenant_a',
+    })) {
+      // drain
+    }
+    expect(seen).toEqual([{ principalId: 'principal_member', tenantId: 'tenant_a' }]);
+
+    seen.length = 0;
+    for await (const _ of runtime.sendMessage(conversation.id, {
+      content: 'Research the history of the World Wide Web using multiple independent sources.',
+    })) {
+      // drain
+    }
+    expect(seen).toEqual([{ principalId: undefined, tenantId: conversation.tenantId }]);
+    expect(seen[0]?.principalId).not.toBe('principal_host_owner');
+  });
+});
+
 async function collectEvents(runtime: ConversationRuntime, conversationId: string) {
   const events = [];
   for await (const event of runtime.sendMessage(conversationId, {

@@ -1,5 +1,11 @@
 import type { ReactNode } from 'react';
 
+export function safeMarkdownHref(href: string): string {
+  const trimmed = href.trim();
+  if (/^(https?:|mailto:|\/(?!\/)|#)/i.test(trimmed)) return trimmed;
+  return '#';
+}
+
 export function MarkdownBody({ text }: { text: string }) {
   if (!text) return null;
   const blocks = splitBlocks(text);
@@ -107,9 +113,9 @@ function inline(text: string): ReactNode[] {
     } else if (token.startsWith('[')) {
       const label = token.slice(1, token.indexOf(']'));
       const href = token.slice(token.indexOf('(') + 1, -1);
-      const safe = /^(https?:|mailto:|\/|#)/i.test(href) ? href : '#';
+      const safe = safeMarkdownHref(href);
       nodes.push(
-        <a key={key} href={safe} rel="noreferrer" target={safe.startsWith('http') ? '_blank' : undefined}>
+        <a key={key} href={safe} rel="noreferrer" target={/^https?:/i.test(safe) ? '_blank' : undefined}>
           {label}
         </a>,
       );

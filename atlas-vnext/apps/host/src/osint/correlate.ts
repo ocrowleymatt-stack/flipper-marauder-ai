@@ -57,7 +57,7 @@ export function correlateObservations(hits: PublicLookupResult[], now = new Date
     out.push({
       source: 'correlation.host',
       probe: 'correlation',
-      summary: `Multiple independent observations share host ${host}`,
+      summary: `Multiple observations share host ${host}`,
       confidence: 'likely',
       status: 'likely',
       epistemicKind: 'correlation',

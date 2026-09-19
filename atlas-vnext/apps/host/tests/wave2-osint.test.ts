@@ -244,6 +244,20 @@ describe('Wave 2 OSINT conversation and estate', () => {
     });
     expect(mapped.status).toBe(404);
 
+    const loopback6 = await fetch(`${url}/api/projects/${project.id}/osint/scans`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ kind: 'ip', value: '::1', synthesize: false }),
+    });
+    expect(loopback6.status).toBe(404);
+
+    const docs = await fetch(`${url}/api/projects/${project.id}/osint/scans`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({ kind: 'ip', value: '2001:db8::1', synthesize: false }),
+    });
+    expect(docs.status).toBe(404);
+
     const guessed = await fetch(`${url}/api/osint/rec_guessed`, { headers: { cookie: session.cookie } });
     expect(guessed.status).toBe(404);
     const guessedFindings = await fetch(`${url}/api/osint/rec_guessed/findings`, { headers: { cookie: session.cookie } });

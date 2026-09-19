@@ -41,12 +41,12 @@ export async function probeSpiderfoot(
     return {
       source: 'spiderfoot',
       probe: 'spiderfoot',
-      summary: 'SpiderFoot instance reachable; scan start is not auto-fired from this Wave 2 ping.',
-      confidence: 'likely',
-      status: 'confirmed',
+      summary: 'SpiderFoot instance reachable; Wave 2 does not submit scans from this ping.',
+      confidence: 'possible',
+      status: 'unknown',
       httpStatus: response.status,
       epistemicKind: 'observation',
-      evidence: JSON.stringify({ configured: true, ping: true }),
+      evidence: JSON.stringify({ configured: true, ping: true, scanSubmitted: false }),
       observedAt: new Date().toISOString(),
     };
   } catch (err) {

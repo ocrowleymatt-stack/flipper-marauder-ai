@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { InspectedSource, SourceInspectPort } from '@atlas-vnext/contracts';
 import { NodePublicLookup } from '../src/collectors.ts';
-import { tlsCertificateObservation } from '../src/osint/engine.ts';
+import { isReservedOsintAddress, tlsCertificateObservation } from '../src/osint/engine.ts';
 import { correlateObservations } from '../src/osint/correlate.ts';
 import { looksLikeOsintQuestion, parseOsintTarget, usernameVariants } from '../src/osint/who-parse.ts';
 import { USERNAME_SITES } from '../src/osint/catalog.ts';
@@ -92,6 +92,18 @@ describe('Wave 2 OSINT engine', () => {
     expect(parseOsintTarget('Run OSINT on octocat').kind).toBe('person');
     expect(parseOsintTarget('octocat', 'username').kind).toBe('username');
     expect(parseOsintTarget('https://example.com/x').kind).toBe('url');
+    expect(parseOsintTarget('::1').kind).toBe('ip');
+    expect(parseOsintTarget('2001:db8::1').kind).toBe('ip');
+    expect(parseOsintTarget('::ffff:127.0.0.1').kind).toBe('ip');
+    expect(parseOsintTarget('2606:4700:4700::1111').kind).toBe('ip');
+    expect(isReservedOsintAddress('127.0.0.1')).toBe(true);
+    expect(isReservedOsintAddress('::1')).toBe(true);
+    expect(isReservedOsintAddress('2001:db8::1')).toBe(true);
+    expect(isReservedOsintAddress('192.0.2.1')).toBe(true);
+    expect(isReservedOsintAddress('198.51.100.1')).toBe(true);
+    expect(isReservedOsintAddress('203.0.113.1')).toBe(true);
+    expect(isReservedOsintAddress('8.8.8.8')).toBe(false);
+    expect(isReservedOsintAddress('2606:4700:4700::1111')).toBe(false);
     expect(looksLikeOsintQuestion('Run OSINT on octocat')).toBe(true);
     expect(looksLikeOsintQuestion('What did I say my dog’s name was?')).toBe(false);
 
@@ -100,6 +112,10 @@ describe('Wave 2 OSINT engine', () => {
     expect(ip.some((hit) => hit.status === 'blocked' && hit.probe === 'ip.validate')).toBe(true);
     const mapped = await lookup.lookup({ kind: 'ip', value: '::ffff:127.0.0.1' });
     expect(mapped.some((hit) => hit.status === 'blocked')).toBe(true);
+    const loopback6 = await lookup.lookup({ kind: 'ip', value: '::1' });
+    expect(loopback6.some((hit) => hit.status === 'blocked' && hit.probe === 'ip.validate')).toBe(true);
+    const docs = await lookup.lookup({ kind: 'ip', value: '2001:db8::1' });
+    expect(docs.some((hit) => hit.status === 'blocked' && hit.probe === 'ip.validate')).toBe(true);
     const url = await lookup.lookup({ kind: 'url', value: 'http://127.0.0.1/' });
     expect(url.some((hit) => hit.status === 'blocked' && hit.probe === 'url.validate')).toBe(true);
   });
@@ -153,6 +169,60 @@ describe('Wave 2 OSINT engine', () => {
     expect(hits.some((hit) => hit.epistemicKind === 'correlation')).toBe(false);
   });
 
+  it('does not confirm a generic HTTP 200 that lacks the username in the body', async () => {
+    const lookup = new NodePublicLookup({
+      inspect: inspectScript((url) => {
+        if (url.includes('github.com')) {
+          return { status: 200, text: 'Welcome to GitHub. Explore repositories.' };
+        }
+        return { status: 404, text: 'page not found' };
+      }),
+      now: () => '2026-09-19T17:00:00.000Z',
+      sites: USERNAME_SITES.filter((site) => site.id === 'github'),
+      bounds: { maxSites: 1, maxVariants: 1, parallelism: 1, probeTimeoutMs: 500, overallTimeoutMs: 2000, maxSearchHits: 0 },
+    });
+    const hits = await lookup.lookup({ kind: 'username', value: 'octocat' });
+    const github = hits.find((hit) => hit.probe === 'username.github');
+    expect(github?.status).toBe('likely');
+    expect(github?.confidence).toBe('likely');
+    expect(github?.status).not.toBe('confirmed');
+    expect(JSON.parse(github?.evidence ?? '{}').subjectInBody).toBe(false);
+  });
+
+  it('does not confirm a username that only appears as a substring of another token', async () => {
+    const lookup = new NodePublicLookup({
+      inspect: inspectScript((url) => {
+        if (url.includes('github.com')) {
+          return { status: 200, text: 'Welcome octocat — this is not that account.' };
+        }
+        return { status: 404, text: 'page not found' };
+      }),
+      now: () => '2026-09-19T17:00:00.000Z',
+      sites: USERNAME_SITES.filter((site) => site.id === 'github'),
+      bounds: { maxSites: 1, maxVariants: 1, parallelism: 1, probeTimeoutMs: 500, overallTimeoutMs: 2000, maxSearchHits: 0 },
+    });
+    const hits = await lookup.lookup({ kind: 'username', value: 'cat' });
+    const github = hits.find((hit) => hit.probe === 'username.github');
+    expect(github?.status).not.toBe('confirmed');
+    expect(JSON.parse(github?.evidence ?? '{}').subjectInBody).toBe(false);
+  });
+
+  it('treats Gravatar HTTP 200 on d=404 as site-specific presence without requiring body text', async () => {
+    const hash = createHash('md5').update('octocat@example.invalid').digest('hex');
+    const lookup = new NodePublicLookup({
+      inspect: inspectScript((url) => {
+        if (url.includes('gravatar.com/avatar/')) return { status: 200, text: '' };
+        return { status: 404, text: 'page not found' };
+      }),
+      now: () => '2026-09-19T17:00:00.000Z',
+      bounds: { maxSites: 0, maxVariants: 1, parallelism: 1, probeTimeoutMs: 500, overallTimeoutMs: 8_000, maxSearchHits: 0 },
+    });
+    const hits = await lookup.lookup({ kind: 'email', value: 'octocat@example.invalid' });
+    const gravatar = hits.find((hit) => hit.probe === 'email.gravatar');
+    expect(gravatar?.status).toBe('confirmed');
+    expect(gravatar?.url).toMatch(new RegExp(hash));
+  });
+
   it('correlates a handle across distinct platforms, not duplicate hits on one site', () => {
     const githubA = {
       source: 'GitHub',
@@ -195,11 +265,8 @@ describe('Wave 2 OSINT engine', () => {
       bounds: { maxSites: 1, maxVariants: 1, parallelism: 1, probeTimeoutMs: 8_000, overallTimeoutMs: 40_000, maxSearchHits: 0 },
     });
     const started = Date.now();
-    const hits = await lookup.lookup({ kind: 'ip', value: '8.8.8.8', signal: AbortSignal.abort() });
+    await expect(lookup.lookup({ kind: 'ip', value: '8.8.8.8', signal: AbortSignal.abort() })).rejects.toThrow(/aborted/);
     expect(Date.now() - started).toBeLessThan(2000);
-    const ptr = hits.find((hit) => hit.probe === 'ip.ptr');
-    expect(ptr?.status).toBe('error');
-    expect(ptr?.evidence).toMatch(/aborted/);
   });
 
   it('rate-limits POST OSINT scans as generation traffic', () => {

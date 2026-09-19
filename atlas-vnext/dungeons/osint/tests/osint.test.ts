@@ -279,6 +279,9 @@ describe('OSINT dungeon', () => {
   it('parses IPv6 conversation targets as ip, not username', () => {
     expect(parseQuestionTarget('Run OSINT on 2001:db8::1')).toEqual({ kind: 'ip', value: '2001:db8::1' });
     expect(parseQuestionTarget('Run OSINT on [2001:db8::1]')).toEqual({ kind: 'ip', value: '2001:db8::1' });
+    expect(parseQuestionTarget('Run OSINT on ::1')).toEqual({ kind: 'ip', value: '::1' });
+    expect(parseQuestionTarget('Run OSINT on ::ffff:127.0.0.1')).toEqual({ kind: 'ip', value: '::ffff:127.0.0.1' });
+    expect(parseQuestionTarget('Run OSINT on 2606:4700:4700::1111')).toEqual({ kind: 'ip', value: '2606:4700:4700::1111' });
     expect(parseQuestionTarget('Scan 8.8.8.8')).toEqual({ kind: 'ip', value: '8.8.8.8' });
   });
 
@@ -332,10 +335,10 @@ describe('OSINT dungeon', () => {
         {
           source: 'dns.aaaa',
           probe: 'dns.aaaa',
-          summary: 'dual.test dns.aaaa 2001:db8::53',
+          summary: 'dual.test dns.aaaa 2606:4700:4700::1111',
           confidence: 'confirmed',
           status: 'confirmed',
-          evidence: '{"host":"dual.test","values":["2001:db8::53"]}',
+          evidence: '{"host":"dual.test","values":["2606:4700:4700::1111"]}',
           epistemicKind: 'observation',
         },
       ]),

@@ -11,8 +11,13 @@ export interface ParsedOsintTarget {
 
 const EMAIL = /\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/;
 const IPV4 = /^(?:\d{1,3}\.){3}\d{1,3}$/;
-const IPV6 = /^[0-9a-f:]+$/i;
 const DOMAIN = /^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i;
+
+export function looksLikeIpv6Literal(value: string): boolean {
+  if (!value.includes(':')) return false;
+  if (!/^[0-9a-f:.]+$/i.test(value)) return false;
+  return (value.match(/:/g)?.length ?? 0) >= 2;
+}
 
 export function parseOsintTarget(raw: string, kind?: OsintTargetKind): ParsedOsintTarget {
   const value = raw.trim();
@@ -32,7 +37,7 @@ export function parseOsintTarget(raw: string, kind?: OsintTargetKind): ParsedOsi
     const email = value.match(EMAIL)![0]!;
     return { kind: 'email', value: email, email, domain: email.split('@')[1], variants: [] };
   }
-  if (IPV4.test(value) || (value.includes(':') && IPV6.test(value))) return { kind: 'ip', value, variants: [] };
+  if (IPV4.test(value) || looksLikeIpv6Literal(value)) return { kind: 'ip', value, variants: [] };
   if (DOMAIN.test(value) && !value.includes(' ')) return { kind: 'domain', value: value.toLowerCase(), domain: value.toLowerCase(), variants: [] };
   if (/^@?[A-Za-z0-9_.-]{2,32}$/.test(value) && !value.includes(' ')) {
     const username = value.replace(/^@/, '');

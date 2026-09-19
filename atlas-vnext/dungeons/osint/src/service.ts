@@ -228,12 +228,15 @@ export class OsintService {
       .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
       .at(-1);
     if (!latest) return null;
-    const research = await this.records(actor).list(actor, { workspaceId: projectId, dungeon: 'research', kind: 'brief' });
-    const latestResearch = [...research]
-      .filter((row) => row.conversationId === conversationId && row.status === 'completed')
-      .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
-      .at(-1);
-    if (latestResearch && latestResearch.updatedAt > latest.updatedAt) return null;
+    const otherDungeons = ['research', 'writing', 'investigation', 'website', 'music'] as const;
+    const laterLists = await Promise.all(
+      otherDungeons.map((dungeon) => this.records(actor).list(actor, { workspaceId: projectId, dungeon })),
+    );
+    const laterWork = laterLists.flat().some(
+      (row) =>
+        row.conversationId === conversationId && row.status === 'completed' && row.updatedAt > latest.updatedAt,
+    );
+    if (laterWork) return null;
     const children = await this.listFindings(actor, latest.id);
     const observations = children.filter((row) => row.kind === 'finding' && row.payload.epistemicKind !== 'hypothesis');
     const confirmed = observations.filter(
@@ -424,7 +427,8 @@ export function parseQuestionTarget(question: string): { kind: OsintTargetKind; 
 function looksLikeIpLiteral(value: string): boolean {
   if (!value) return false;
   if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)) return true;
-  return value.includes(':') && /^[0-9a-f:]+$/i.test(value);
+  if (!value.includes(':')) return false;
+  return /^[0-9a-f:.]+$/i.test(value) && (value.match(/:/g)?.length ?? 0) >= 2;
 }
 
 function strongestObservation(hits: PublicLookupResult[]): { summary: string; url?: string; source: string } | null {

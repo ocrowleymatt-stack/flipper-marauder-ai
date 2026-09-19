@@ -10,7 +10,7 @@ import type {
   SourceInspectPort,
 } from '@atlas-vnext/contracts';
 import type { PublicLookupPort } from '@atlas-vnext/dungeon-osint';
-import { assertPublicHttpUrl, isPrivateAddress } from '@atlas-vnext/search';
+import { assertPublicHttpUrl, isPrivateAddress, unwrapHostname } from '@atlas-vnext/search';
 import { OSINT_BOUNDS, USERNAME_SITES, resolveSiteUrl, type UsernameSite } from './catalog.ts';
 import { parseOsintTarget, usernameVariants } from './who-parse.ts';
 import { correlateObservations } from './correlate.ts';
@@ -61,9 +61,7 @@ export class NodePublicLookup implements PublicLookupPort {
       try {
         assertPublicHttpUrl(parsed.value);
       } catch (err) {
-        return [
-          blockedTarget(parsed.value, now, 'url.validate', err instanceof Error ? err.message : String(err)),
-        ];
+        return [blockedTarget(parsed.value, now, 'url.validate', err instanceof Error ? err.message : String(err))];
       }
     }
     const controller = new AbortController();
@@ -95,6 +93,9 @@ export class NodePublicLookup implements PublicLookupPort {
           hits.push(...(await this.searchMentions(parsed.value, now, controller.signal)));
         }
       }
+      if (controller.signal.aborted) {
+        throw new Error('aborted');
+      }
       if (!hits.some((hit) => hit.status === 'blocked' && (hit.probe === 'ip.validate' || hit.probe === 'url.validate'))) {
         const spider = await probeSpiderfoot(this.deps.spiderfootUrl, parsed.value, controller.signal);
         if (spider) hits.push(spider);
@@ -123,18 +124,20 @@ export class NodePublicLookup implements PublicLookupPort {
     const out: PublicLookupResult[] = [];
     const records = await resolvePublicDns(host, now, signal);
     out.push(...records.hits);
-    if (records.publicAddresses.length) {
-      const cert = await readPublicCertificate(host, records.publicAddresses[0]!, now);
+    if (records.publicAddresses.length && !signal.aborted) {
+      const cert = await readPublicCertificate(host, records.publicAddresses[0]!, now, signal);
       if (cert) out.push(cert);
-      out.push(await this.inspectUrl(`https://${host}/`, 'domain.web', now, signal));
-      out.push(
-        await this.inspectUrl(
-          `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(host)}&output=json&limit=5`,
-          'domain.wayback',
-          now,
-          signal,
-        ),
-      );
+      if (!signal.aborted) out.push(await this.inspectUrl(`https://${host}/`, 'domain.web', now, signal));
+      if (!signal.aborted) {
+        out.push(
+          await this.inspectUrl(
+            `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(host)}&output=json&limit=5`,
+            'domain.wayback',
+            now,
+            signal,
+          ),
+        );
+      }
     }
     return out;
   }
@@ -161,6 +164,7 @@ export class NodePublicLookup implements PublicLookupPort {
           }),
         );
       } catch (err) {
+        if (isAbortError(err)) throw err;
         out.push(
           observation({
             source: 'dns.mx',
@@ -175,25 +179,19 @@ export class NodePublicLookup implements PublicLookupPort {
       }
       out.push(...(await this.lookupDomain(domain, now, signal)));
     }
+    if (signal.aborted) throw new Error('aborted');
     const hash = createHash('md5').update(email.trim().toLowerCase()).digest('hex');
     out.push(
-      await this.inspectPresence(
-        `https://www.gravatar.com/avatar/${hash}?d=404`,
-        'email.gravatar',
-        'Gravatar',
-        now,
-        signal,
-        { subject: hash },
-      ),
+      await this.inspectPresence(`https://www.gravatar.com/avatar/${hash}?d=404`, 'email.gravatar', 'Gravatar', now, signal, {
+        subject: hash,
+      }),
     );
     return out;
   }
 
   private async lookupIp(value: string, now: string, signal?: AbortSignal): Promise<PublicLookupResult[]> {
-    if (isPrivateAddress(value) || isIP(value) === 0) {
-      return [
-        blockedTarget(value, now, 'ip.validate', JSON.stringify({ value, private: isPrivateAddress(value) })),
-      ];
+    if (isReservedOsintAddress(value) || isIP(value) === 0) {
+      return [blockedTarget(value, now, 'ip.validate', JSON.stringify({ value, private: isPrivateAddress(value) }))];
     }
     try {
       const names = await withDeadline(dns.reverse(value), signal);
@@ -209,6 +207,7 @@ export class NodePublicLookup implements PublicLookupPort {
         }),
       ];
     } catch (err) {
+      if (isAbortError(err)) throw err;
       return [
         observation({
           source: 'dns.ptr',
@@ -229,6 +228,7 @@ export class NodePublicLookup implements PublicLookupPort {
       const report = await this.deps.search.search({ query, count: this.bounds.maxSearchHits, signal });
       const out: PublicLookupResult[] = [];
       for (const hit of report.hits.slice(0, this.bounds.maxSearchHits)) {
+        if (signal.aborted) break;
         out.push(await this.inspectUrl(hit.url, `search.${hit.engine}`, now, signal));
       }
       for (const err of report.errors) {
@@ -246,6 +246,7 @@ export class NodePublicLookup implements PublicLookupPort {
       }
       return out;
     } catch (err) {
+      if (isAbortError(err)) throw err;
       return [
         observation({
           source: 'search',
@@ -285,6 +286,7 @@ export class NodePublicLookup implements PublicLookupPort {
         observedAt: now,
       });
     } catch (err) {
+      if (isAbortError(err)) throw err;
       return observation({
         source: probe,
         probe,
@@ -354,18 +356,36 @@ export class NodePublicLookup implements PublicLookupPort {
           observedAt: now,
         });
       }
-      const retained = !options.subject || urlRetainsSubject(url, finalUrl, options.subject);
+      const token = options.subject?.replace(/^@/, '').trim().toLowerCase() ?? '';
+      const retained = !token || urlRetainsSubject(url, finalUrl, token);
+      const subjectInBody = Boolean(token) && bodyContainsSubject(lowered, token);
       const soft =
         options.soft404?.some((item) => lowered.includes(item.toLowerCase())) || SOFT_404.some((re) => re.test(text));
-      const present = page.ok && page.status === 200 && !soft && lowered.length > 0 && retained;
+      const httpOk = page.ok && page.status === 200 && !soft && retained;
+      const gravatarPresence = probe === 'email.gravatar' && httpOk;
+      const candidate = httpOk && lowered.length > 0;
+      const present = gravatarPresence || (candidate && subjectInBody);
+      const status: OsintObservationStatus = present
+        ? 'confirmed'
+        : page.status === 404 || soft
+          ? 'negative'
+          : candidate && !subjectInBody
+            ? 'likely'
+            : retained
+              ? classifyHttp(page.status)
+              : 'unknown';
       return observation({
         source: site,
         probe,
         url: finalUrl,
         canonicalUrl: finalUrl,
-        summary: present ? `${site} profile observed at ${finalUrl}` : `${site} did not show a public profile`,
-        confidence: present ? 'confirmed' : 'possible',
-        status: present ? 'confirmed' : page.status === 404 || soft ? 'negative' : retained ? classifyHttp(page.status) : 'unknown',
+        summary: present
+          ? `${site} profile observed at ${finalUrl}`
+          : candidate && !subjectInBody
+            ? `${site} returned HTTP 200 without a subject match; not treated as confirmed presence`
+            : `${site} did not show a public profile`,
+        confidence: present ? 'confirmed' : status === 'likely' ? 'likely' : 'possible',
+        status,
         httpStatus: page.status,
         contentHash: page.contentHash,
         evidence: JSON.stringify({
@@ -375,12 +395,14 @@ export class NodePublicLookup implements PublicLookupPort {
           hash: page.contentHash,
           soft404: soft,
           retained,
+          subjectInBody,
           snippet: text.trim().slice(0, 400),
         }),
         observedAt: now,
         epistemicKind: 'observation',
       });
     } catch (err) {
+      if (isAbortError(err)) throw err;
       return observation({
         source: site,
         probe,
@@ -411,10 +433,15 @@ async function resolvePublicDns(
     ['dns.txt', async () => (await dns.resolveTxt(host)).map((row) => row.join(''))],
   ];
   for (const [source, fn] of kinds) {
+    if (signal?.aborted) throw new Error('aborted');
     try {
       const values = await withDeadline(fn(), signal);
-      const usable = values.filter((item) => (source === 'dns.a' || source === 'dns.aaaa' ? !isPrivateAddress(item) : true));
-      const blocked = values.filter((item) => (source === 'dns.a' || source === 'dns.aaaa' ? isPrivateAddress(item) : false));
+      const usable = values.filter((item) =>
+        source === 'dns.a' || source === 'dns.aaaa' ? !isReservedOsintAddress(item) : true,
+      );
+      const blocked = values.filter((item) =>
+        source === 'dns.a' || source === 'dns.aaaa' ? isReservedOsintAddress(item) : false,
+      );
       if (source === 'dns.a' || source === 'dns.aaaa') publicAddresses.push(...usable);
       hits.push(
         observation({
@@ -432,6 +459,7 @@ async function resolvePublicDns(
         }),
       );
     } catch (err) {
+      if (isAbortError(err)) throw err;
       hits.push(
         observation({
           source,
@@ -448,32 +476,55 @@ async function resolvePublicDns(
   return { publicAddresses, hits };
 }
 
-function readPublicCertificate(hostname: string, address: string, now: string): Promise<PublicLookupResult | null> {
-  if (isPrivateAddress(address)) return Promise.resolve(null);
-  return new Promise((resolve) => {
+function readPublicCertificate(
+  hostname: string,
+  address: string,
+  now: string,
+  signal?: AbortSignal,
+): Promise<PublicLookupResult | null> {
+  if (isReservedOsintAddress(address)) return Promise.resolve(null);
+  if (signal?.aborted) return Promise.reject(new Error('aborted'));
+  return new Promise((resolve, reject) => {
+    let settled = false;
     const socket = tls.connect(
       { host: address, port: 443, servername: hostname, rejectUnauthorized: false, timeout: 8000 },
       () => {
+        if (settled) return;
+        if (signal?.aborted) {
+          socket.destroy();
+          finishError(new Error('aborted'));
+          return;
+        }
         const cert = socket.getPeerCertificate();
         const authorized = socket.authorized;
         const authorizationError = socket.authorizationError;
         socket.end();
-        resolve(
-          tlsCertificateObservation({
-            hostname,
-            address,
-            cert,
-            authorized,
-            authorizationError,
-            now,
-          }),
-        );
+        finishValue(tlsCertificateObservation({ hostname, address, cert, authorized, authorizationError, now }));
       },
     );
-    socket.on('error', () => resolve(null));
+    const finishValue = (value: PublicLookupResult | null) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      resolve(value);
+    };
+    const finishError = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      try {
+        socket.destroy();
+      } catch {
+        /* ignore */
+      }
+      reject(err);
+    };
+    const onAbort = () => finishError(new Error('aborted'));
+    signal?.addEventListener('abort', onAbort, { once: true });
+    socket.on('error', () => finishValue(null));
     socket.on('timeout', () => {
       socket.destroy();
-      resolve(null);
+      finishValue(null);
     });
   });
 }
@@ -576,6 +627,12 @@ async function mapPool<T, R>(items: T[], parallelism: number, fn: (item: T) => P
   return out;
 }
 
+function bodyContainsSubject(text: string, token: string): boolean {
+  if (!token) return false;
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^a-z0-9_])${escaped}([^a-z0-9_]|$)`, 'i').test(text);
+}
+
 function urlRetainsSubject(requested: string, finalUrl: string, subject: string): boolean {
   try {
     const req = new URL(requested);
@@ -591,6 +648,29 @@ function urlRetainsSubject(requested: string, finalUrl: string, subject: string)
   } catch {
     return false;
   }
+}
+
+export function isReservedOsintAddress(address: string): boolean {
+  if (isPrivateAddress(address)) return true;
+  const host = unwrapHostname(address);
+  const family = isIP(host);
+  if (family === 4) {
+    const parts = host.split('.').map(Number);
+    const [a, b, c] = parts;
+    if (a === 192 && b === 0 && c === 2) return true;
+    if (a === 198 && b === 51 && c === 100) return true;
+    if (a === 203 && b === 0 && c === 113) return true;
+    return false;
+  }
+  if (family === 6) {
+    const compact = host.toLowerCase();
+    return compact === '2001:db8::' || compact.startsWith('2001:db8:');
+  }
+  return true;
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.message === 'aborted';
 }
 
 async function withDeadline<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {

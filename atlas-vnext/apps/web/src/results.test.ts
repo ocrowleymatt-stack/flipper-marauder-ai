@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { classifyAssistantResult, findingsFromRecords, mergeFindings, stripPrimaryHashes } from './results';
+import {
+  classifyAssistantResult,
+  displayAssistantText,
+  findingsForOsintReport,
+  findingsFromRecords,
+  libraryFileOrigin,
+  mergeFindings,
+  stripPrimaryHashes,
+} from './results';
 
 const osint = `OSINT username scan of \`octocat\`.
 Observations: 1 confirmed/public, 6 negative, 1 blocked/error.
@@ -82,5 +90,89 @@ describe('Wave 3 conversation result presentation', () => {
     expect(merged[0]?.id).toBe('find_1');
     expect(merged[0]?.url).toBe('https://github.com/octocat');
     expect(merged[0]?.evidenceHash).toBe('abcdef1234567890');
+  });
+
+  it('does not strip hash= from ordinary assistant answers', () => {
+    const answer = 'The checksum is hash=abcdef1234567890 and should stay visible.';
+    expect(classifyAssistantResult(answer)).toBeNull();
+    expect(displayAssistantText(answer)).toContain('hash=abcdef1234567890');
+    expect(displayAssistantText(osint)).not.toMatch(/hash=/);
+  });
+
+  it('scopes durable findings to the OSINT scan whose report matches the card', () => {
+    const parsed = classifyAssistantResult(osint)!.findings;
+    const octocatFinding = {
+      id: 'find_octocat',
+      dungeon: 'osint',
+      kind: 'finding',
+      title: 'GitHub profile confirmed',
+      status: 'completed',
+      payload: {
+        source: 'GitHub',
+        url: 'https://github.com/octocat',
+        status: 'confirmed',
+        summary: 'GitHub profile confirmed',
+        epistemicKind: 'observation',
+      },
+      artefactId: 'art_1',
+      contentHash: 'abcdef1234567890',
+      jobId: null,
+      parentId: 'tgt_octocat',
+      revision: 1,
+      conversationId: 'con_1',
+    };
+    const otherFinding = {
+      id: 'find_torvalds',
+      dungeon: 'osint',
+      kind: 'finding',
+      title: 'GitLab profile confirmed',
+      status: 'completed',
+      payload: {
+        source: 'GitLab',
+        url: 'https://gitlab.com/torvalds',
+        status: 'confirmed',
+        summary: 'GitLab profile confirmed',
+        epistemicKind: 'observation',
+      },
+      artefactId: 'art_2',
+      contentHash: 'fff000111222',
+      jobId: null,
+      parentId: 'tgt_torvalds',
+      revision: 1,
+      conversationId: 'con_1',
+    };
+    const merged = findingsForOsintReport(parsed, osint, [
+      {
+        target: {
+          ...octocatFinding,
+          id: 'tgt_octocat',
+          kind: 'target',
+          title: 'octocat',
+          payload: { value: 'octocat', reportText: osint },
+          parentId: null,
+        },
+        findings: [octocatFinding],
+      },
+      {
+        target: {
+          ...otherFinding,
+          id: 'tgt_torvalds',
+          kind: 'target',
+          title: 'torvalds',
+          payload: { value: 'torvalds', reportText: 'OSINT username scan of `torvalds`.\nStrongest finding: GitLab' },
+          parentId: null,
+        },
+        findings: [otherFinding],
+      },
+    ]);
+    expect(merged.map((row) => row.source)).toEqual(['GitHub']);
+    expect(merged.some((row) => row.source === 'GitLab')).toBe(false);
+  });
+
+  it('labels reserved acquisition paths as acquired and ordinary paths as uploaded', () => {
+    expect(libraryFileOrigin('research/notes.md')).toBe('Uploaded');
+    expect(libraryFileOrigin('caspa/draft.md')).toBe('Uploaded');
+    expect(libraryFileOrigin('website/index.html')).toBe('Uploaded');
+    expect(libraryFileOrigin('acquisition/acq_1/originals/watch.txt')).toBe('Acquired');
   });
 });

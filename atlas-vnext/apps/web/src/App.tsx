@@ -46,9 +46,10 @@ import { MarkdownBody } from './markdown';
 import { playCue, prefersReducedMotion } from './experience';
 import {
   classifyAssistantResult,
-  findingsFromRecords,
-  mergeFindings,
-  stripPrimaryHashes,
+  displayAssistantText,
+  findingsForOsintReport,
+  libraryFileOrigin,
+  type OsintScanBundle,
   type ParsedFinding,
   type ParsedResult,
 } from './results';
@@ -119,7 +120,7 @@ export function App() {
   const [selectedFinding, setSelectedFinding] = useState<ParsedFinding | null>(null);
   const [selectedFile, setSelectedFile] = useState<ProjectFile | null>(null);
   const [selectedResult, setSelectedResult] = useState<ParsedResult | null>(null);
-  const [osintFindings, setOsintFindings] = useState<DungeonRecord[]>([]);
+  const [osintScans, setOsintScans] = useState<OsintScanBundle[]>([]);
   const [researchBriefs, setResearchBriefs] = useState<DungeonRecord[]>([]);
   const bottom = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLElement>(null);
@@ -137,7 +138,6 @@ export function App() {
   const currentProject = projects.find((item) => item.id === projectId) ?? null;
   const doctorView = doctorVisible && doctor ? doctorTone(doctor.state, doctor.checks) : null;
   const panelOpen = panelMode !== 'closed' || diagnosticsOpen;
-  const durableFindings = useMemo(() => findingsFromRecords(osintFindings), [osintFindings]);
 
   const loadProjects = useCallback(async () => {
     const items = await listProjects();
@@ -162,8 +162,13 @@ export function App() {
     setContext(assembled);
     setApprovals(pending);
     const mine = targets.filter((row) => row.conversationId === conversationId);
-    const findingsNested = await Promise.all(mine.map((target) => listOsintFindings(target.id).catch(() => [])));
-    setOsintFindings(findingsNested.flat());
+    const scans = await Promise.all(
+      mine.map(async (target) => ({
+        target,
+        findings: await listOsintFindings(target.id).catch(() => []),
+      })),
+    );
+    setOsintScans(scans);
     setResearchBriefs(briefs.filter((row) => row.conversationId === conversationId));
     const executionId = nextSnapshot.executions.at(-1)?.id;
     if (executionId) {
@@ -190,7 +195,7 @@ export function App() {
         setTools([]);
         setContext(null);
         setInspection(null);
-        setOsintFindings([]);
+        setOsintScans([]);
         setResearchBriefs([]);
       }
     },
@@ -326,6 +331,7 @@ export function App() {
       setProjectName('');
       const items = await loadProjects();
       setProjects(items);
+      closePanel();
       setProjectId(project.id);
       await loadProject(project.id);
       goToConversation();
@@ -336,6 +342,7 @@ export function App() {
   }
 
   async function onSelectProject(id: string) {
+    closePanel();
     setProjectId(id);
     setError(null);
     try {
@@ -357,7 +364,7 @@ export function App() {
       setView(emptyView(conversation));
       setTools([]);
       setInspection(null);
-      setOsintFindings([]);
+      setOsintScans([]);
       setResearchBriefs([]);
       closePanel();
       goToConversation();
@@ -368,6 +375,7 @@ export function App() {
   }
 
   async function onOpenConversation(id: string) {
+    closePanel();
     setActiveConversationId(id);
     setError(null);
     goToConversation();
@@ -935,7 +943,7 @@ export function App() {
                   const parsed = message.role === 'assistant' && message.content ? classifyAssistantResult(message.content) : null;
                   const card =
                     parsed?.kind === 'osint'
-                      ? { ...parsed, findings: mergeFindings(parsed.findings, durableFindings) }
+                      ? { ...parsed, findings: findingsForOsintReport(parsed.findings, message.content, osintScans) }
                       : parsed;
                   return (
                     <article
@@ -948,7 +956,7 @@ export function App() {
                       <div className="body" data-testid={message.role === 'assistant' ? 'assistant-output' : 'user-turn'}>
                         {message.role === 'assistant' ? (
                           message.content ? (
-                            <MarkdownBody text={stripPrimaryHashes(message.content)} />
+                            <MarkdownBody text={displayAssistantText(message.content)} />
                           ) : busy ? (
                             'Generating…'
                           ) : (
@@ -1161,9 +1169,7 @@ function ResultCard({
 }
 
 function fileOrigin(file: ProjectFile): string {
-  if (file.path === 'acquisition' || file.path.startsWith('acquisition/')) return 'Acquired';
-  if (/^(generated|osint|research|caspa|website|music)\//i.test(file.path)) return 'Generated';
-  return 'Uploaded';
+  return libraryFileOrigin(file.path);
 }
 
 function SurfaceBack({ onBack, label }: { onBack: () => void; label: string }) {

@@ -2,9 +2,27 @@ import type { ReactNode } from 'react';
 
 export function safeMarkdownHref(href: string): string {
   const trimmed = href.trim();
-  if (!trimmed || trimmed.includes('\\')) return '#';
-  if (/^https?:\/\//i.test(trimmed) || /^mailto:/i.test(trimmed) || trimmed.startsWith('#')) return trimmed;
-  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) return trimmed;
+  if (!trimmed || /[\s\\]/.test(trimmed)) return '#';
+  if (trimmed.startsWith('#') || /^mailto:/i.test(trimmed)) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '#';
+      if (!parsed.hostname) return '#';
+      return trimmed;
+    } catch {
+      return '#';
+    }
+  }
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+    try {
+      const parsed = new URL(trimmed, 'https://atlas.invalid');
+      if (parsed.host !== 'atlas.invalid') return '#';
+      return trimmed;
+    } catch {
+      return '#';
+    }
+  }
   return '#';
 }
 

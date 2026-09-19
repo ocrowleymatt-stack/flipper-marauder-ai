@@ -26,6 +26,9 @@ describe('markdown body', () => {
     expect(safeMarkdownHref('//attacker.com/phish')).toBe('#');
     expect(safeMarkdownHref('/\\evil.com')).toBe('#');
     expect(safeMarkdownHref('/\\\\host')).toBe('#');
+    expect(safeMarkdownHref(`/${'\t'}/host`)).toBe('#');
+    expect(safeMarkdownHref(`/${'\n'}/host`)).toBe('#');
+    expect(safeMarkdownHref(`/${'\r'}/host`)).toBe('#');
     expect(safeMarkdownHref('javascript:alert(1)')).toBe('#');
     expect(safeMarkdownHref('data:text/html,hi')).toBe('#');
     expect(safeMarkdownHref('http:/\\evil.com')).toBe('#');

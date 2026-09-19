@@ -79,6 +79,40 @@ export function parseStructure(payload: Record<string, unknown> | undefined): No
   return parsed.success ? parsed.data : emptyStructure();
 }
 
+export function bindOutlineChapters(
+  titles: string[],
+  previous: NovelStructure['chapters'] = [],
+  documents: Array<{ id: string; title: string }> = [],
+): NovelStructure['chapters'] {
+  const unusedPrevious = [...previous];
+  const unusedDocuments = [...documents];
+  return titles
+    .map((raw) => raw.replace(/^\d+\.\s*/, '').trim())
+    .filter(Boolean)
+    .map((title, index) => {
+      const previousIndex = unusedPrevious.findIndex((chapter) => chapter.title === title);
+      const matched = previousIndex >= 0 ? unusedPrevious.splice(previousIndex, 1)[0] : undefined;
+      if (matched?.documentId) {
+        const taken = unusedDocuments.findIndex((doc) => doc.id === matched.documentId);
+        if (taken >= 0) unusedDocuments.splice(taken, 1);
+      }
+      let documentId = matched?.documentId ?? null;
+      if (!documentId) {
+        const documentIndex = unusedDocuments.findIndex((doc) => doc.title === title);
+        if (documentIndex >= 0) {
+          documentId = unusedDocuments.splice(documentIndex, 1)[0]!.id;
+        }
+      }
+      return {
+        id: matched?.id ?? `ch_${index + 1}`,
+        title,
+        documentId,
+        summary: matched?.summary ?? '',
+        scenes: matched?.scenes ?? [],
+      };
+    });
+}
+
 export function formatStoryBible(bible: StoryBible): string {
   const themes = bible.themes.filter((item) => item.trim()).join(', ');
   return [

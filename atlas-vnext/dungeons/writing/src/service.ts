@@ -21,6 +21,7 @@ import { GENERIC_DENY, WritingError } from './errors.ts';
 import {
   NOVEL_KINDS,
   assembleNovelContext,
+  bindOutlineChapters,
   lineageFrom,
   parseCharacter,
   parseFindings,
@@ -309,7 +310,8 @@ export class WritingService {
     const character = parseCharacter(input.payload, input.title || String(input.payload.name ?? 'Unnamed'));
     const text = [character.name, character.role, character.voice, character.notes].filter(Boolean).join('\n');
     if (input.id) {
-      return this.updateProjectRecord(actor, input.id, {
+      return this.updateProjectRecord(actor, projectId, input.id, {
+        kind: NOVEL_KINDS.character,
         title: character.name,
         payload: character,
         text,
@@ -364,7 +366,22 @@ export class WritingService {
     input: { payload: Record<string, unknown>; expectedRevision?: number },
   ): Promise<DungeonRecordRow> {
     await this.requireProject(actor, projectId, 'artifact.write');
-    const structure = parseStructure(input.payload);
+    const incoming = parseStructure(input.payload);
+    const existing = (
+      await this.deps.persistence.forActor(actor).dungeonRecords.list(actor, {
+        workspaceId: projectId,
+        dungeon: 'writing',
+        kind: NOVEL_KINDS.structure,
+      })
+    )[0];
+    const documents = await this.store(actor).list(actor, projectId);
+    const structure = {
+      chapters: bindOutlineChapters(
+        incoming.chapters.map((chapter) => chapter.title),
+        existing ? parseStructure(existing.payload).chapters : [],
+        documents.map((row) => ({ id: row.id, title: row.title })),
+      ),
+    };
     return this.upsertProjectRecord(actor, projectId, {
       kind: NOVEL_KINDS.structure,
       title: 'Structure',
@@ -1034,18 +1051,18 @@ export class WritingService {
           emittedVisibleOutput: attempt.emittedVisibleOutput,
         })),
       });
+      await this.recordLineage(actor, {
+        documentId: record.id,
+        version: versioned.document.currentVersion,
+        versionId: versioned.version.id,
+        parentVersion: record.currentVersion > 0 ? record.currentVersion : null,
+        operation: input.operation,
+        executionId: input.executionId,
+        context: input.context,
+        createdBy: actor.principalId,
+        workspaceId: record.workspaceId,
+      });
       return versioned;
-    });
-    await this.recordLineage(actor, {
-      documentId: record.id,
-      version: committed.document.currentVersion,
-      versionId: committed.version.id,
-      parentVersion: record.currentVersion > 0 ? record.currentVersion : null,
-      operation: input.operation,
-      executionId: input.executionId,
-      context: input.context,
-      createdBy: actor.principalId,
-      workspaceId: record.workspaceId,
     });
     return this.present(actor, committed.document, { content: input.text });
   }
@@ -1145,29 +1162,31 @@ export class WritingService {
       text: input.text,
       type: `writing.${kind}`,
     });
-    const row = await this.deps.persistence.forActor(actor).dungeonRecords.create(actor, {
-      workspaceId: record.workspaceId,
-      dungeon: 'writing',
-      kind,
-      title: findings[0]?.concern.slice(0, 80) || `${input.operation} findings`,
-      status: 'completed',
-      payload: { documentId: record.id, findings, executionId: input.executionId, context: input.manifest },
-      artefactId: artefact.id,
-      contentHash: artefact.contentHash,
-      parentId: record.id,
+    return this.deps.persistence.run(async () => {
+      const row = await this.deps.persistence.forActor(actor).dungeonRecords.create(actor, {
+        workspaceId: record.workspaceId,
+        dungeon: 'writing',
+        kind,
+        title: findings[0]?.concern.slice(0, 80) || `${input.operation} findings`,
+        status: 'completed',
+        payload: { documentId: record.id, findings, executionId: input.executionId, context: input.manifest },
+        artefactId: artefact.id,
+        contentHash: artefact.contentHash,
+        parentId: record.id,
+      });
+      await this.recordLineage(actor, {
+        documentId: record.id,
+        version: record.currentVersion,
+        versionId: null,
+        parentVersion: record.currentVersion > 0 ? record.currentVersion : null,
+        operation: input.operation,
+        executionId: input.executionId,
+        context: input.manifest,
+        createdBy: actor.principalId,
+        workspaceId: record.workspaceId,
+      });
+      return row;
     });
-    await this.recordLineage(actor, {
-      documentId: record.id,
-      version: record.currentVersion,
-      versionId: null,
-      parentVersion: record.currentVersion > 0 ? record.currentVersion : null,
-      operation: input.operation,
-      executionId: input.executionId,
-      context: input.manifest,
-      createdBy: actor.principalId,
-      workspaceId: record.workspaceId,
-    });
-    return row;
   }
 
   private async recordLineage(
@@ -1228,15 +1247,23 @@ export class WritingService {
 
   private async updateProjectRecord(
     actor: WritingActor,
+    projectId: string,
     id: string,
-    input: { title: string; payload: Record<string, unknown>; text: string; expectedRevision: number },
+    input: { kind: string; title: string; payload: Record<string, unknown>; text: string; expectedRevision: number },
   ): Promise<DungeonRecordRow> {
     const existing = await this.deps.persistence.forActor(actor).dungeonRecords.get(actor, id);
-    if (!existing) throw new WritingError('not_found', GENERIC_DENY, 404);
+    if (
+      !existing ||
+      existing.workspaceId !== projectId ||
+      existing.dungeon !== 'writing' ||
+      existing.kind !== input.kind
+    ) {
+      throw new WritingError('not_found', GENERIC_DENY, 404);
+    }
     const artefact = await this.deps.files.createTextArtefact(actor, {
-      projectId: existing.workspaceId ?? existing.id,
+      projectId,
       text: input.text,
-      type: `writing.${existing.kind}`,
+      type: `writing.${input.kind}`,
     });
     try {
       return await this.deps.persistence.forActor(actor).dungeonRecords.update(actor, id, {
@@ -1270,7 +1297,8 @@ export class WritingService {
       })
     )[0];
     if (!existing) return this.createProjectRecord(actor, projectId, input);
-    return this.updateProjectRecord(actor, existing.id, {
+    return this.updateProjectRecord(actor, projectId, existing.id, {
+      kind: input.kind,
       title: input.title,
       payload: input.payload,
       text: input.text,

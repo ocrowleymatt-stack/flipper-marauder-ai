@@ -140,6 +140,19 @@ describe('Caspa novelist host', () => {
       body: JSON.stringify({ payload: { name: 'Mara', role: 'smuggler', voice: 'clipped' } }),
     });
     expect(character.status).toBe(201);
+    const characterBody = (await character.json()) as { id: string; revision: number; title: string };
+    const other = await createProject(url, session, 'Other novel');
+    const hijack = await fetch(`${url}/api/projects/${other.project.id}/characters/${characterBody.id}`, {
+      method: 'PATCH',
+      headers: auth(session),
+      body: JSON.stringify({ payload: { name: 'Hijacked' }, expectedRevision: characterBody.revision }),
+    });
+    expect(hijack.status).toBe(404);
+    const listed = (await (await fetch(`${url}/api/projects/${project.id}/characters`, { headers: { cookie: session.cookie } })).json()) as Array<{
+      title: string;
+    }>;
+    expect(listed.some((row) => row.title === 'Mara')).toBe(true);
+    expect(listed.some((row) => row.title === 'Hijacked')).toBe(false);
     const world = await fetch(`${url}/api/projects/${project.id}/world`, {
       method: 'POST',
       headers: auth(session),
@@ -152,10 +165,6 @@ describe('Caspa novelist host', () => {
       body: JSON.stringify({ payload: { chapters: [{ id: 'ch_1', title: 'Arrival', documentId: null, summary: '', scenes: [] }] } }),
     });
     expect(structure.status).toBe(200);
-    const listed = (await (await fetch(`${url}/api/projects/${project.id}/characters`, { headers: { cookie: session.cookie } })).json()) as Array<{
-      title: string;
-    }>;
-    expect(listed.some((row) => row.title === 'Mara')).toBe(true);
     const worlds = (await (await fetch(`${url}/api/projects/${project.id}/world`, { headers: { cookie: session.cookie } })).json()) as Array<{
       title: string;
     }>;

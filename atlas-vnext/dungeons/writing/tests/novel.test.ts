@@ -12,7 +12,7 @@ import { openFilesystemCas } from '@atlas-vnext/storage';
 import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import type { RouteDecision, StreamChunk } from '@atlas-vnext/contracts';
 import { WritingService } from '../src/index.ts';
-import { assembleNovelContext, isFindingsOnlyOperation, parseFindings, parseStoryBible } from '../src/novel.ts';
+import { assembleNovelContext, bindOutlineChapters, isFindingsOnlyOperation, parseFindings, parseStoryBible } from '../src/novel.ts';
 import type { WritingStreamEvent } from '../src/service.ts';
 
 function decision(): RouteDecision {
@@ -92,7 +92,7 @@ async function makeWriting(stream: (prompt: string) => AsyncGenerator<StreamChun
     policy: new EffectivePolicyEngine(authority),
   });
   const project = await projects.create(actor, { name: 'Harbour', dungeon: 'writing' });
-  return { writing, actor, project, persistence };
+  return { writing, actor, project, persistence, files, projects };
 }
 
 async function collect(events: AsyncGenerator<WritingStreamEvent>) {
@@ -167,6 +167,108 @@ She flinched two pages ago.`);
     expect(structure.kind).toBe('structure');
     expect((await writing.listCharacters(actor, project.id)).some((row) => row.title === 'Mara')).toBe(true);
     expect((await writing.getStoryBible(actor, project.id))?.id).toBe(bible.id);
+  });
+
+  it('rejects character updates that leave the project or kind', async () => {
+    const { writing, actor, project, projects } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'unused' };
+    });
+    const character = await writing.saveCharacter(actor, project.id, {
+      payload: { name: 'Mara', role: 'smuggler' },
+    });
+    const bible = await writing.saveStoryBible(actor, project.id, { payload: { premise: 'A singing kettle' } });
+    const other = await projects.create(actor, { name: 'Other novel', dungeon: 'writing' });
+    await expect(
+      writing.saveCharacter(actor, other.id, {
+        id: character.id,
+        payload: { name: 'Hijacked' },
+        expectedRevision: character.revision,
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    await expect(
+      writing.saveCharacter(actor, project.id, {
+        id: bible.id,
+        payload: { name: 'Not a character' },
+        expectedRevision: bible.revision,
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    expect((await writing.listCharacters(actor, project.id))[0]?.title).toBe('Mara');
+    expect((await writing.getStoryBible(actor, project.id))?.payload).toMatchObject({ premise: 'A singing kettle' });
+  });
+
+  it('does not report a lineage failure as a committed manuscript mutation', async () => {
+    const { writing, actor, project, files } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'unused' };
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'Harbour' });
+    const original = files.createTextArtefact.bind(files);
+    let failLineage = true;
+    files.createTextArtefact = async (actorArg, input) => {
+      if (failLineage && input.type === 'writing.creative_lineage') {
+        throw new Error('lineage unavailable');
+      }
+      return original(actorArg, input);
+    };
+    await expect(
+      writing.edit(actor, created.id, { text: 'The kettle sang over the harbour stones.', expectedRevision: created.revision }),
+    ).rejects.toThrow(/lineage unavailable/);
+    const afterFailure = await writing.get(actor, created.id);
+    expect(afterFailure.currentVersion).toBe(0);
+    expect(afterFailure.content).toBe('');
+    failLineage = false;
+    const edited = await writing.edit(actor, created.id, {
+      text: 'The kettle sang over the harbour stones.',
+      expectedRevision: afterFailure.revision,
+    });
+    expect(edited.currentVersion).toBe(1);
+    expect(edited.content).toContain('kettle');
+    expect((await writing.listLineage(actor, created.id)).some((row) => row.kind === 'creative_lineage')).toBe(true);
+  });
+
+  it('preserves chapter document ids by title, not newest-first document position', () => {
+    const bound = bindOutlineChapters(
+      ['Harbour', 'Departure'],
+      [{ id: 'ch_harbour', title: 'Harbour', documentId: 'doc_harbour', summary: 'Mara waits', scenes: [] }],
+      [
+        { id: 'doc_departure', title: 'Departure' },
+        { id: 'doc_harbour', title: 'Harbour' },
+      ],
+    );
+    expect(bound).toEqual([
+      {
+        id: 'ch_harbour',
+        title: 'Harbour',
+        documentId: 'doc_harbour',
+        summary: 'Mara waits',
+        scenes: [],
+      },
+      {
+        id: 'ch_2',
+        title: 'Departure',
+        documentId: 'doc_departure',
+        summary: '',
+        scenes: [],
+      },
+    ]);
+  });
+
+  it('binds outline chapters by title rather than newest-first document order', async () => {
+    const { writing, actor, project } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'unused' };
+    });
+    const harbour = await writing.create(actor, { projectId: project.id, title: 'Harbour' });
+    const departure = await writing.create(actor, { projectId: project.id, title: 'Departure' });
+    const saved = await writing.saveStructure(actor, project.id, {
+      payload: {
+        chapters: [
+          { id: 'ch_1', title: 'Harbour', documentId: departure.id, summary: '', scenes: [] },
+          { id: 'ch_2', title: 'Departure', documentId: harbour.id, summary: '', scenes: [] },
+        ],
+      },
+    });
+    const chapters = (saved.payload as { chapters: Array<{ title: string; documentId: string | null }> }).chapters;
+    expect(chapters.find((chapter) => chapter.title === 'Harbour')?.documentId).toBe(harbour.id);
+    expect(chapters.find((chapter) => chapter.title === 'Departure')?.documentId).toBe(departure.id);
   });
 
   it('records creative lineage on generate and does not treat it as evidential provenance', async () => {

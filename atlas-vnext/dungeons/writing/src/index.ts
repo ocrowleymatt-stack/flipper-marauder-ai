@@ -14,6 +14,7 @@ export {
 export {
   NOVEL_KINDS,
   assembleNovelContext,
+  bindOutlineChapters,
   isFindingsOnlyOperation,
   lineageFrom,
   parseFindings,

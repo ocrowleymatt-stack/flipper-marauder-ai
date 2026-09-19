@@ -51,6 +51,14 @@ const OPERATIONS = [
 
 type CaspaSurface = 'manuscript' | 'bible' | 'characters' | 'structure' | 'continuity';
 
+type OutlineChapter = {
+  id: string;
+  title: string;
+  documentId: string | null;
+  summary?: string;
+  scenes?: Array<{ id: string; title: string; documentId: string | null; summary?: string }>;
+};
+
 const SURFACES: Array<{ id: CaspaSurface; label: string }> = [
   { id: 'manuscript', label: 'Manuscript' },
   { id: 'bible', label: 'Story bible' },
@@ -356,18 +364,24 @@ export function CaspaPanel({
   async function onSaveStructure(event: FormEvent) {
     event.preventDefault();
     try {
+      const previous = Array.isArray((structure?.payload as { chapters?: OutlineChapter[] } | undefined)?.chapters)
+        ? ((structure!.payload as { chapters: OutlineChapter[] }).chapters)
+        : [];
+      const unused = [...previous];
       const chapters = structureText
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
         .map((line, index) => {
-          const existing = documents[index];
+          const title = line.replace(/^\d+\.\s*/, '');
+          const matchIndex = unused.findIndex((chapter) => chapter.title === title);
+          const matched = matchIndex >= 0 ? unused.splice(matchIndex, 1)[0] : undefined;
           return {
-            id: `ch_${index + 1}`,
-            title: line.replace(/^\d+\.\s*/, ''),
-            documentId: existing?.id ?? null,
-            summary: '',
-            scenes: [],
+            id: matched?.id ?? `ch_${index + 1}`,
+            title,
+            documentId: matched?.documentId ?? null,
+            summary: matched?.summary ?? '',
+            scenes: matched?.scenes ?? [],
           };
         });
       const saved = await saveStructure(projectId, { payload: { chapters }, expectedRevision: structure?.revision });

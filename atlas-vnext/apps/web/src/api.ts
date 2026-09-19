@@ -169,8 +169,8 @@ export type StreamEvent =
   | { type: 'execution.started'; executionId: string; capability: string }
   | { type: 'attempt.started'; executionId: string; provider: string; model: string }
   | { type: 'attempt.failed'; failure: { message: string }; emittedVisibleOutput: boolean }
-  | { type: 'assistant.delta'; text: string }
-  | { type: 'assistant.completed'; text: string }
+  | { type: 'assistant.delta'; text: string; executionId?: string }
+  | { type: 'assistant.completed'; text: string; executionId?: string }
   | { type: 'provider.warning'; message: string; provider?: string }
   | { type: 'provider.failed'; failure: { message: string } }
   | { type: 'execution.failed'; failure: { code: string; message: string } }

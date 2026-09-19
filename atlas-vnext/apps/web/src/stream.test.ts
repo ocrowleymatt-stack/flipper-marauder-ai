@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { runtimeWaitingLabel } from './api';
 import type { ConversationSnapshot, Message, StreamEvent } from './api';
-import { applyStream, emptyView, ensureView, userRunLabel } from './stream';
+import { applyDisplayedStream, applyStream, emptyView, ensureView, userRunLabel } from './stream';
 
 const conversation: ConversationSnapshot['conversation'] = {
   id: 'con_1',
@@ -113,6 +113,73 @@ describe('visible output stream assembly', () => {
       ensureView(null, 'con_1', conversation),
     );
     expect(view.snapshot.messages.map((item) => item.content)).toEqual(['first send', 'here']);
+    const fromNull = applyDisplayedStream(
+      null,
+      'con_1',
+      { type: 'assistant.delta', text: 'here' },
+      runtimeWaitingLabel,
+      'con_1',
+      conversation,
+    );
+    expect(fromNull?.snapshot.messages.find((item) => item.role === 'assistant')?.content).toBe('here');
+  });
+
+  it('does not replace a newly selected conversation with the streaming one', () => {
+    const other: ConversationSnapshot['conversation'] = {
+      ...conversation,
+      id: 'con_2',
+      urn: 'urn:atlas:conversation:con_2',
+      title: 'other',
+    };
+    const displayed = {
+      ...emptyView(other),
+      snapshot: {
+        conversation: other,
+        messages: [user({ conversationId: 'con_2', content: 'second thread' })],
+        executions: [],
+      },
+    };
+    expect(ensureView(displayed, 'con_1', conversation).snapshot.conversation.id).toBe('con_2');
+    const hijacked = applyDisplayedStream(
+      displayed,
+      'con_1',
+      { type: 'assistant.delta', text: 'should not appear' },
+      runtimeWaitingLabel,
+      'con_2',
+      conversation,
+    );
+    expect(hijacked?.snapshot.conversation.id).toBe('con_2');
+    expect(hijacked?.snapshot.messages.map((item) => item.content)).toEqual(['second thread']);
+  });
+
+  it('does not bootstrap a background stream onto a cleared view', () => {
+    const next = applyDisplayedStream(
+      null,
+      'con_1',
+      { type: 'assistant.delta', text: 'stale' },
+      runtimeWaitingLabel,
+      null,
+      conversation,
+    );
+    expect(next).toBeNull();
+  });
+
+  it('unseals only when a new run starts, not on every stream event', () => {
+    const sealed = play([
+      { type: 'message', message: assistant({ content: 'visible' }) },
+      { type: 'attempt.failed', failure: { message: 'cut' }, emittedVisibleOutput: true },
+    ]);
+    expect(sealed.sealedResponse).toBe(true);
+    const kept = applyStream(
+      ensureView(sealed, 'con_1', conversation),
+      'con_1',
+      { type: 'assistant.delta', text: 'switched provider' },
+      runtimeWaitingLabel,
+    );
+    expect(kept.sealedResponse).toBe(true);
+    expect(kept.snapshot.messages[0]?.content).toBe('visible');
+    const restarted = ensureView(sealed, 'con_1', conversation, { resetRun: true });
+    expect(restarted.sealedResponse).toBe(false);
   });
 
   it('surfaces classified failures without erasing already-visible text', () => {

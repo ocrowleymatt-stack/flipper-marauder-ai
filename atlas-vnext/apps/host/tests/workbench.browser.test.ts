@@ -89,7 +89,7 @@ describe.skipIf(!enabled)('Workbench browser acceptance', { timeout: 120_000 }, 
       throw new Error('playwright is required when ATLAS_BROWSER_TEST=1');
     }
     const { url } = await startWorkbenchUi();
-    const launchOptions: Parameters<typeof playwright.chromium.launch>[0] = {
+    const launchOptions: { headless: boolean; args: string[]; executablePath?: string } = {
       headless: true,
       args: ['--no-sandbox', '--disable-dev-shm-usage'],
     };
@@ -114,7 +114,7 @@ describe.skipIf(!enabled)('Workbench browser acceptance', { timeout: 120_000 }, 
       const assistant = page.getByTestId('message-assistant').last();
       await assistant.waitFor({ timeout: 30_000 });
       await page.waitForFunction(
-        (expected) => {
+        (expected: string) => {
           const nodes = [...document.querySelectorAll('[data-testid="message-assistant"] .body')];
           return nodes.some((node) => (node.textContent ?? '').includes(expected));
         },
@@ -137,7 +137,8 @@ describe.skipIf(!enabled)('Workbench browser acceptance', { timeout: 120_000 }, 
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.getByTestId('workbench-shell').waitFor({ timeout: 30_000 });
       await page.getByTestId('message-assistant').last().waitFor({ timeout: 20_000 });
-      await expect(page.getByTestId('message-assistant').last()).toContainText(marker);
+      const afterReload = await page.getByTestId('message-assistant').last().locator('.body').innerText();
+      expect(afterReload).toContain(marker);
       await page.screenshot({ path: join(shotDir, '02-after-refresh.png'), fullPage: true });
 
       await page.getByTestId('file-path').fill('brief.md');
@@ -165,7 +166,10 @@ describe.skipIf(!enabled)('Workbench browser acceptance', { timeout: 120_000 }, 
         undefined,
         { timeout: 30_000 },
       );
-      await expect(page.getByTestId('conversation-messages')).not.toContainText(marker);
+      const secondBodies = await page.locator('[data-testid="message-assistant"] .body').allInnerTexts();
+      expect(secondBodies.some((text) => text.includes('SECOND THREAD READY'))).toBe(true);
+      const threadText = await page.getByTestId('conversation-messages').innerText();
+      expect(threadText).not.toContain(marker);
       await page.screenshot({ path: join(shotDir, '04-second-conversation.png'), fullPage: true });
 
       await page.setViewportSize({ width: 390, height: 844 });

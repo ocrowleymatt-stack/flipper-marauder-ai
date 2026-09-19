@@ -221,11 +221,29 @@ export function ensureView(
   current: StreamView | null,
   conversationId: string,
   fallback: ConversationSnapshot['conversation'],
+  options?: { resetRun?: boolean },
 ): StreamView {
-  if (current && current.snapshot.conversation.id === conversationId) {
-    return { ...current, sealedResponse: false, classifiedFailure: null, waitLabel: null };
+  if (current && current.snapshot.conversation.id !== conversationId) {
+    return current;
   }
-  return emptyView(conversationStub(conversationId, fallback.projectId ?? null, fallback));
+  const view = current ?? emptyView(conversationStub(conversationId, fallback.projectId ?? null, fallback));
+  if (options?.resetRun) {
+    return { ...view, sealedResponse: false, classifiedFailure: null, waitLabel: null };
+  }
+  return view;
+}
+
+export function applyDisplayedStream(
+  current: StreamView | null,
+  conversationId: string,
+  event: StreamEvent,
+  waitFrom: (message: string) => string | null,
+  displayedConversationId: string | null,
+  fallback: ConversationSnapshot['conversation'],
+): StreamView | null {
+  if (displayedConversationId !== conversationId) return current;
+  if (current && current.snapshot.conversation.id !== conversationId) return current;
+  return applyStream(ensureView(current, conversationId, fallback), conversationId, event, waitFrom);
 }
 
 export function emptyView(conversation: ConversationSnapshot['conversation']): StreamView {

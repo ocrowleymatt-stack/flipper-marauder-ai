@@ -38,7 +38,7 @@ import { EstatePanel } from './estate';
 import { LoginForm } from './login';
 import { playCue, prefersReducedMotion, setSoundEnabled, soundEnabled } from './experience';
 import {
-  applyStream,
+  applyDisplayedStream,
   capabilityLabel,
   emptyView,
   ensureView,
@@ -87,6 +87,8 @@ export function App() {
   const messagesRef = useRef<HTMLElement>(null);
   const stickToBottom = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
+  const activeConversationIdRef = useRef<string | null>(null);
+  activeConversationIdRef.current = activeConversationId;
   const composerId = useId();
   const liveId = useId();
 
@@ -138,6 +140,7 @@ export function App() {
       setFiles(projectFiles);
       const nextId = preferredConversationId && convos.some((item) => item.id === preferredConversationId) ? preferredConversationId : convos[0]?.id ?? null;
       setActiveConversationId(nextId);
+      activeConversationIdRef.current = nextId;
       if (nextId) await loadConversation(nextId);
       else {
         setView(null);
@@ -174,6 +177,7 @@ export function App() {
         setConversations(convos);
         const nextId = convos[0]?.id ?? null;
         setActiveConversationId(nextId);
+        activeConversationIdRef.current = nextId;
         if (nextId) await loadConversation(nextId);
         setStatus('Ready.');
       }
@@ -281,6 +285,7 @@ export function App() {
       const conversation = await createConversation(projectId);
       setConversations((current) => [conversation, ...current.filter((item) => item.id !== conversation.id)]);
       setActiveConversationId(conversation.id);
+      activeConversationIdRef.current = conversation.id;
       setView(emptyView(conversation));
       setTools([]);
       setInspection(null);
@@ -293,6 +298,7 @@ export function App() {
 
   async function onOpenConversation(id: string) {
     setActiveConversationId(id);
+    activeConversationIdRef.current = id;
     setNavOpen(false);
     setError(null);
     setSurface('conversation');
@@ -313,34 +319,41 @@ export function App() {
     setStatus('Working…');
     setSurface('conversation');
     setView((current) =>
-      ensureView(current, conversationId, {
-        id: conversationId,
-        urn: current?.snapshot.conversation.urn ?? `urn:atlas:conversation:${conversationId}`,
-        title: current?.snapshot.conversation.title ?? 'Conversation',
-        projectId: current?.snapshot.conversation.projectId ?? projectId,
-        createdAt: current?.snapshot.conversation.createdAt ?? new Date().toISOString(),
-        updatedAt: current?.snapshot.conversation.updatedAt ?? new Date().toISOString(),
-      }),
+      ensureView(
+        current,
+        conversationId,
+        {
+          id: conversationId,
+          urn: current?.snapshot.conversation.urn ?? `urn:atlas:conversation:${conversationId}`,
+          title: current?.snapshot.conversation.title ?? 'Conversation',
+          projectId: current?.snapshot.conversation.projectId ?? projectId,
+          createdAt: current?.snapshot.conversation.createdAt ?? new Date().toISOString(),
+          updatedAt: current?.snapshot.conversation.updatedAt ?? new Date().toISOString(),
+        },
+        { resetRun: true },
+      ),
     );
     try {
       for await (const event of sendMessage(conversationId, content, selected, abort.signal)) {
         if (abort.signal.aborted) break;
         setView((current) =>
-          applyStream(
-            ensureView(current, conversationId, {
+          applyDisplayedStream(
+            current,
+            conversationId,
+            event,
+            runtimeWaitingLabel,
+            activeConversationIdRef.current,
+            {
               id: conversationId,
               urn: `urn:atlas:conversation:${conversationId}`,
               title: 'Conversation',
               projectId,
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
-            }),
-            conversationId,
-            event,
-            runtimeWaitingLabel,
+            },
           ),
         );
-        if (event.type === 'tool.lifecycle') {
+        if (event.type === 'tool.lifecycle' && activeConversationIdRef.current === conversationId) {
           await listConversationTools(conversationId)
             .then(setTools)
             .catch(() => undefined);
@@ -351,17 +364,23 @@ export function App() {
       }
       if (abort.signal.aborted) {
         setStatus('Stopped.');
-        await loadConversation(conversationId).catch(() => undefined);
+        if (activeConversationIdRef.current === conversationId) {
+          await loadConversation(conversationId).catch(() => undefined);
+        }
         return;
       }
-      await loadConversation(conversationId);
+      if (activeConversationIdRef.current === conversationId) {
+        await loadConversation(conversationId);
+      }
       setConversations(projectId ? await listProjectConversations(projectId) : await listConversations());
       playCue('complete');
       setStatus('Done.');
     } catch (err) {
       if (abort.signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
         setStatus('Stopped.');
-        await loadConversation(conversationId).catch(() => undefined);
+        if (activeConversationIdRef.current === conversationId) {
+          await loadConversation(conversationId).catch(() => undefined);
+        }
         return;
       }
       playCue('warn');
@@ -382,6 +401,7 @@ export function App() {
       const conversation = await createConversation(projectId);
       conversationId = conversation.id;
       setActiveConversationId(conversation.id);
+      activeConversationIdRef.current = conversation.id;
       setConversations((current) => [conversation, ...current]);
       setView(emptyView(conversation));
     }
@@ -578,6 +598,8 @@ export function App() {
                 setSession({ authenticated: false, bootstrapAllowed: false, loginAvailable: true, csrfToken: null, principal: null });
                 setProjects([]);
                 setConversations([]);
+                setActiveConversationId(null);
+                activeConversationIdRef.current = null;
                 setView(null);
                 setStatus('Signed out.');
               })();

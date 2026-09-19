@@ -1,10 +1,16 @@
 # Atlas vNext release validation
 
+**Public baseline (accepted):** `68603a465f39ff20804f221b5db6e3faf1cdfb11`  
+See [release/PUBLIC-VNEXT-BASELINE.md](./release/PUBLIC-VNEXT-BASELINE.md). Exact-main CI [35424604752](https://github.com/ocrowleymatt-stack/flipper-marauder-ai/actions/runs/35424604752) SUCCESS. Production build `production-68603a4-20260919T0552Z`. Public origin `https://atlas.ocrowley.com`.
+
+The remainder of this document is the pre-cutover development freeze. It is historical context, not the public SHA.
+
 Accepted development baseline: `0af67f19f2349a7ac4430364165af254caf4aa96`
 
-Status: **READY FOR PRODUCTION CUTOVER**. Production cutover is not authorised or performed by this document.
+Status: **SUPERSEDED FOR PUBLIC TRAFFIC** by `68603a4`. Production cutover of vNext native login was a later explicit operation; visible-output recovery then became the first accepted public application SHA.
 
 Release candidate (immutable for the cutover window): `757b77a9518ccbd595d1d3a3698915f3a94b045c`
+
 
 Exact-head GitHub CI: workflow run `35174760899` (`verify` SUCCESS) on that SHA.
 

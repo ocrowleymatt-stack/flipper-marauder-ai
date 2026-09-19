@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebsiteStudioService, assembleSiteHtml, escapeHtml } from '../src/index.ts';
-import { closePersistence, openDungeonStack } from '../../../tests/helpers/dungeon-stack.ts';
+import { closePersistence, openDungeonStack, storeTenantPolicy } from '../../../tests/helpers/dungeon-stack.ts';
 import type { PlatformPersistence } from '@atlas-vnext/persistence';
 
 const persistences: PlatformPersistence[] = [];
@@ -186,6 +186,32 @@ describe('Website Studio dungeon', () => {
       signal: AbortSignal.abort(),
     });
     expect(cancelled).toEqual({ handled: true, failed: true, text: 'Website generation was cancelled.' });
+  });
+
+  it('passes local-only effective policy into host generation instead of privacy any', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    await storeTenantPolicy(stack, { processing: 'local_only' });
+    const seen: Array<'any' | 'local_only' | undefined> = [];
+    const website = new WebsiteStudioService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      runtime: stack.runtime,
+      authority: stack.authority,
+      policy: stack.policy,
+      generate: {
+        async generateHtml(input) {
+          seen.push(input.privacy);
+          return {
+            html: '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Local</title></head><body><h1>Local only</h1><p>This page is assembled under local-only policy with enough visible copy.</p></body></html>',
+          };
+        },
+      },
+    });
+    const site = await website.create(stack.actor, { projectId: stack.project.id, name: 'Local', brief: 'local site' });
+    await website.generate(stack.actor, site.id, 'Build a website about a local-only lantern fair');
+    expect(seen).toEqual(['local_only']);
   });
 
   it('does not treat ordinary research questions as website work', async () => {

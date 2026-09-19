@@ -78,6 +78,7 @@ export interface SiteGeneratePort {
   generateHtml(input: {
     brief: string;
     signal?: AbortSignal;
+    privacy?: 'any' | 'local_only';
   }): Promise<{ html: string; model?: string }>;
 }
 

@@ -13,7 +13,7 @@ export class NodeSiteGenerate implements SiteGeneratePort {
     private readonly executor: ModelExecutor,
   ) {}
 
-  async generateHtml(input: { brief: string; signal?: AbortSignal }): Promise<{ html: string; model?: string }> {
+  async generateHtml(input: { brief: string; signal?: AbortSignal; privacy?: 'any' | 'local_only' }): Promise<{ html: string; model?: string }> {
     if (input.signal?.aborted) {
       const error = new Error('aborted') as Error & { code: string };
       error.code = 'aborted';
@@ -21,7 +21,7 @@ export class NodeSiteGenerate implements SiteGeneratePort {
     }
     const decision: RouteDecision = this.router.resolve('nexus/code', {
       requireCode: true,
-      privacy: 'any',
+      privacy: input.privacy ?? 'any',
     });
     let html = '';
     let model: string | undefined = decision.model;
@@ -45,7 +45,11 @@ export class NodeSiteGenerate implements SiteGeneratePort {
         if (chunk.type === 'text' && chunk.text) html += chunk.text;
       }
     } catch (err) {
-      if (input.signal?.aborted || (err instanceof Error && /aborted|AbortError/i.test(err.name + err.message))) {
+      if (
+        input.signal?.aborted ||
+        (err instanceof Error && /aborted|AbortError|cancelled/i.test(`${err.name} ${err.message}`)) ||
+        (err && typeof err === 'object' && 'code' in err && (err as { code?: string }).code === 'cancelled')
+      ) {
         const error = new Error('aborted') as Error & { code: string };
         error.code = 'aborted';
         throw error;

@@ -162,7 +162,7 @@ export class WebsiteStudioService {
     });
     if (!write.allowed) throw new WebsiteError('permission_denied', GENERIC_DENY, 404);
 
-    const produced = await this.produceHtml(brief, options.signal);
+    const produced = await this.produceHtml(brief, options.signal, this.deps.policy.runtimePrivacy(policy));
     const artefact = await this.deps.files.createTextArtefact(actor, {
       projectId: site.workspaceId,
       text: produced.html,
@@ -336,6 +336,7 @@ export class WebsiteStudioService {
   private async produceHtml(
     brief: string,
     signal?: AbortSignal,
+    privacy: 'any' | 'local_only' = 'any',
   ): Promise<{ html: string; source: 'model' | 'assembler'; audit: SiteAudit; note?: string }> {
     if (signal?.aborted) throw new Error('aborted');
     let note: string | undefined;
@@ -343,7 +344,7 @@ export class WebsiteStudioService {
     let source: 'model' | 'assembler' = 'assembler';
     if (this.deps.generate) {
       try {
-        const generated = await this.deps.generate.generateHtml({ brief, signal });
+        const generated = await this.deps.generate.generateHtml({ brief, signal, privacy });
         html = sanitizeSiteHtml(generated.html);
         source = 'model';
       } catch (err) {
@@ -394,7 +395,10 @@ export { assembleSiteHtml, escapeHtml } from './assemble.ts';
 export { auditSiteHtml, sanitizeSiteHtml } from './audit.ts';
 
 function isAbortError(err: unknown): boolean {
-  return err instanceof Error && /aborted|AbortError/i.test(err.name + err.message);
+  if (!err || typeof err !== 'object') return false;
+  const code = 'code' in err ? String((err as { code?: string }).code) : '';
+  if (code === 'cancelled' || code === 'aborted') return true;
+  return err instanceof Error && /aborted|AbortError|cancelled/i.test(`${err.name} ${err.message}`);
 }
 
 export type { DungeonRecordRow };

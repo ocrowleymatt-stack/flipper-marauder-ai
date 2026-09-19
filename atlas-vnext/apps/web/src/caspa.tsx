@@ -236,7 +236,7 @@ export function CaspaPanel({
       <header className="thread-header">
         <div>
           <h2>{active?.title ?? 'Caspa'}</h2>
-          <p className="hint">Documents belong to this project. Caspa does not route providers or grant Authority.</p>
+          <p className="hint">Write in this project. Generate, edit, and restore from here. Provenance is available when you ask for it.</p>
         </div>
         <p className={`pill ${active?.status ?? 'idle'}`}>{active?.status ?? 'idle'}</p>
       </header>

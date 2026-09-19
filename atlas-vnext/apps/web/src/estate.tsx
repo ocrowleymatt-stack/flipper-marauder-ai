@@ -602,44 +602,46 @@ function WebsitePanel({
   }
 
   return (
-    <main className="workspace estate" aria-label="Website Studio">
+    <main className="workspace estate" aria-label="Website">
       <header className="thread-header">
         <div>
-          <h2>Website Studio</h2>
-          <p className="hint">
-            One canonical site per project. Preview is ephemeral. Promote needs Authority <code>deployment.promote</code> and stored
-            effective policy <code>repoWrite</code>. Default is no repo write; enable it in Privacy &amp; Safety with CONFIRM.
-          </p>
+          <h2>Website</h2>
+          <p className="hint">Create a site for this project. Preview is temporary. Publishing is an owner action.</p>
         </div>
       </header>
       <section className="estate-body">
         <form className="stack" onSubmit={(event) => void onCreate(event)}>
-          <label htmlFor="site-name">Name</label>
+          <label htmlFor="site-name">Site name</label>
           <input id="site-name" value={name} onChange={(event) => setName(event.target.value)} />
-          <label htmlFor="site-brief">Brief</label>
+          <label htmlFor="site-brief">Describe what you want</label>
           <textarea id="site-brief" value={brief} onChange={(event) => setBrief(event.target.value)} rows={4} />
           <button type="submit" className="primary">
-            Create site
+            Create
           </button>
         </form>
         <ul className="plain">
           {sites.map((site) => (
             <li key={site.id}>
               <button type="button" className={site.id === activeId ? 'active' : ''} onClick={() => setActiveId(site.id)}>
-                <span>{site.name}</span>
-                <span className="meta">{site.currentRevisionId ? 'has preview' : 'empty'}</span>
+                <span className="conv-title">{site.name}</span>
+                <span className="conv-meta">{site.currentRevisionId ? 'has preview' : 'empty'}</span>
               </button>
             </li>
           ))}
         </ul>
         <div className="row">
           <button type="button" className="primary" disabled={!activeId || busy} onClick={() => void onGenerate()}>
-            Generate preview
+            Preview
           </button>
           <button type="button" className="ghost" disabled={!activeId || busy} onClick={() => void onPromote()}>
-            Promote{repoWrite ? '' : ' (repo write off)'}
+            Publish
           </button>
         </div>
+        <p className="muted">
+          {repoWrite
+            ? 'Publish asks Atlas to deploy this preview. Approval still happens on the server.'
+            : 'Publishing is off until an owner enables it in Privacy & Safety.'}
+        </p>
         {previewHtml ? (
           <iframe className="site-preview" title="Site preview" sandbox="" srcDoc={previewHtml} />
         ) : null}

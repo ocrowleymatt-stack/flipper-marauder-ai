@@ -45,3 +45,9 @@ and marks the execution failed. Bracketed IPv6 literals are unwrapped before
 `isIP` / inspect pin.
 
 Isolated host only. Do not merge. Do not deploy public production.
+
+HTTP error and empty inspect bodies do not count as findings. Trusted
+research hosts match on label boundaries (`en.wikipedia.org`, not
+`evilwikipedia.org`). Work-handler turns publish terminal execution events.
+Routing token estimates include compiled history. Federation timeouts abort
+engine fetches.

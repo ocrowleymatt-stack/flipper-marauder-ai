@@ -1,8 +1,9 @@
-import type { ExecutionAttempt, ProviderHealth, RouteDecision, StreamChunk } from '@atlas-vnext/contracts';
+import type { ConversationHistoryTurn, ExecutionAttempt, ProviderHealth, RouteDecision, StreamChunk } from '@atlas-vnext/contracts';
 
 export interface ExecutionContext {
   prompt: string;
   systemPrompt?: string;
+  history?: ConversationHistoryTurn[];
   tools?: Array<{
     id: string;
     description: string;

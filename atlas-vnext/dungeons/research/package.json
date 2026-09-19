@@ -11,6 +11,7 @@
     "@atlas-vnext/files": "*",
     "@atlas-vnext/persistence": "*",
     "@atlas-vnext/permissions": "*",
-    "@atlas-vnext/projects": "*"
+    "@atlas-vnext/projects": "*",
+    "@atlas-vnext/search": "*"
   }
 }

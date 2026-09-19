@@ -1,5 +1,6 @@
 import type {
   Conversation,
+  ConversationHistoryTurn,
   ConversationSnapshot,
   ExecutionAttempt,
   ExecutionRecord,
@@ -70,6 +71,7 @@ export interface ModelExecutor {
     context: {
       prompt: string;
       systemPrompt?: string;
+      history?: ConversationHistoryTurn[];
       signal?: AbortSignal;
       traceId?: string;
       priorToolResults?: Array<{

@@ -61,6 +61,9 @@ import { PlatformRateLimiter, ResourceGuard } from './limits.ts';
 import { readTimeoutContract, type TimeoutContract } from './production-config.ts';
 import { raceStartup, raceStartupCloseable, throwIfStartupAborted } from './startup-deadline.ts';
 import { NodePublicLookup } from './collectors.ts';
+import { NodeFederatedSearch, searchEnginesFromEnv } from './search.ts';
+import { FixtureInspect, NodeSourceInspect } from './inspect.ts';
+import { productionToolAdapters } from './web-tools.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
@@ -332,6 +335,8 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       ...authOptions,
     });
     credentials = bound.credentials;
+    const searchPort = new NodeFederatedSearch(searchEnginesFromEnv(env, mode === 'live' ? 'live' : 'mock'));
+    const inspectPort = mode === 'live' ? new NodeSourceInspect() : new FixtureInspect();
     tools = new ToolEngine({
       registry: toolRegistry,
       invocations: bound.toolInvocations,
@@ -343,6 +348,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       jailRoot,
       env,
       pluginEnabled: (id) => plugins.enabled(id),
+      adapters: productionToolAdapters({ search: searchPort, inspect: inspectPort }),
     });
     runtime = new ConversationRuntime({
       conversations: bound.conversations,
@@ -386,7 +392,28 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       collector: new NodePublicLookup(),
     });
     investigation = new InvestigationService({ persistence, projects, files, runtime, authority, policy, context });
-    research = new ResearchService({ persistence, projects, files, context, runtime, authority, policy });
+    research = new ResearchService({
+      persistence,
+      projects,
+      files,
+      context,
+      runtime,
+      authority,
+      policy,
+      search: searchPort,
+      inspect: inspectPort,
+    });
+    runtime.setWorkHandler(async (input) =>
+      research!.maybeRunFromConversation(
+        { tenantId: input.tenantId || tenantId, principalId },
+        {
+          conversationId: input.conversationId,
+          projectId: input.projectId,
+          question: input.content,
+          signal: input.signal,
+        },
+      ),
+    );
     websiteStudio = new WebsiteStudioService({ persistence, projects, files, runtime, authority, policy });
     music = new MusicService({ persistence, projects, files, runtime, authority, policy });
     privacy = new PrivacyService({ persistence, authority, policy, ownerPrincipalId: principalId });

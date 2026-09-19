@@ -221,6 +221,7 @@ async function handleResearch(
         projectId: decodeURIComponent(list[1]!),
         question: typeof body.question === 'string' ? body.question : '',
         fileIds: Array.isArray(body.fileIds) ? body.fileIds.map(String) : [],
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined,
       }),
     );
     return true;
@@ -230,7 +231,14 @@ async function handleResearch(
     return true;
   }
   if (req.method === 'POST' && run) {
-    json(res, 200, await service.run(writingActor, decodeURIComponent(run[1]!)));
+    const body = await readJson(req, options.maxRequestBytes).catch(() => ({} as Record<string, unknown>));
+    json(
+      res,
+      200,
+      await service.run(writingActor, decodeURIComponent(run[1]!), {
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined,
+      }),
+    );
     return true;
   }
   json(res, 404, { error: 'Not found.' });

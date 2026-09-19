@@ -29,6 +29,7 @@
     "@atlas-vnext/permissions": "*",
     "@atlas-vnext/plugins": "*",
     "@atlas-vnext/projects": "*",
+    "@atlas-vnext/search": "*",
     "@atlas-vnext/storage": "*",
     "@atlas-vnext/tools": "*"
   }

@@ -54,6 +54,10 @@ export class OllamaAdapter implements ProviderAdapter {
     const upstream = this.options.modelMap?.[model] ?? model;
     const messages: Array<{ role: string; content: string }> = [];
     if (context.systemPrompt) messages.push({ role: 'system', content: context.systemPrompt });
+    for (const turn of context.history ?? []) {
+      if (turn.role === 'system') continue;
+      messages.push({ role: turn.role, content: turn.content });
+    }
     messages.push({ role: 'user', content: context.prompt });
     let response;
     try {

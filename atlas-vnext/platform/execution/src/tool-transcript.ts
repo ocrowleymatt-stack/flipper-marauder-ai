@@ -86,7 +86,7 @@ export type OpenAIChatMessage =
   | {
       role: 'assistant';
       content: string | null;
-      tool_calls: Array<{
+      tool_calls?: Array<{
         id: string;
         type: 'function';
         function: { name: string; arguments: string };
@@ -97,6 +97,11 @@ export type OpenAIChatMessage =
 export function openaiMessagesFrom(context: ExecutionContext): OpenAIChatMessage[] {
   const messages: OpenAIChatMessage[] = [];
   if (context.systemPrompt) messages.push({ role: 'system', content: context.systemPrompt });
+  for (const turn of context.history ?? []) {
+    if (turn.role === 'system') continue;
+    if (turn.role === 'assistant') messages.push({ role: 'assistant', content: turn.content });
+    else messages.push({ role: 'user', content: turn.content });
+  }
   messages.push({ role: 'user', content: context.prompt });
   for (const round of groupPriorToolRounds(context.priorToolResults)) {
     messages.push({
@@ -133,7 +138,7 @@ export function anthropicToolsFrom(context: ExecutionContext): Array<Record<stri
 
 export type AnthropicMessage =
   | { role: 'user'; content: string | AnthropicUserBlock[] }
-  | { role: 'assistant'; content: AnthropicAssistantBlock[] };
+  | { role: 'assistant'; content: string | AnthropicAssistantBlock[] };
 
 export interface AnthropicAssistantBlock {
   type: 'tool_use';
@@ -149,7 +154,21 @@ export interface AnthropicUserBlock {
 }
 
 export function anthropicMessagesFrom(context: ExecutionContext): AnthropicMessage[] {
-  const messages: AnthropicMessage[] = [{ role: 'user', content: context.prompt }];
+  const messages: AnthropicMessage[] = [];
+  const push = (role: 'user' | 'assistant', content: string) => {
+    const last = messages[messages.length - 1];
+    if (last && last.role === role && typeof last.content === 'string') {
+      last.content = `${last.content}\n\n${content}`;
+      return;
+    }
+    if (role === 'assistant') messages.push({ role: 'assistant', content });
+    else messages.push({ role: 'user', content });
+  };
+  for (const turn of context.history ?? []) {
+    if (turn.role === 'system') continue;
+    push(turn.role === 'assistant' ? 'assistant' : 'user', turn.content);
+  }
+  push('user', context.prompt);
   for (const round of groupPriorToolRounds(context.priorToolResults)) {
     messages.push({
       role: 'assistant',
@@ -197,10 +216,25 @@ export interface GeminiContent {
 }
 
 export function geminiContentsFrom(context: ExecutionContext): GeminiContent[] {
+  const contents: GeminiContent[] = [];
   const firstParts: GeminiPart[] = [];
   if (context.systemPrompt) firstParts.push({ text: context.systemPrompt });
+  for (const turn of context.history ?? []) {
+    if (turn.role === 'system') {
+      firstParts.push({ text: turn.content });
+      continue;
+    }
+    if (firstParts.length && contents.length === 0) {
+      contents.push({ role: 'user', parts: [...firstParts] });
+      firstParts.length = 0;
+    }
+    contents.push({
+      role: turn.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: turn.content }],
+    });
+  }
   firstParts.push({ text: context.prompt });
-  const contents: GeminiContent[] = [{ role: 'user', parts: firstParts }];
+  contents.push({ role: 'user', parts: firstParts.length ? firstParts : [{ text: context.prompt }] });
   for (const round of groupPriorToolRounds(context.priorToolResults)) {
     contents.push({
       role: 'model',

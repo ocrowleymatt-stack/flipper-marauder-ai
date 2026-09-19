@@ -39,11 +39,18 @@ export async function handleCaspa(
   }
 
   const projectDocs = pathname.match(/^\/api\/projects\/([^/]+)\/documents$/);
+  const storyBibleMatch = pathname.match(/^\/api\/projects\/([^/]+)\/story-bible$/);
+  const charactersMatch = pathname.match(/^\/api\/projects\/([^/]+)\/characters$/);
+  const characterItemMatch = pathname.match(/^\/api\/projects\/([^/]+)\/characters\/([^/]+)$/);
+  const worldMatch = pathname.match(/^\/api\/projects\/([^/]+)\/world$/);
+  const structureMatch = pathname.match(/^\/api\/projects\/([^/]+)\/structure$/);
+  const continuityMatch = pathname.match(/^\/api\/projects\/([^/]+)\/continuity$/);
   const documentMatch = pathname.match(/^\/api\/documents\/([^/]+)$/);
   const generateMatch = pathname.match(/^\/api\/documents\/([^/]+)\/generate$/);
   const versionsMatch = pathname.match(/^\/api\/documents\/([^/]+)\/versions$/);
   const restoreMatch = pathname.match(/^\/api\/documents\/([^/]+)\/restore$/);
   const provenanceMatch = pathname.match(/^\/api\/documents\/([^/]+)\/provenance$/);
+  const lineageMatch = pathname.match(/^\/api\/documents\/([^/]+)\/lineage$/);
   const cancelMatch = pathname.match(/^\/api\/documents\/([^/]+)\/cancel$/);
   const editMatch = pathname.match(/^\/api\/documents\/([^/]+)\/edit$/);
   const companionsMatch = pathname.match(/^\/api\/documents\/([^/]+)\/companions$/);
@@ -51,11 +58,18 @@ export async function handleCaspa(
 
   if (
     !projectDocs &&
+    !storyBibleMatch &&
+    !charactersMatch &&
+    !characterItemMatch &&
+    !worldMatch &&
+    !structureMatch &&
+    !continuityMatch &&
     !documentMatch &&
     !generateMatch &&
     !versionsMatch &&
     !restoreMatch &&
     !provenanceMatch &&
+    !lineageMatch &&
     !cancelMatch &&
     !editMatch &&
     !companionsMatch &&
@@ -63,6 +77,7 @@ export async function handleCaspa(
   ) {
     return false;
   }
+
 
   const actor = await resolveActor(req, options);
   if (!actor) {
@@ -85,6 +100,90 @@ export async function handleCaspa(
         instruction: typeof body.instruction === 'string' ? body.instruction : undefined,
       });
       json(res, 201, document);
+      return true;
+    }
+    if (req.method === 'GET' && storyBibleMatch) {
+      json(res, 200, await writing.getStoryBible(writingActor, decodeURIComponent(storyBibleMatch[1]!)));
+      return true;
+    }
+    if ((req.method === 'PUT' || req.method === 'POST') && storyBibleMatch) {
+      const body = await readJson(req, options.maxRequestBytes);
+      json(
+        res,
+        200,
+        await writing.saveStoryBible(writingActor, decodeURIComponent(storyBibleMatch[1]!), {
+          title: typeof body.title === 'string' ? body.title : undefined,
+          payload: body && typeof body === 'object' ? (body.payload as Record<string, unknown>) || (body as Record<string, unknown>) : {},
+          text: typeof body.text === 'string' ? body.text : undefined,
+          expectedRevision: Number.isFinite(Number(body.expectedRevision)) ? Number(body.expectedRevision) : undefined,
+        }),
+      );
+      return true;
+    }
+    if (req.method === 'GET' && charactersMatch) {
+      json(res, 200, await writing.listCharacters(writingActor, decodeURIComponent(charactersMatch[1]!)));
+      return true;
+    }
+    if (req.method === 'POST' && charactersMatch) {
+      const body = await readJson(req, options.maxRequestBytes);
+      json(
+        res,
+        201,
+        await writing.saveCharacter(writingActor, decodeURIComponent(charactersMatch[1]!), {
+          title: typeof body.title === 'string' ? body.title : undefined,
+          payload: (body.payload as Record<string, unknown>) || (body as Record<string, unknown>),
+        }),
+      );
+      return true;
+    }
+    if ((req.method === 'PATCH' || req.method === 'PUT') && characterItemMatch) {
+      const body = await readJson(req, options.maxRequestBytes);
+      json(
+        res,
+        200,
+        await writing.saveCharacter(writingActor, decodeURIComponent(characterItemMatch[1]!), {
+          id: decodeURIComponent(characterItemMatch[2]!),
+          title: typeof body.title === 'string' ? body.title : undefined,
+          payload: (body.payload as Record<string, unknown>) || (body as Record<string, unknown>),
+          expectedRevision: Number(body.expectedRevision),
+        }),
+      );
+      return true;
+    }
+    if (req.method === 'GET' && worldMatch) {
+      json(res, 200, await writing.listWorld(writingActor, decodeURIComponent(worldMatch[1]!)));
+      return true;
+    }
+    if (req.method === 'POST' && worldMatch) {
+      const body = await readJson(req, options.maxRequestBytes);
+      json(
+        res,
+        201,
+        await writing.saveWorld(writingActor, decodeURIComponent(worldMatch[1]!), {
+          title: typeof body.title === 'string' ? body.title : undefined,
+          payload: (body.payload as Record<string, unknown>) || (body as Record<string, unknown>),
+        }),
+      );
+      return true;
+    }
+    if (req.method === 'GET' && structureMatch) {
+      json(res, 200, await writing.getStructure(writingActor, decodeURIComponent(structureMatch[1]!)));
+      return true;
+    }
+    if ((req.method === 'PUT' || req.method === 'POST') && structureMatch) {
+      const body = await readJson(req, options.maxRequestBytes);
+      json(
+        res,
+        200,
+        await writing.saveStructure(writingActor, decodeURIComponent(structureMatch[1]!), {
+          payload: (body.payload as Record<string, unknown>) || (body as Record<string, unknown>),
+          expectedRevision: Number.isFinite(Number(body.expectedRevision)) ? Number(body.expectedRevision) : undefined,
+        }),
+      );
+      return true;
+    }
+    if (req.method === 'GET' && continuityMatch) {
+      json(res, 200, await writing.listContinuity(writingActor, decodeURIComponent(continuityMatch[1]!)));
       return true;
     }
     if (req.method === 'GET' && documentMatch) {
@@ -123,6 +222,10 @@ export async function handleCaspa(
       json(res, 200, await writing.provenance(writingActor, decodeURIComponent(provenanceMatch[1]!)));
       return true;
     }
+    if (req.method === 'GET' && lineageMatch) {
+      json(res, 200, await writing.listLineage(writingActor, decodeURIComponent(lineageMatch[1]!)));
+      return true;
+    }
     if (req.method === 'POST' && restoreMatch) {
       const body = await readJson(req, options.maxRequestBytes);
       json(
@@ -158,13 +261,12 @@ export async function handleCaspa(
     }
     if (req.method === 'POST' && companionsMatch) {
       const body = await readJson(req, options.maxRequestBytes);
-      const kind = body.kind === 'canon' || body.kind === 'claims' || body.kind === 'quality' ? body.kind : 'outline';
       json(
         res,
         201,
         await writing.saveCompanion(writingActor, decodeURIComponent(companionsMatch[1]!), {
-          kind,
-          title: typeof body.title === 'string' ? body.title : kind,
+          kind: typeof body.kind === 'string' ? body.kind : 'outline',
+          title: typeof body.title === 'string' ? body.title : typeof body.kind === 'string' ? body.kind : 'outline',
           text: typeof body.text === 'string' ? body.text : '',
         }),
       );
@@ -214,6 +316,7 @@ export async function handleCaspa(
             privacy: body.privacy === 'local_only' ? 'local_only' : 'any',
             tools: body.tools === true,
             commit: body.commit === false ? false : true,
+            selection: typeof body.selection === 'string' ? body.selection : undefined,
           }),
           options.timeouts?.streamIdleMs ?? 120_000,
           async (executionId) => {

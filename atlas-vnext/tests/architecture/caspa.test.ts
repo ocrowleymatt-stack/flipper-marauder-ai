@@ -4,7 +4,13 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { analyzeGraph } from './import-graph.ts';
 import { CASPA_WRITING_DUNGEON, composeWritingPrompt, writingRouteRequirements } from '@atlas-vnext/dungeon-writing';
-import { WRITING_PROMPT_PRECEDENCE } from '@atlas-vnext/contracts';
+import {
+  DOCUMENT_COMPANION_KINDS,
+  FINDINGS_ONLY_OPERATIONS,
+  WRITING_PROMPT_PRECEDENCE,
+  isDocumentCompanionKind,
+  isFindingsOnlyOperation,
+} from '@atlas-vnext/contracts';
 import { AuthorityEngine } from '@atlas-vnext/permissions';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -92,5 +98,32 @@ describe('Caspa architecture boundaries', () => {
     expect(requirements.target).toBe('nexus/local');
     expect(requirements.requireReasoning).toBe(true);
     expect(JSON.stringify(requirements)).not.toMatch(/openai|anthropic|runpod/i);
+  });
+
+  it('keeps novelist operations provider-neutral and findings-only off the manuscript path', () => {
+    expect(CASPA_WRITING_DUNGEON.navLabel).toBe('Caspa');
+    expect(CASPA_WRITING_DUNGEON.routes.storyBible).toContain('story-bible');
+    expect(CASPA_WRITING_DUNGEON.routes.lineage).toContain('lineage');
+    expect(FINDINGS_ONLY_OPERATIONS).toEqual(['continuity_check', 'critique']);
+    expect(isFindingsOnlyOperation('critique')).toBe(true);
+    expect(isFindingsOnlyOperation('repair_from_critique')).toBe(false);
+    expect(isDocumentCompanionKind('outline')).toBe(true);
+    expect(isDocumentCompanionKind('creative_lineage')).toBe(false);
+    expect(DOCUMENT_COMPANION_KINDS).not.toContain('story_bible');
+    const critique = writingRouteRequirements({ operation: 'critique', contentChars: 1200, selectedFileCount: 0 });
+    const tighten = writingRouteRequirements({ operation: 'tighten', contentChars: 400, selectedFileCount: 0 });
+    expect(critique.target).toBe('nexus/reason');
+    expect(tighten.target).toBe('nexus/fast');
+    expect(JSON.stringify(critique)).not.toMatch(/xai|openai|anthropic|grok/i);
+  });
+
+  it('does not import sibling dungeons', () => {
+    const report = analyzeGraph(root);
+    const writing = report.modules.filter((mod) => mod.dungeon === 'writing');
+    for (const mod of writing) {
+      expect(mod.specifiers.some((item) => item.startsWith('@atlas-vnext/dungeon-') && item !== '@atlas-vnext/dungeon-writing')).toBe(
+        false,
+      );
+    }
   });
 });

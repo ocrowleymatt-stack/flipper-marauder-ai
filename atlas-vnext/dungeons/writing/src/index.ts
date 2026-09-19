@@ -11,3 +11,11 @@ export {
   WRITING_RUNTIME_POLICY,
   DUNGEON_WRITING_BEHAVIOUR,
 } from './behaviour.ts';
+export {
+  NOVEL_KINDS,
+  assembleNovelContext,
+  isFindingsOnlyOperation,
+  lineageFrom,
+  parseFindings,
+  parseStoryBible,
+} from './novel.ts';

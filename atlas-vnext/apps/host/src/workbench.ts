@@ -119,7 +119,7 @@ export async function handleWorkbench(
   }
 
   if (pathname === '/api/projects' || pathname.startsWith('/api/projects/') || pathname.startsWith('/api/files/') || pathname.startsWith('/api/context/') || pathname === '/api/approvals') {
-    if (/\/(documents|osint|cases|research|sites|compositions)(?:\/|$)/.test(pathname)) return false;
+    if (/\/(documents|osint|cases|research|sites|compositions|story-bible|characters|world|structure|continuity)(?:\/|$)/.test(pathname)) return false;
     const actor = await resolveActor(req, options);
     if (!actor) {
       json(res, 401, { error: 'Authentication required.' });

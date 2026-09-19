@@ -4,7 +4,7 @@ First production-quality Atlas dungeon: a thin writing domain over platform prim
 
 ## Ownership
 
-Caspa **may** own writing task semantics, document workflows, writing instructions, the unified writing operation, document/version presentation, writing-specific context rules (selected files only), domain UX, and domain metadata.
+Caspa **may** own writing task semantics, document workflows, writing instructions, the unified writing operation, document/version presentation, writing-specific context rules (selected files only plus bounded novel slices), domain UX, story bible / character / world / structure records, continuity findings, creative lineage, and domain metadata.
 
 Caspa **must not** own provider registry/ranking/health/routing, transport/retry/failover, generic tools/Authority/auth/tenancy, generic project/file/CAS/retrieval/provenance/run/RunPod/conversation persistence. Those stay platform services. Caspa consumes them.
 
@@ -53,11 +53,15 @@ Prompts live in `dungeons/writing/src/behaviour.ts`, not in the UI or HTTP handl
 
 Caspa passes `restrictFileIds` into platform `ContextService`. Empty selection means no files, not dump-all. Missing or cross-tenant file ids fail closed as `file_missing` / `file_unauthorized`.
 
-## Provenance
+Novel context is assembled separately and bounded: story bible, name-relevant characters (cap 4), world records (cap 2), structure outline, nearby chapter tail, open findings, optional selection. Caspa does not inject the whole manuscript into every model call. A context manifest is stored on creative lineage.
 
-Backend-derived: selected files, chunks, prior revision hash, run id, route/model (via the execution spine), tools if invoked. The UI renders `GET /api/documents/:id/provenance`; it does not infer sources.
+## Provenance and creative lineage
 
-`create()` opens a blank manuscript slot. Evidential provenance is recorded when a revision is committed (`generate` / edit / restore). Empty provenance on create is expected: Caspa is a creative-writing dungeon, not Investigation. Do not invent evidential sources for imaginative prose. Creative lineage (project → manuscript → outline/story bible → characters/world → source revision → execution → new revision) is later work, not a create-time requirement.
+Evidential provenance is backend-derived: selected files, chunks, prior revision hash, run id, route/model (via the execution spine), tools if invoked. The UI renders `GET /api/documents/:id/provenance`; it does not infer sources.
+
+`create()` opens a blank manuscript slot. Evidential provenance is recorded when a revision is committed (`generate` / edit / restore). Empty provenance on create is expected: Caspa is a creative-writing dungeon, not Investigation. Do not invent evidential sources for imaginative prose.
+
+Creative lineage is a distinct record (`dungeon_records` kind `creative_lineage`, `GET /api/documents/:id/lineage`): project → story bible / outline / character / world → manuscript revision → writing execution → new revision. It is not evidential provenance. Findings-only operations (`critique`, `continuity_check`) record lineage and findings without adding a manuscript version.
 
 ## Authority
 
@@ -65,7 +69,7 @@ Server-side `AuthorityEngine.decide` on actor + tenant + resource + action. Butt
 
 ## Workbench
 
-Caspa mounts through the generic dungeon seam (`Writing` surface). Workbench is not forked and does not grow manuscript types. Domain surface: document list, editor/view, instruction, file selection, generation state, versions, provenance, classified errors, and the existing tool/approval inspector when a run invokes tools.
+Caspa mounts through the generic dungeon seam (`Writing` surface). Workbench is not forked and does not grow manuscript types. Domain surface: novelist workspace (manuscript, story bible, characters, structure, continuity), document list, editor/view, instruction, file selection, generation state, versions, evidential provenance, creative lineage, classified errors, and the existing tool/approval inspector when a run invokes tools.
 
 ## Provider-neutral execution
 
@@ -73,7 +77,13 @@ Caspa expresses **requirements** (context tokens, tools, reasoning, quality, lat
 
 ## Operations
 
-One `POST /api/documents/:id/generate` with `operation`: create, rewrite, shorten, expand, tone, restructure, correct, continue, transform. Restore is `POST /api/documents/:id/restore` and writes a **new** version. Continue is a document revision, not a chat-only turn.
+One `POST /api/documents/:id/generate` with `operation`. Novelist behaviours: continue_scene, draft_scene, rewrite_selection, expand, tighten, tone, dialogue, description, character_voice, continuity_check, critique, repair_from_critique (plus the original create/rewrite/shorten/expand/tone/restructure/correct/continue/transform/outline). Restore is `POST /api/documents/:id/restore` and writes a **new** version. Continue is a document revision, not a chat-only turn.
+
+`continuity_check` and `critique` are findings-only: they must not overwrite manuscript content.
+
+Story bible / characters / world / structure / continuity / lineage are project or document routes under `/api/projects/:id/…` and `/api/documents/:id/lineage`.
+
+See [CASPA-NOVEL-MACHINE.md](./CASPA-NOVEL-MACHINE.md).
 
 ## Migration status
 

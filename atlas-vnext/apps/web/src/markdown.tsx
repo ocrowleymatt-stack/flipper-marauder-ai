@@ -2,7 +2,9 @@ import type { ReactNode } from 'react';
 
 export function safeMarkdownHref(href: string): string {
   const trimmed = href.trim();
-  if (/^(https?:|mailto:|\/(?!\/)|#)/i.test(trimmed)) return trimmed;
+  if (!trimmed || trimmed.includes('\\')) return '#';
+  if (/^https?:\/\//i.test(trimmed) || /^mailto:/i.test(trimmed) || trimmed.startsWith('#')) return trimmed;
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) return trimmed;
   return '#';
 }
 

@@ -24,8 +24,11 @@ describe('markdown body', () => {
     expect(safeMarkdownHref('#notes')).toBe('#notes');
     expect(safeMarkdownHref('mailto:ops@atlas.ocrowley.com')).toBe('mailto:ops@atlas.ocrowley.com');
     expect(safeMarkdownHref('//attacker.com/phish')).toBe('#');
+    expect(safeMarkdownHref('/\\evil.com')).toBe('#');
+    expect(safeMarkdownHref('/\\\\host')).toBe('#');
     expect(safeMarkdownHref('javascript:alert(1)')).toBe('#');
     expect(safeMarkdownHref('data:text/html,hi')).toBe('#');
+    expect(safeMarkdownHref('http:/\\evil.com')).toBe('#');
     const html = renderToStaticMarkup(
       createElement(MarkdownBody, {
         text: '[phish](//attacker.com/page) [ok](/local)',

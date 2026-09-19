@@ -284,3 +284,12 @@ export function visibleAssistantText(messages: Array<{ role: string; content: st
     .map((item) => item.content)
     .join('\n');
 }
+
+export function approvalAuthorityLine(tool: {
+  risk: string;
+  sideEffectClass: string;
+  requiredCapabilities: string[];
+}): string {
+  const caps = tool.requiredCapabilities.length > 0 ? tool.requiredCapabilities.join(', ') : 'none';
+  return `Risk ${tool.risk} · ${tool.sideEffectClass} · Authority ${caps}`;
+}

@@ -50,6 +50,7 @@ import {
   liveExecution,
   runStatusLabel,
   viewFromSnapshot,
+  approvalAuthorityLine,
   type StreamView,
 } from './stream';
 
@@ -1103,15 +1104,18 @@ function ApprovalCard({
   tool: ToolPresentation;
   onDecide: (id: string, decision: 'approve' | 'deny') => Promise<void>;
 }) {
+  const desc = `${tool.title} ${tool.toolId} ${tool.argumentSummary} risk ${tool.risk}`;
   return (
-    <section className="approval" aria-label={`Approval required for ${tool.title}`}>
+    <section className="approval" aria-label={`Approval required for ${tool.toolId}`}>
       <h3>Approval required</h3>
       <p>
-        <strong>{tool.title}</strong> wants to run on {tool.resource ?? 'this project'}.
+        <strong>{tool.title}</strong> wants to run <code>{tool.toolId}</code> on {tool.resource ?? 'this project'}.
       </p>
       <p className="meta">{tool.argumentSummary}</p>
+      <p className="meta">{approvalAuthorityLine(tool)}</p>
+      <p className="muted">Buttons do not grant permission. The host checks the session principal and Authority.</p>
       <div className="row">
-        <button type="button" className="primary" onClick={() => void onDecide(tool.id, 'approve')}>
+        <button type="button" className="primary" title={desc} onClick={() => void onDecide(tool.id, 'approve')}>
           Approve
         </button>
         <button type="button" className="ghost" onClick={() => void onDecide(tool.id, 'deny')}>

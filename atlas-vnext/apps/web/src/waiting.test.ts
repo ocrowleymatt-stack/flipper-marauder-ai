@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { citationsFromBackend, isProjectsUnavailable, mutatingHeaders, runtimeWaitingLabel, setCsrfToken } from './api';
-import { applyStream, conversationDisplayTitle, doctorTone, ellipsize, emptyView, executionToStop, liveExecution, runStatusLabel, viewFromSnapshot, visibleAssistantText } from './stream';
+import { applyStream, approvalAuthorityLine, conversationDisplayTitle, doctorTone, ellipsize, emptyView, executionToStop, liveExecution, runStatusLabel, viewFromSnapshot, visibleAssistantText } from './stream';
 import type { ConversationSnapshot, ExecutionRecord } from './api';
 
 describe('runtime waiting label', () => {
@@ -340,5 +340,22 @@ describe('visible output recovery', () => {
     expect(doctorTone('ATTENTION_REQUIRED', [{ id: 'providers', state: 'error' }]).label).toBe('Attention');
     expect(doctorTone('ok', [{ id: 'providers', state: 'ok' }]).label).toBe('Healthy');
     expect(doctorTone('failed', [{ id: 'postgres', state: 'error' }]).label).toBe('Problem');
+  });
+
+  it('keeps machine-authoritative tool identity on the approval card', () => {
+    expect(
+      approvalAuthorityLine({
+        risk: 'admin',
+        sideEffectClass: 'shell',
+        requiredCapabilities: ['shell.execute'],
+      }),
+    ).toBe('Risk admin · shell · Authority shell.execute');
+    expect(
+      approvalAuthorityLine({
+        risk: 'read',
+        sideEffectClass: 'none',
+        requiredCapabilities: [],
+      }),
+    ).toBe('Risk read · none · Authority none');
   });
 });

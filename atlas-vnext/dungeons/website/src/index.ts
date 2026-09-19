@@ -105,6 +105,8 @@ export class WebsiteStudioService {
       content: `${this.deps.policy.scopedModelInstructions(policy)}\n\nGenerate a complete, accessible HTML document for this site brief. Return HTML only.\n\n${brief}`,
       capability: 'nexus/code',
       privacy: this.deps.policy.runtimePrivacy(policy),
+      principalId: actor.principalId,
+      tenantId: actor.tenantId,
     })) {
       if (event.type === 'execution') executionId = event.execution.id;
       if (event.type === 'assistant.delta' && event.text) html += event.text;

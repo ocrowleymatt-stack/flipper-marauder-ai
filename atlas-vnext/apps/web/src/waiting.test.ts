@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { citationsFromBackend, isProjectsUnavailable, mutatingHeaders, runtimeWaitingLabel, setCsrfToken } from './api';
-import { applyStream, emptyView, runStatusLabel, viewFromSnapshot } from './stream';
+import { applyStream, approvalAuthorityLine, conversationDisplayTitle, doctorTone, ellipsize, emptyView, executionToStop, liveExecution, runStatusLabel, viewFromSnapshot, visibleAssistantText } from './stream';
 import type { ConversationSnapshot, ExecutionRecord } from './api';
 
 describe('runtime waiting label', () => {
@@ -82,8 +82,8 @@ describe('workbench client contracts', () => {
       runtimeWaitingLabel,
     );
     expect(continued.snapshot.messages[0]?.content).toBe('visible');
-    expect(runStatusLabel('failed', false)).toBe('failed');
-    expect(runStatusLabel('running', true)).toBe('awaiting approval');
+    expect(runStatusLabel('failed', false)).toBe('Failed');
+    expect(runStatusLabel('running', true)).toBe('Waiting for approval');
 
     const nextExecution: ExecutionRecord = {
       id: 'ex_2',
@@ -202,5 +202,119 @@ describe('workbench presentation', () => {
     expect(soundEnabled()).toBe(false);
     playCue('complete');
     playCue('warn');
+  });
+});
+
+describe('visible output recovery', () => {
+  const conversation = {
+    id: 'con_1',
+    urn: 'urn:atlas:conversation:con_1',
+    title: 't',
+    projectId: 'proj_1',
+    createdAt: 't',
+    updatedAt: 't',
+  };
+
+  it('assembles assistant.delta even when no message envelope arrived yet', () => {
+    let view = emptyView(conversation);
+    view = applyStream(view, 'con_1', { type: 'assistant.delta', text: 'ATLAS ' }, () => null);
+    view = applyStream(view, 'con_1', { type: 'assistant.delta', text: 'OUTPUT VISIBLE' }, () => null);
+    expect(visibleAssistantText(view.snapshot.messages)).toContain('ATLAS OUTPUT VISIBLE');
+  });
+
+  it('creates an assistant message from message.delta when the id is new', () => {
+    let view = emptyView(conversation);
+    view = applyStream(
+      view,
+      'con_1',
+      { type: 'message.delta', messageId: 'msg_new', content: 'hello from atlas' },
+      () => null,
+    );
+    expect(view.snapshot.messages.some((item) => item.id === 'msg_new' && item.content === 'hello from atlas')).toBe(true);
+  });
+
+  it('replaces optimistic user turns when the server message arrives', () => {
+    let view = emptyView(conversation);
+    view = {
+      ...view,
+      snapshot: {
+        ...view.snapshot,
+        messages: [
+          {
+            id: 'local_user_1',
+            urn: '',
+            conversationId: 'con_1',
+            role: 'user',
+            content: 'hi',
+            sequence: 1,
+            executionId: null,
+            createdAt: 't',
+            updatedAt: 't',
+          },
+        ],
+      },
+    };
+    view = applyStream(
+      view,
+      'con_1',
+      {
+        type: 'message',
+        message: {
+          id: 'msg_user',
+          urn: 'u',
+          conversationId: 'con_1',
+          role: 'user',
+          content: 'hi',
+          sequence: 1,
+          executionId: null,
+          createdAt: 't',
+          updatedAt: 't',
+        },
+      },
+      () => null,
+    );
+    expect(view.snapshot.messages.map((item) => item.id)).toEqual(['msg_user']);
+  });
+
+  it('keeps conversation titles from colliding with metadata', () => {
+    expect(ellipsize('OSINT ocrowley.matt@gmail.com and a very long remainder of the title', 24).endsWith('…')).toBe(true);
+    expect(ellipsize('OSINT ocrowley.matt@gmail.com and a very long remainder of the title', 24).length).toBe(24);
+    expect(conversationDisplayTitle('New conversation')).toBe('New conversation');
+    expect(conversationDisplayTitle('OSINT matthew')).toBe('OSINT matthew');
+  });
+
+  it('does not call optional Ollama trouble a broken Atlas', () => {
+    expect(doctorTone('ATTENTION_REQUIRED', [{ id: 'providers', state: 'error' }]).label).toBe('Attention');
+    expect(doctorTone('ok', [{ id: 'providers', state: 'ok' }]).label).toBe('Healthy');
+    expect(doctorTone('failed', [{ id: 'postgres', state: 'error' }]).label).toBe('Problem');
+  });
+
+  it('stops the live snapshot execution, not a completed inspection', () => {
+    const previous: ExecutionRecord = {
+      id: 'ex_old',
+      status: 'completed',
+      capability: 'nexus/fast',
+      selectedProvider: 'openai',
+      selectedModel: 'gpt-4o',
+      attempts: [],
+      usage: null,
+      failureReason: null,
+      route: null,
+    };
+    const current: ExecutionRecord = { ...previous, id: 'ex_live', status: 'running' };
+    expect(liveExecution(true, current, previous)?.id).toBe('ex_live');
+    expect(executionToStop(true, current)?.id).toBe('ex_live');
+    expect(executionToStop(true, previous)).toBeNull();
+    expect(executionToStop(false, current)).toBeNull();
+  });
+
+  it('keeps machine-authoritative tool identity on the approval card', () => {
+    expect(
+      approvalAuthorityLine({
+        risk: 'admin',
+        sideEffectClass: 'shell',
+        requiredCapabilities: ['shell.execute'],
+      }),
+    ).toBe('Risk admin · shell · Authority shell.execute');
   });
 });

@@ -232,11 +232,11 @@ export function CaspaPanel({
   const body = streaming ? (active?.draft ?? active?.content ?? '') : editor;
 
   return (
-    <main className="workspace caspa" aria-label="Caspa writing">
+    <main className="workspace caspa" aria-label="Caspa writing" data-testid="caspa-panel">
       <header className="thread-header">
         <div>
           <h2>{active?.title ?? 'Caspa'}</h2>
-          <p className="hint">Documents belong to this project. Caspa does not route providers or grant Authority.</p>
+          <p className="hint">Write in this project. Generate, edit, and restore from here. Provenance is available when you ask for it.</p>
         </div>
         <p className={`pill ${active?.status ?? 'idle'}`}>{active?.status ?? 'idle'}</p>
       </header>
@@ -244,8 +244,8 @@ export function CaspaPanel({
         <section className="caspa-list">
           <form className="stack" onSubmit={(event) => void onCreate(event)}>
             <label htmlFor="doc-title">New document</label>
-            <input id="doc-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Title" />
-            <button type="submit" className="primary">
+            <input id="doc-title" data-testid="doc-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Title" />
+            <button type="submit" className="primary" data-testid="create-document">
               Create document
             </button>
           </form>

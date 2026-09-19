@@ -101,3 +101,10 @@ jobs:
         run: npm run test:compat
       - name: Build
         run: npm run build
+      - name: Workbench browser acceptance
+        env:
+          ATLAS_BROWSER_TEST: '1'
+        run: |
+          npm install --no-save playwright@1.63.0
+          npx playwright install --with-deps chromium
+          npm run test:browser

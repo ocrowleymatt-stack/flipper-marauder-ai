@@ -3,6 +3,7 @@ import {
   attachFile,
   bootstrapSession,
   CAPABILITIES,
+  cancelExecution,
   citationsFromBackend,
   createConversation,
   createProject,
@@ -36,14 +37,22 @@ import { CaspaPanel } from './caspa';
 import { EstatePanel } from './estate';
 import { LoginForm } from './login';
 import { playCue, prefersReducedMotion, setSoundEnabled, soundEnabled } from './experience';
-import { applyStream, emptyView, runStatusLabel, viewFromSnapshot, type StreamView } from './stream';
+import {
+  applyStream,
+  capabilityLabel,
+  emptyView,
+  ensureView,
+  runStatusLabel,
+  userRunLabel,
+  viewFromSnapshot,
+  type StreamView,
+} from './stream';
 
 type InspectorTab = 'run' | 'files' | 'context' | 'tools';
 type Surface = 'conversation' | 'writing' | 'osint' | 'investigation' | 'research' | 'website' | 'music' | 'privacy' | 'operations';
 
 export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
-  const [sessionError, setSessionError] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectsAvailable, setProjectsAvailable] = useState(true);
@@ -71,14 +80,28 @@ export function App() {
   const [paletteQuery, setPaletteQuery] = useState('');
   const [soundOn, setSoundOn] = useState(false);
   const [dropActive, setDropActive] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(true);
+  const [moreOpen, setMoreOpen] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLElement>(null);
+  const stickToBottom = useRef(true);
+  const abortRef = useRef<AbortController | null>(null);
   const composerId = useId();
   const liveId = useId();
 
   const snapshot = view?.snapshot ?? null;
   const latestExecution = snapshot?.executions.at(-1) ?? null;
   const awaiting = tools.filter((item) => item.awaitingApproval);
-  const runLabel = runStatusLabel(latestExecution?.status, awaiting.length > 0);
+  const runLabel = userRunLabel(latestExecution?.status, awaiting.length > 0, busy);
+  const needsAttention = awaiting.length > 0 || Boolean(view?.classifiedFailure);
+  const lastUserMessage = [...(snapshot?.messages ?? [])].reverse().find((item) => item.role === 'user');
+  const canRetry = Boolean(
+    !busy &&
+      activeConversationId &&
+      lastUserMessage &&
+      (latestExecution?.status === 'failed' || latestExecution?.status === 'cancelled' || view?.classifiedFailure),
+  );
 
   const loadProjects = useCallback(async () => {
     const items = await listProjects();
@@ -129,7 +152,6 @@ export function App() {
   const enterWorkbench = useCallback(
     async (next: SessionState) => {
       setSession(next);
-      setSessionError(null);
       let projectItems: Project[] | null = null;
       try {
         projectItems = await loadProjects();
@@ -144,7 +166,7 @@ export function App() {
         const first = projectItems[0]?.id ?? null;
         setProjectId(first);
         if (first) await loadProject(first);
-        setStatus(first ? 'Workbench ready.' : 'Create a project to begin.');
+        setStatus(first ? 'Ready.' : 'Create a project to begin.');
       } else {
         setProjectsAvailable(false);
         setSurface('conversation');
@@ -153,7 +175,7 @@ export function App() {
         const nextId = convos[0]?.id ?? null;
         setActiveConversationId(nextId);
         if (nextId) await loadConversation(nextId);
-        setStatus('Conversation-only mode.');
+        setStatus('Ready.');
       }
     },
     [loadConversation, loadProject, loadProjects],
@@ -165,7 +187,6 @@ export function App() {
         const next = await bootstrapSession();
         if (!next.authenticated) {
           setSession(next);
-          setSessionError('Authentication required. Workbench cannot guess a tenant.');
           setStatus('Signed out.');
           setLoading(false);
           return;
@@ -181,7 +202,14 @@ export function App() {
   }, [enterWorkbench]);
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: 'end' });
+    if (needsAttention) setDetailsOpen(true);
+  }, [needsAttention]);
+
+  useEffect(() => {
+    if (!stickToBottom.current) return;
+    const scroller = messagesRef.current;
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    else bottom.current?.scrollIntoView({ block: 'end' });
   }, [snapshot?.messages, snapshot?.executions, view?.waitLabel]);
 
   useEffect(() => {
@@ -208,7 +236,7 @@ export function App() {
         setConversations(convos);
         if (activeConversationId) await loadConversation(activeConversationId);
       }
-      setStatus('Reloaded from the server.');
+      setStatus('Reloaded.');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -225,8 +253,9 @@ export function App() {
       const items = await loadProjects();
       setProjects(items);
       setProjectId(project.id);
+      setSurface('conversation');
       await loadProject(project.id);
-      setStatus(`Opened project ${project.name}.`);
+      setStatus(`Opened ${project.name}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -236,6 +265,7 @@ export function App() {
     setProjectId(id);
     setNavOpen(false);
     setError(null);
+    setSurface('conversation');
     try {
       await loadProject(id);
       setStatus('Project switched.');
@@ -254,6 +284,7 @@ export function App() {
       setView(emptyView(conversation));
       setTools([]);
       setInspection(null);
+      setSurface('conversation');
       setStatus('New conversation.');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -264,6 +295,7 @@ export function App() {
     setActiveConversationId(id);
     setNavOpen(false);
     setError(null);
+    setSurface('conversation');
     try {
       await loadConversation(id);
     } catch (err) {
@@ -272,18 +304,42 @@ export function App() {
   }
 
   async function runPrompt(conversationId: string, content: string, selected: Capability) {
+    abortRef.current?.abort();
+    const abort = new AbortController();
+    abortRef.current = abort;
+    stickToBottom.current = true;
     setBusy(true);
     setError(null);
-    setStatus('Running.');
+    setStatus('Working…');
+    setSurface('conversation');
     setView((current) =>
-      current ? { ...current, sealedResponse: false, classifiedFailure: null, waitLabel: null } : current,
+      ensureView(current, conversationId, {
+        id: conversationId,
+        urn: current?.snapshot.conversation.urn ?? `urn:atlas:conversation:${conversationId}`,
+        title: current?.snapshot.conversation.title ?? 'Conversation',
+        projectId: current?.snapshot.conversation.projectId ?? projectId,
+        createdAt: current?.snapshot.conversation.createdAt ?? new Date().toISOString(),
+        updatedAt: current?.snapshot.conversation.updatedAt ?? new Date().toISOString(),
+      }),
     );
     try {
-      for await (const event of sendMessage(conversationId, content, selected)) {
-        setView((current) => {
-          if (!current) return current;
-          return applyStream(current, conversationId, event, runtimeWaitingLabel);
-        });
+      for await (const event of sendMessage(conversationId, content, selected, abort.signal)) {
+        if (abort.signal.aborted) break;
+        setView((current) =>
+          applyStream(
+            ensureView(current, conversationId, {
+              id: conversationId,
+              urn: `urn:atlas:conversation:${conversationId}`,
+              title: 'Conversation',
+              projectId,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            }),
+            conversationId,
+            event,
+            runtimeWaitingLabel,
+          ),
+        );
         if (event.type === 'tool.lifecycle') {
           await listConversationTools(conversationId)
             .then(setTools)
@@ -293,15 +349,26 @@ export function App() {
             .catch(() => undefined);
         }
       }
+      if (abort.signal.aborted) {
+        setStatus('Stopped.');
+        await loadConversation(conversationId).catch(() => undefined);
+        return;
+      }
       await loadConversation(conversationId);
       setConversations(projectId ? await listProjectConversations(projectId) : await listConversations());
       playCue('complete');
-      setStatus('Run finished.');
+      setStatus('Done.');
     } catch (err) {
+      if (abort.signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+        setStatus('Stopped.');
+        await loadConversation(conversationId).catch(() => undefined);
+        return;
+      }
       playCue('warn');
       setError(err instanceof Error ? err.message : String(err));
       setStatus('Request failed.');
     } finally {
+      if (abortRef.current === abort) abortRef.current = null;
       setBusy(false);
     }
   }
@@ -319,7 +386,23 @@ export function App() {
       setView(emptyView(conversation));
     }
     setDraft('');
+    stickToBottom.current = true;
     await runPrompt(conversationId, content, capability);
+  }
+
+  async function onStop() {
+    abortRef.current?.abort();
+    const executionId = latestExecution?.id;
+    if (executionId && (latestExecution?.status === 'running' || latestExecution?.status === 'queued')) {
+      await cancelExecution(executionId).catch(() => undefined);
+    }
+    setBusy(false);
+    setStatus('Stopped.');
+  }
+
+  async function onRetry() {
+    if (!canRetry || !activeConversationId || !lastUserMessage) return;
+    await runPrompt(activeConversationId, lastUserMessage.content, capability);
   }
 
   async function onUpload(event: FormEvent) {
@@ -329,7 +412,7 @@ export function App() {
       await uploadTextFile(projectId, fileDraft.path.trim(), fileDraft.text);
       setFileDraft((current) => ({ ...current, text: '' }));
       setFiles(await listFiles(projectId));
-      setStatus('File stored in CAS. Bytes stay on the server.');
+      setStatus('File stored in this project.');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -355,7 +438,7 @@ export function App() {
       }
       setFiles(await listFiles(projectId));
       playCue('complete');
-      setStatus('Dropped files stored in CAS.');
+      setStatus('Dropped files stored in this project.');
     } catch (err) {
       playCue('warn');
       setError(err instanceof Error ? err.message : String(err));
@@ -374,7 +457,7 @@ export function App() {
       await decideTool(id, decision);
       if (activeConversationId) await loadConversation(activeConversationId);
       setApprovals(await listApprovals());
-      setStatus(decision === 'approve' ? 'Approval recorded on the server.' : 'Denial recorded on the server.');
+      setStatus(decision === 'approve' ? 'Approved.' : 'Denied.');
       playCue(decision === 'approve' ? 'complete' : 'warn');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -383,12 +466,21 @@ export function App() {
 
   const citations = useMemo(() => citationsFromBackend(context), [context]);
   const currentProject = projects.find((item) => item.id === projectId) ?? null;
+  const writingDungeon = dungeons.find((item) => item.id === 'writing' && item.featureAvailable);
+  const extraDungeons = dungeons.filter((item) => item.featureAvailable && item.id !== 'writing');
+  const attachedIds = new Set(context?.slices.map((slice) => slice.fileId) ?? []);
+  const modelLine = latestExecution
+    ? [capabilityLabel(latestExecution.capability), latestExecution.selectedModel ?? latestExecution.route?.model]
+        .filter(Boolean)
+        .join(' · ')
+    : capabilityLabel(capability);
   const paletteItems = useMemo(() => {
     const q = paletteQuery.trim().toLowerCase();
     const surfaces: Array<{ id: Surface; label: string }> = [
       { id: 'conversation', label: 'Conversation' },
+      ...(writingDungeon ? [{ id: 'writing' as Surface, label: writingDungeon.navLabel }] : []),
       { id: 'operations', label: 'Help & Repair' },
-      ...dungeons.filter((item) => item.featureAvailable).map((item) => ({ id: item.id as Surface, label: item.navLabel })),
+      ...extraDungeons.map((item) => ({ id: item.id as Surface, label: item.navLabel })),
     ];
     return [
       ...surfaces.filter((item) => !q || item.label.toLowerCase().includes(q)),
@@ -396,7 +488,7 @@ export function App() {
         .filter((item) => !q || item.name.toLowerCase().includes(q))
         .map((item) => ({ id: `project:${item.id}` as const, label: `Project ${item.name}` })),
     ];
-  }, [dungeons, paletteQuery, projects]);
+  }, [extraDungeons, paletteQuery, projects, writingDungeon]);
 
   if (loading) {
     return (
@@ -425,9 +517,19 @@ export function App() {
     );
   }
 
+  const layoutClass = [
+    'layout',
+    navOpen ? 'nav-open' : '',
+    detailsOpen || needsAttention ? 'details-open' : '',
+    needsAttention ? 'needs-attention' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
     <div
       className={`shell ${dropActive ? 'drop-active' : ''} ${prefersReducedMotion() ? 'reduced-motion' : 'atlas-motion'}`}
+      data-testid="workbench-shell"
       onDragOver={(event) => {
         event.preventDefault();
         setDropActive(true);
@@ -444,8 +546,8 @@ export function App() {
       </a>
       <header className="topbar">
         <div>
-          <p className="eyebrow">Atlas Workbench</p>
-          <h1>Projects, runs, files, tools</h1>
+          <p className="eyebrow">Atlas</p>
+          <h1>{currentProject?.name ?? 'Workbench'}</h1>
         </div>
         <div className="topbar-actions">
           <p id={liveId} className="status" aria-live="polite">
@@ -454,21 +556,14 @@ export function App() {
           <button
             type="button"
             className="ghost"
-            aria-pressed={soundOn}
-            onClick={() => {
-              const next = !soundOn;
-              setSoundEnabled(next);
-              setSoundOn(next);
-              if (next) playCue('activate');
-            }}
+            data-testid="details-toggle"
+            aria-pressed={detailsOpen}
+            onClick={() => setDetailsOpen((open) => !open)}
           >
-            {soundOn ? 'Sound on' : 'Sound off'}
-          </button>
-          <button type="button" className="ghost" onClick={() => setPaletteOpen(true)}>
-            Command palette
+            {detailsOpen ? 'Hide details' : 'Details'}
           </button>
           <button type="button" className="ghost nav-toggle" onClick={() => setNavOpen((open) => !open)} aria-expanded={navOpen}>
-            {navOpen ? 'Close navigation' : 'Open navigation'}
+            {navOpen ? 'Close navigation' : 'Menu'}
           </button>
           <button type="button" className="ghost" onClick={() => void refreshAll()} disabled={busy}>
             Reload
@@ -478,9 +573,9 @@ export function App() {
             className="ghost"
             onClick={() => {
               void (async () => {
+                abortRef.current?.abort();
                 await revokeSession();
                 setSession({ authenticated: false, bootstrapAllowed: false, loginAvailable: true, csrfToken: null, principal: null });
-                setSessionError(null);
                 setProjects([]);
                 setConversations([]);
                 setView(null);
@@ -492,24 +587,25 @@ export function App() {
           </button>
         </div>
       </header>
-      <div className={`layout ${navOpen ? 'nav-open' : ''}`}>
+      <div className={layoutClass}>
         <nav className="nav" aria-label="Projects and conversations">
           <form className="stack" onSubmit={(event) => void onCreateProject(event)}>
             <label htmlFor="project-name">New project</label>
             <input
               id="project-name"
+              data-testid="new-project-name"
               value={projectName}
               onChange={(event) => setProjectName(event.target.value)}
               placeholder="Named workspace"
               autoComplete="off"
             />
-            <button type="submit" className="primary" disabled={!projectName.trim()}>
+            <button type="submit" className="primary" data-testid="create-project" disabled={!projectName.trim()}>
               Create project
             </button>
           </form>
           <h2>Projects</h2>
           {projects.length === 0 ? (
-            <p className="muted">No projects yet. Creating one is authorised on the server.</p>
+            <p className="muted">Create a project to start a conversation.</p>
           ) : (
             <ul className="plain">
               {projects.map((project) => (
@@ -528,42 +624,19 @@ export function App() {
             </ul>
           )}
           <div className="row">
-            <h2>Surface</h2>
-          </div>
-          <ul className="plain">
-            <li>
-              <button type="button" className={surface === 'conversation' ? 'active' : ''} onClick={() => openSurface('conversation')} disabled={projectsAvailable && !projectId}>
-                Conversation
-              </button>
-            </li>
-            <li>
-              <button type="button" className={surface === 'operations' ? 'active' : ''} onClick={() => openSurface('operations')}>
-                Help & Repair
-              </button>
-            </li>
-            {dungeons
-              .filter((item) => item.featureAvailable)
-              .map((item) => (
-                <li key={item.id}>
-                  <button
-                    type="button"
-                    className={surface === item.id ? 'active' : ''}
-                    onClick={() => openSurface(item.id as Surface)}
-                    disabled={item.id !== 'privacy' && !projectId}
-                  >
-                    {item.navLabel}
-                  </button>
-                </li>
-              ))}
-          </ul>
-          <div className="row">
             <h2>Conversations</h2>
-            <button type="button" className="ghost compact" onClick={() => void onCreateConversation()} disabled={projectsAvailable && !projectId}>
+            <button
+              type="button"
+              className="ghost compact"
+              data-testid="new-conversation"
+              onClick={() => void onCreateConversation()}
+              disabled={projectsAvailable && !projectId}
+            >
               New
             </button>
           </div>
           {conversations.length === 0 ? (
-            <p className="muted">No conversations in this project.</p>
+            <p className="muted">No conversations yet. Send a message to start one.</p>
           ) : (
             <ul className="plain">
               {conversations.map((conversation) => (
@@ -581,6 +654,112 @@ export function App() {
               ))}
             </ul>
           )}
+          <div className="row">
+            <h2>Workspace</h2>
+          </div>
+          <ul className="plain">
+            <li>
+              <button
+                type="button"
+                className={surface === 'conversation' ? 'active' : ''}
+                data-testid="surface-conversation"
+                onClick={() => openSurface('conversation')}
+                disabled={projectsAvailable && !projectId}
+              >
+                Conversation
+              </button>
+            </li>
+            {writingDungeon ? (
+              <li>
+                <button
+                  type="button"
+                  className={surface === 'writing' ? 'active' : ''}
+                  data-testid="surface-writing"
+                  onClick={() => openSurface('writing')}
+                  disabled={!projectId}
+                >
+                  {writingDungeon.navLabel}
+                </button>
+              </li>
+            ) : null}
+          </ul>
+          <details className="nav-fold" open={filesOpen} onToggle={(event) => setFilesOpen(event.currentTarget.open)}>
+            <summary>Files</summary>
+            <p className="muted">Attach a file to this conversation. Bytes stay on the server.</p>
+            <form className="stack" onSubmit={(event) => void onUpload(event)}>
+              <label htmlFor="file-path">Name</label>
+              <input
+                id="file-path"
+                data-testid="file-path"
+                value={fileDraft.path}
+                onChange={(event) => setFileDraft((current) => ({ ...current, path: event.target.value }))}
+              />
+              <label htmlFor="file-text">Text</label>
+              <textarea
+                id="file-text"
+                data-testid="file-text"
+                value={fileDraft.text}
+                onChange={(event) => setFileDraft((current) => ({ ...current, text: event.target.value }))}
+                rows={3}
+              />
+              <button type="submit" className="primary" data-testid="upload-file" disabled={!projectId || !fileDraft.text.trim()}>
+                Add file
+              </button>
+            </form>
+            {files.length === 0 ? (
+              <p className="muted">No files in this project.</p>
+            ) : (
+              <ul className="plain">
+                {files.map((file) => (
+                  <li key={file.id} className="file-row">
+                    <div>
+                      <strong>{file.displayName}</strong>
+                      <span className="meta">
+                        {attachedIds.has(file.id) ? 'attached' : file.status} · {file.sizeBytes} B
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost compact"
+                      data-testid={`attach-file-${file.id}`}
+                      onClick={() => void onAttach(file.id)}
+                      disabled={!activeConversationId}
+                    >
+                      {attachedIds.has(file.id) ? 'Attached' : 'Attach'}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </details>
+          <details className="nav-fold" open={moreOpen} onToggle={(event) => setMoreOpen(event.currentTarget.open)}>
+            <summary>More</summary>
+            <ul className="plain">
+              <li>
+                <button
+                  type="button"
+                  className={surface === 'operations' ? 'active' : ''}
+                  data-testid="surface-operations"
+                  onClick={() => openSurface('operations')}
+                >
+                  Help & Repair
+                </button>
+              </li>
+              {extraDungeons.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className={surface === item.id ? 'active' : ''}
+                    onClick={() => openSurface(item.id as Surface)}
+                    disabled={item.id !== 'privacy' && !projectId}
+                  >
+                    {item.navLabel}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="muted">Ctrl/Cmd+K jumps anywhere.</p>
+          </details>
         </nav>
         {surface === 'writing' && projectId ? (
           <CaspaPanel
@@ -612,94 +791,143 @@ export function App() {
             onError={setError}
           />
         ) : (
-        <main className="workspace" aria-label="Conversation">
-          <header className="thread-header">
-            <div>
-              <h2>{snapshot?.conversation.title ?? currentProject?.name ?? 'Start in a project'}</h2>
-              <p className="hint">
-                Nexus routes. Execution runs. Authority decides tools. This thread is durable.
-              </p>
-            </div>
-            <p className={`pill ${latestExecution?.status ?? 'idle'}`} aria-live="polite">
-              {runLabel}
-            </p>
-          </header>
-          <section className="messages" aria-label="Messages">
-            {!snapshot || snapshot.messages.length === 0 ? (
-              <div className="empty">
-                <h3>Empty conversation</h3>
-                <p>Send a turn. Reloading restores server state; the browser is not the source of truth.</p>
+          <main className="workspace" aria-label="Conversation">
+            <header className="thread-header">
+              <div>
+                <h2>{snapshot?.conversation.title ?? currentProject?.name ?? 'Start a conversation'}</h2>
+                <p className="hint" data-testid="model-label">
+                  {modelLine}
+                  {context?.slices.length ? ` · ${context.slices.length} attached source${context.slices.length === 1 ? '' : 's'}` : ''}
+                </p>
               </div>
-            ) : (
-              snapshot.messages.map((message) => {
-                const execution = snapshot.executions.find((item) => item.id === message.executionId);
-                return (
-                  <article key={message.id} className={`message ${message.role}`}>
-                    {message.role === 'assistant' ? <div className="role">Atlas</div> : <div className="role">You</div>}
-                    <div className="body">{message.content || (busy ? '…' : '')}</div>
-                    {execution ? <ExecutionChip execution={execution} sealed={Boolean(view?.sealedResponse)} /> : null}
-                  </article>
-                );
-              })
-            )}
-            {busy && view?.waitLabel ? (
-              <article className="message assistant waiting" aria-live="polite">
-                <div className="role">Atlas</div>
-                <div className="body waiting-runtime">{view.waitLabel}</div>
-              </article>
+              <p className={`pill ${latestExecution?.status ?? (busy ? 'running' : 'idle')}`} data-testid="run-status" aria-live="polite">
+                {runLabel}
+              </p>
+            </header>
+            <section
+              className="messages"
+              ref={messagesRef}
+              aria-label="Messages"
+              data-testid="conversation-messages"
+              onScroll={() => {
+                const el = messagesRef.current;
+                if (!el) return;
+                stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
+              }}
+            >
+              {!snapshot || snapshot.messages.length === 0 ? (
+                <div className="empty">
+                  <h3>Where the answer appears</h3>
+                  <p>Type below. Atlas replies in this thread, and the reply stays after you refresh.</p>
+                </div>
+              ) : (
+                snapshot.messages.map((message) => {
+                  const execution = snapshot.executions.find((item) => item.id === message.executionId);
+                  const streaming = busy && message.role === 'assistant' && message.id === snapshot.messages.at(-1)?.id;
+                  return (
+                    <article
+                      key={message.id}
+                      className={`message ${message.role}${streaming ? ' streaming' : ''}`}
+                      data-testid={`message-${message.role}`}
+                      data-message-id={message.id}
+                    >
+                      {message.role === 'assistant' ? <div className="role">Atlas</div> : <div className="role">You</div>}
+                      <div className="body">{message.content || (busy && message.role === 'assistant' ? '…' : '')}</div>
+                      {message.role === 'assistant' && execution ? (
+                        <p className="reply-meta">
+                          {capabilityLabel(execution.capability)}
+                          {execution.selectedModel ? ` · ${execution.selectedModel}` : ''}
+                          {execution.status === 'failed' && execution.failureReason ? ` · ${execution.failureReason.message}` : ''}
+                        </p>
+                      ) : null}
+                    </article>
+                  );
+                })
+              )}
+              {busy && view?.waitLabel ? (
+                <article className="message assistant waiting" aria-live="polite">
+                  <div className="role">Atlas</div>
+                  <div className="body waiting-runtime">{view.waitLabel}</div>
+                </article>
+              ) : null}
+              <div ref={bottom} />
+            </section>
+            {error || view?.classifiedFailure ? (
+              <div className="error" role="alert" data-testid="conversation-error">
+                <span>{error ?? view?.classifiedFailure}</span>
+                {view?.sealedResponse ? <span className="meta">Visible output already began; Atlas did not disguise a provider switch.</span> : null}
+                {canRetry ? (
+                  <button type="button" className="ghost compact" onClick={() => void onRetry()}>
+                    Retry
+                  </button>
+                ) : null}
+              </div>
             ) : null}
-            <div ref={bottom} />
-          </section>
-          {error || view?.classifiedFailure ? (
-            <div className="error" role="alert">
-              <span>{error ?? view?.classifiedFailure}</span>
-              {view?.sealedResponse ? <span className="meta">Visible output already began; Atlas did not disguise a provider switch.</span> : null}
-            </div>
-          ) : null}
-          {awaiting.map((item) => (
-            <ApprovalCard key={item.id} tool={item} onDecide={onDecide} />
-          ))}
-          <form id={composerId} className="composer" onSubmit={(event) => void onSubmit(event)}>
-            <label htmlFor="draft">Message</label>
-            <div className="composer-box">
-              <textarea
-                id="draft"
-                value={draft}
-                placeholder={projectId || !projectsAvailable ? 'Write to Atlas…' : 'Create or open a project first.'}
-                disabled={(projectsAvailable && !projectId) || busy}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    event.currentTarget.form?.requestSubmit();
-                  }
-                }}
-              />
-              <label className="sr-only" htmlFor="capability">
-                Capability alias
-              </label>
-              <select
-                id="capability"
-                value={capability}
-                onChange={(event) => setCapability(event.target.value as Capability)}
-                disabled={busy}
-              >
-                {CAPABILITIES.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-              <button className="send" type="submit" disabled={busy || !draft.trim() || (projectsAvailable && !projectId)}>
-                {busy ? 'Running' : 'Send'}
-              </button>
-            </div>
-          </form>
-        </main>
+            {awaiting.map((item) => (
+              <ApprovalCard key={item.id} tool={item} onDecide={onDecide} />
+            ))}
+            <form id={composerId} className="composer" data-testid="composer" onSubmit={(event) => void onSubmit(event)}>
+              <label htmlFor="draft">Message</label>
+              <div className="composer-box">
+                <textarea
+                  id="draft"
+                  data-testid="composer-draft"
+                  value={draft}
+                  placeholder={projectId || !projectsAvailable ? 'Message Atlas…' : 'Create or open a project first.'}
+                  disabled={(projectsAvailable && !projectId) || busy}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault();
+                      event.currentTarget.form?.requestSubmit();
+                    }
+                  }}
+                />
+                <label className="sr-only" htmlFor="capability">
+                  Model
+                </label>
+                <select
+                  id="capability"
+                  data-testid="composer-model"
+                  value={capability}
+                  onChange={(event) => setCapability(event.target.value as Capability)}
+                  disabled={busy}
+                >
+                  {CAPABILITIES.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+                {busy ? (
+                  <button className="ghost" type="button" data-testid="composer-stop" onClick={() => void onStop()}>
+                    Stop
+                  </button>
+                ) : canRetry ? (
+                  <button className="ghost" type="button" data-testid="composer-retry" onClick={() => void onRetry()}>
+                    Retry
+                  </button>
+                ) : null}
+                <button
+                  className="send"
+                  type="submit"
+                  data-testid="composer-send"
+                  disabled={busy || !draft.trim() || (projectsAvailable && !projectId)}
+                >
+                  {busy ? 'Working' : 'Send'}
+                </button>
+              </div>
+            </form>
+          </main>
         )}
-        <aside className="inspector" aria-label="Run, files, context and tools">
-          <div className="tabs" role="tablist" aria-label="Inspector">
-            {(['run', 'files', 'context', 'tools'] as const).map((item) => (
+        <aside className="inspector" aria-label="Details">
+          <div className="tabs" role="tablist" aria-label="Details">
+            {([
+              ['run', 'Reply'],
+              ['files', 'Files'],
+              ['context', 'Sources'],
+              ['tools', 'Tools'],
+            ] as const).map(([item, label]) => (
               <button
                 key={item}
                 type="button"
@@ -708,7 +936,7 @@ export function App() {
                 className={tab === item ? 'active' : ''}
                 onClick={() => setTab(item)}
               >
-                {item}
+                {label}
               </button>
             ))}
           </div>
@@ -718,25 +946,7 @@ export function App() {
           {tab === 'files' ? (
             <section>
               <h3>Files</h3>
-              <p className="muted">Metadata only. CAS bytes stay on the host.</p>
-              <form className="stack" onSubmit={(event) => void onUpload(event)}>
-                <label htmlFor="file-path">Path</label>
-                <input
-                  id="file-path"
-                  value={fileDraft.path}
-                  onChange={(event) => setFileDraft((current) => ({ ...current, path: event.target.value }))}
-                />
-                <label htmlFor="file-text">Text</label>
-                <textarea
-                  id="file-text"
-                  value={fileDraft.text}
-                  onChange={(event) => setFileDraft((current) => ({ ...current, text: event.target.value }))}
-                  rows={4}
-                />
-                <button type="submit" className="primary" disabled={!projectId || !fileDraft.text.trim()}>
-                  Upload to CAS
-                </button>
-              </form>
+              <p className="muted">Same project files as the left rail. Attach them to this conversation.</p>
               {files.length === 0 ? (
                 <p className="muted">No files in this project.</p>
               ) : (
@@ -746,7 +956,7 @@ export function App() {
                       <div>
                         <strong>{file.displayName}</strong>
                         <span className="meta">
-                          {file.path} · {file.status} · {file.sizeBytes} B · {file.contentHash.slice(0, 12)}
+                          {file.path} · {file.status}
                         </span>
                       </div>
                       <button type="button" className="ghost compact" onClick={() => void onAttach(file.id)} disabled={!activeConversationId}>
@@ -760,17 +970,17 @@ export function App() {
           ) : null}
           {tab === 'context' ? (
             <section>
-              <h3>Context</h3>
-              <p className="muted">Citations come from the backend. The browser does not invent sources.</p>
+              <h3>Sources</h3>
+              <p className="muted">Material retrieved for this conversation. Atlas does not invent citations.</p>
               {citations.length === 0 && !context?.slices.length ? (
-                <p className="muted">No retrieved material for this run.</p>
+                <p className="muted">No attached or retrieved material yet.</p>
               ) : (
                 <ul className="plain">
                   {context?.slices.map((slice) => (
                     <li key={slice.chunkId}>
                       <strong>{slice.path}</strong>
                       <span className="meta">
-                        {slice.source} · hash {slice.contentHash.slice(0, 12)}
+                        {slice.source}
                         {slice.truncated ? ' · truncated' : ''}
                       </span>
                       <p>{slice.text}</p>
@@ -803,6 +1013,21 @@ export function App() {
               )}
             </section>
           ) : null}
+          <div className="inspector-foot">
+            <button
+              type="button"
+              className="ghost compact"
+              aria-pressed={soundOn}
+              onClick={() => {
+                const next = !soundOn;
+                setSoundEnabled(next);
+                setSoundOn(next);
+                if (next) playCue('activate');
+              }}
+            >
+              {soundOn ? 'Sound on' : 'Sound off'}
+            </button>
+          </div>
         </aside>
       </div>
       {paletteOpen ? (
@@ -820,7 +1045,7 @@ export function App() {
               autoFocus
               value={paletteQuery}
               onChange={(event) => setPaletteQuery(event.target.value)}
-              placeholder="Dungeon, conversation, or project"
+              placeholder="Conversation, writing, or project"
             />
             <ul className="plain">
               {paletteItems.map((item) => (
@@ -841,27 +1066,10 @@ export function App() {
                 </li>
               ))}
             </ul>
-            <p className="muted">Ctrl/Cmd+K. Presentation only; Authority still decides on the server.</p>
+            <p className="muted">Ctrl/Cmd+K. Presentation only; the server still decides what is allowed.</p>
           </div>
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function ExecutionChip({ execution, sealed }: { execution: ExecutionRecord; sealed: boolean }) {
-  const provider = execution.selectedProvider ?? execution.route?.provider ?? 'routing';
-  const model = execution.selectedModel ?? execution.route?.model ?? '…';
-  return (
-    <div className={`execution-chip ${execution.status}`}>
-      <span>
-        <strong>
-          {execution.capability} · {provider} · {model}
-        </strong>
-      </span>
-      <span>{execution.status}</span>
-      {sealed && execution.status === 'failed' ? <span>not continued on another provider</span> : null}
-      {execution.failureReason ? <span>{execution.failureReason.message}</span> : null}
     </div>
   );
 }
@@ -882,11 +1090,11 @@ function ApprovalCard({
       </p>
       <p className="meta">{tool.argumentSummary}</p>
       <p className="meta">
-        Risk {tool.risk} · {tool.sideEffectClass} · Authority {tool.requiredCapabilities.join(', ')}
+        Risk {tool.risk} · {tool.sideEffectClass}
       </p>
-      <p className="muted">Buttons do not grant permission. The host checks the session principal and Authority.</p>
+      <p className="muted">Buttons do not grant permission. The host checks the session and Authority.</p>
       <div className="row">
-        <button type="button" className="primary" aria-describedby={undefined} title={desc} onClick={() => void onDecide(tool.id, 'approve')}>
+        <button type="button" className="primary" title={desc} onClick={() => void onDecide(tool.id, 'approve')}>
           Approve
         </button>
         <button type="button" className="ghost" onClick={() => void onDecide(tool.id, 'deny')}>
@@ -901,61 +1109,73 @@ function RunInspector({ execution, tools }: { execution?: ExecutionRecord | null
   if (!execution) {
     return (
       <section>
-        <h3>Run inspection</h3>
-        <p className="muted">No run yet. Identity, route, provider, tools and provenance appear here after a turn.</p>
+        <h3>This reply</h3>
+        <p className="muted">After you send a message, the model and status for that reply appear here.</p>
       </section>
     );
   }
   return (
     <section>
-      <h3>Run inspection</h3>
+      <h3>This reply</h3>
       <dl className="facts">
         <div>
-          <dt>Identity</dt>
-          <dd>{execution.id}</dd>
-        </div>
-        <div>
           <dt>Status</dt>
-          <dd>{execution.status}</dd>
+          <dd>{runStatusLabel(execution.status, false)}</dd>
         </div>
         <div>
-          <dt>Capability</dt>
-          <dd>{execution.capability}</dd>
-        </div>
-        <div>
-          <dt>Route</dt>
-          <dd>{execution.route?.decisionReason ?? 'pending'}</dd>
-        </div>
-        <div>
-          <dt>Provider / model</dt>
+          <dt>Model</dt>
           <dd>
-            {execution.selectedProvider ?? '—'} / {execution.selectedModel ?? '—'}
+            {capabilityLabel(execution.capability)}
+            {execution.selectedModel ? ` · ${execution.selectedModel}` : ''}
           </dd>
         </div>
         <div>
-          <dt>Started</dt>
-          <dd>{execution.startedAt ?? '—'}</dd>
+          <dt>Provider</dt>
+          <dd>{execution.selectedProvider ?? '—'}</dd>
         </div>
-        <div>
-          <dt>Completed</dt>
-          <dd>{execution.completedAt ?? '—'}</dd>
-        </div>
-        <div>
-          <dt>Failure</dt>
-          <dd>{execution.failureReason?.message ?? 'none'}</dd>
-        </div>
+        {execution.failureReason ? (
+          <div>
+            <dt>Failure</dt>
+            <dd>{execution.failureReason.message}</dd>
+          </div>
+        ) : null}
       </dl>
-      <h4>Attempts</h4>
-      <ul className="plain">
-        {execution.attempts.map((attempt) => (
-          <li key={`${attempt.index}-${attempt.provider}`}>
-            {attempt.provider}/{attempt.model} · {attempt.outcome}
-            {attempt.emittedVisibleOutput ? ' · visible output begun' : ''}
-          </li>
-        ))}
-      </ul>
-      <h4>Tools on this run</h4>
-      {tools.length === 0 ? <p className="muted">None.</p> : <p className="meta">{tools.map((item) => `${item.toolId}:${item.status}`).join(' · ')}</p>}
+      <details className="nav-fold">
+        <summary>Advanced</summary>
+        <dl className="facts">
+          <div>
+            <dt>Identity</dt>
+            <dd>{execution.id}</dd>
+          </div>
+          <div>
+            <dt>Capability</dt>
+            <dd>{execution.capability}</dd>
+          </div>
+          <div>
+            <dt>Route</dt>
+            <dd>{execution.route?.decisionReason ?? 'pending'}</dd>
+          </div>
+          <div>
+            <dt>Started</dt>
+            <dd>{execution.startedAt ?? '—'}</dd>
+          </div>
+          <div>
+            <dt>Completed</dt>
+            <dd>{execution.completedAt ?? '—'}</dd>
+          </div>
+        </dl>
+        <h4>Attempts</h4>
+        <ul className="plain">
+          {execution.attempts.map((attempt) => (
+            <li key={`${attempt.index}-${attempt.provider}`}>
+              {attempt.provider}/{attempt.model} · {attempt.outcome}
+              {attempt.emittedVisibleOutput ? ' · visible output begun' : ''}
+            </li>
+          ))}
+        </ul>
+        <h4>Tools on this run</h4>
+        {tools.length === 0 ? <p className="muted">None.</p> : <p className="meta">{tools.map((item) => `${item.toolId}:${item.status}`).join(' · ')}</p>}
+      </details>
     </section>
   );
 }

@@ -321,12 +321,14 @@ export async function* sendMessage(
   conversationId: string,
   content: string,
   capability: Capability,
+  signal?: AbortSignal,
 ): AsyncGenerator<StreamEvent> {
   const response = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: 'POST',
     credentials: 'include',
     headers: mutatingHeaders(),
     body: JSON.stringify({ content, capability }),
+    signal,
   });
   if (!response.ok || !response.body) {
     throw new Error(await readError(response));
@@ -401,6 +403,17 @@ export async function inspectExecution(id: string): Promise<{
   tools: ToolPresentation[];
 }> {
   return parseJson(await fetch(`/api/executions/${encodeURIComponent(id)}`, { credentials: 'include' }));
+}
+
+export async function cancelExecution(id: string): Promise<ExecutionRecord> {
+  return parseJson(
+    await fetch(`/api/executions/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: '{}',
+    }),
+  );
 }
 
 export function runtimeWaitingLabel(message: string | null | undefined): string | null {

@@ -20,6 +20,18 @@ Host (apps/host)  composition root
 - CSRF (`x-atlas-csrf`) is required for mutating cookie requests. Button visibility is not permission.
 - Local file-mode hosts without platform persistence expose conversations only; project/file/context routes return `503` with `projects_unavailable` / `files_unavailable`.
 
+## Conversation-first shell
+
+The default experience is a persistent AI workspace. A person should see where to type, watch Atlas work, read the answer in the centre, continue the thread, and still have that answer after refresh.
+
+- **Left:** New conversation, conversation list (title + timestamp on separate lines), project Files / Context / Caspa, then Tools / Dungeons.
+- **Centre:** the thread. User and Atlas turns are distinct. Markdown, copy, retry, and Stop are on the thread. The composer stays at the bottom.
+- **Run details:** closed until opened. Execution ids, capability aliases, route dumps, and provider internals live there — not ahead of the answer.
+- Capability aliases render as Fast / Reason / Code behind More options. Stop cancels the in-flight execution. Retry resubmits the last user turn after a failure.
+- Doctor is a compact Healthy / Attention / Problem chip. Optional Ollama trouble is Attention, not “Atlas is broken”.
+
+The live missing-output defect on `ace41a2` is documented in [release/VISIBLE-OUTPUT-ROOT-CAUSE.md](./release/VISIBLE-OUTPUT-ROOT-CAUSE.md).
+
 ## Authority
 
 Workbench never evaluates grants. Approve/deny POST to `/api/tools/:id/approve|deny`. The tool engine validates schema, consults Authority, and records the durable decision. Open Behaviour is not sent by the UI and would not grant anything if it were.
@@ -35,7 +47,7 @@ Risk, required capabilities, argument summaries, and resource labels on the appr
 5. Optional tools: proposed → validated → authorised → (approval) → execute → provenance
 6. Files attach into context assembly; citations are backend `sourced` or honest `unknown`
 
-Statuses the UI can show: queued, running, completed, failed, interrupted/cancelled, awaiting approval. After visible assistant output, `applyStream` seals the response. A later provider is not painted as continuation of the same reply.
+Statuses the UI can show: Ready, Generating…, Completed, Failed, Stopped, Waiting for approval. After visible assistant output, `applyStream` seals the response. A later provider is not painted as continuation of the same reply.
 
 Reload calls the same GET endpoints. Remounting the SPA does not reset PostgreSQL/memory/CAS state.
 
@@ -51,7 +63,7 @@ Reload calls the same GET endpoints. Remounting the SPA does not reset PostgreSQ
 
 ## Dungeon extension point
 
-The shell is generic: project nav, conversation/run, files/context, tools/approval, run inspection, command palette, and presentation-only motion/sound. Caspa/Writing and the migrated specialist dungeons mount as project-scoped surfaces via dungeon registration (`GET /api/dungeons`). Privacy & Safety is owner-only and still enforced by Authority. Workbench is not forked. See [CASPA-WRITING.md](./CASPA-WRITING.md) and [CASPA-PARITY.md](./CASPA-PARITY.md).
+Tools / dungeons (Website, OSINT, Music, Privacy, Help & Repair) and Caspa mount as secondary surfaces with an obvious Back to conversation control. They must not hijack the default workspace. Privacy & Safety is owner-only and still enforced by Authority. Workbench is not forked. See [CASPA-WRITING.md](./CASPA-WRITING.md) and [CASPA-PARITY.md](./CASPA-PARITY.md).
 
 ## Non-goals (this slice)
 

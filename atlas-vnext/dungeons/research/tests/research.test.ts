@@ -172,4 +172,28 @@ describe('Research dungeon', () => {
     });
     await expect(research.run(stack.actor, brief.id)).rejects.toMatchObject({ httpStatus: 404 });
   });
+
+  it('does not post research notices onto another project conversation', async () => {
+    const stack = await openDungeonStack('Kettle notes.');
+    persistences.push(stack.persistence);
+    const other = await stack.projects.create(stack.actor, { name: 'Other', dungeon: 'research' });
+    const foreign = await stack.runtime.createConversation({ title: 'Other thread', projectId: other.id });
+    const research = new ResearchService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      context: stack.context,
+      runtime: stack.runtime,
+      authority: stack.authority,
+      policy: stack.policy,
+    });
+    const brief = await research.create(stack.actor, {
+      projectId: stack.project.id,
+      question: 'What is on the stove?',
+      conversationId: foreign.id,
+    });
+    await research.run(stack.actor, brief.id, { conversationId: foreign.id });
+    const snapshot = await stack.runtime.getSnapshot(foreign.id);
+    expect(snapshot?.messages ?? []).toEqual([]);
+  });
 });

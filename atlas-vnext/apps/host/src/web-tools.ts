@@ -5,8 +5,10 @@ import {
   type ToolAdapterContext,
   type ToolAdapterResult,
 } from '@atlas-vnext/tools';
+import { fetchPublicHttp } from './public-http.ts';
 
 const UA = 'Atlas-vNext/0.1 (+https://atlas.ocrowley.com)';
+const TOOL_BODY_BYTES = 8_192;
 
 export function productionToolAdapters(input: {
   search: FederatedSearchPort;
@@ -63,21 +65,23 @@ function liveApiReadAdapter(fetchImpl: typeof fetch, timeoutMs: number): ToolAda
     id: 'api.read',
     async execute(input, ctx): Promise<ToolAdapterResult> {
       const url = String(input.url ?? '');
-      const response = await fetchImpl(url, {
-        method: 'GET',
-        redirect: 'follow',
-        signal: ctx.signal,
-        headers: { 'user-agent': UA, accept: 'application/json,text/plain,*/*' },
+      const page = await fetchPublicHttp({
+        fetch: fetchImpl,
+        url,
+        init: {
+          method: 'GET',
+          signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(timeoutMs)]),
+          headers: { 'user-agent': UA, accept: 'application/json,text/plain,*/*' },
+        },
+        maxBytes: TOOL_BODY_BYTES,
       });
-      const text = await response.text();
-      let body: unknown = text.slice(0, 8_000);
+      let body: unknown = page.body;
       try {
-        body = JSON.parse(text);
+        body = JSON.parse(page.body);
       } catch {
-        // Keep text.
+        // Keep capped text.
       }
-      void timeoutMs;
-      return { output: { url, status: response.status, body, mock: false } };
+      return { output: { url: page.url, status: page.status, body, mock: false } };
     },
   };
 }
@@ -88,21 +92,17 @@ async function fetchPage(
   ctx: ToolAdapterContext,
   timeoutMs: number,
 ): Promise<ToolAdapterResult> {
-  void timeoutMs;
-  const response = await fetchImpl(url, {
-    method: 'GET',
-    redirect: 'follow',
-    signal: ctx.signal,
-    headers: { 'user-agent': UA, accept: 'text/html,application/xhtml+xml' },
+  const page = await fetchPublicHttp({
+    fetch: fetchImpl,
+    url,
+    init: {
+      method: 'GET',
+      signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(timeoutMs)]),
+      headers: { 'user-agent': UA, accept: 'text/html,application/xhtml+xml' },
+    },
+    maxBytes: TOOL_BODY_BYTES,
   });
-  const raw = await response.text();
-  const title = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g, ' ').trim() ?? url;
-  const body = raw.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 8_000);
-  return { output: { url: response.url || url, title, body, status: response.status, mock: false } };
-}
-
-function abortAfter(timeoutMs: number): AbortSignal {
-  const ctrl = new AbortController();
-  setTimeout(() => ctrl.abort(), timeoutMs);
-  return ctrl.signal;
+  const title = page.body.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/<[^>]+>/g, ' ').trim() ?? page.url;
+  const body = page.body.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 8_000);
+  return { output: { url: page.url, title, body, status: page.status, mock: false } };
 }

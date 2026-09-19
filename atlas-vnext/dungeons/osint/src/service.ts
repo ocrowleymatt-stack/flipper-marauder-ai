@@ -110,7 +110,10 @@ export class OsintService {
       });
       await jobs.complete(actor, job.id);
       if (input.conversationId) {
-        await this.deps.runtime.postNotice(input.conversationId, formatOsintNotice(input.value, findings));
+        await this.deps.runtime.postNotice(input.conversationId, formatOsintNotice(input.value, findings), {
+          tenantId: actor.tenantId,
+          workspaceId: project.id,
+        });
       }
       return { target: updated, findings, dossier };
     } catch (err) {

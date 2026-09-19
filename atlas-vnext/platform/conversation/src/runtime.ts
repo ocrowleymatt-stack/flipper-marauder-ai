@@ -138,9 +138,18 @@ export class ConversationRuntime {
     return this.deps.executions.get(executionId);
   }
 
-  async postNotice(conversationId: string, content: string): Promise<Message | null> {
+  async postNotice(
+    conversationId: string,
+    content: string,
+    scope?: { tenantId?: string; workspaceId?: string | null },
+  ): Promise<Message | null> {
     const conversation = await this.deps.conversations.get(conversationId);
     if (!conversation) return null;
+    if (scope?.tenantId && conversation.tenantId && conversation.tenantId !== scope.tenantId) return null;
+    if (scope?.workspaceId) {
+      const workspace = conversation.workspaceId ?? conversation.projectId ?? null;
+      if (workspace !== scope.workspaceId) return null;
+    }
     return this.transact(async () => {
       const message = await this.deps.messages.append({
         conversationId,

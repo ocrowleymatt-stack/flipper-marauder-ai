@@ -231,7 +231,10 @@ export class ResearchService {
       expectedRevision: brief.revision,
     });
     if (requestingConversationId) {
-      await this.deps.runtime.postNotice(requestingConversationId, formatResearchNotice(question, loop, strongest, text));
+      await this.deps.runtime.postNotice(requestingConversationId, formatResearchNotice(question, loop, strongest, text), {
+        tenantId: actor.tenantId,
+        workspaceId: projectId,
+      });
     }
     return {
       brief: await this.get(actor, brief.id),

@@ -54,13 +54,10 @@ export function stubRuntime(text = 'Atlas dungeon output.'): ConversationRuntime
       if (!row) return null;
       return { conversation: row.conversation, messages: row.messages, executions: [] };
     },
-    async postNotice(conversationId: string, content: string) {
-      let row = conversations.get(conversationId);
-      if (!row) {
-        const created = await (this as ConversationRuntime).createConversation({ title: 'notice' });
-        row = conversations.get(created.id);
-        if (!row) return null;
-      }
+    async postNotice(conversationId: string, content: string, scope?: { tenantId?: string; workspaceId?: string | null }) {
+      const row = conversations.get(conversationId);
+      if (!row) return null;
+      if (scope?.workspaceId && row.conversation.projectId !== scope.workspaceId) return null;
       const now = new Date().toISOString();
       const message = {
         id: `msg_${Math.random().toString(16).slice(2)}`,

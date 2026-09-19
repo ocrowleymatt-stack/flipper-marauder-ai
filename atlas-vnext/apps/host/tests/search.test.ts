@@ -17,4 +17,12 @@ describe('host federated search', () => {
     const inspected = await search.inspect({ url: report.hits[0]!.canonicalUrl });
     expect(inspected?.excerpt).toMatch(/Inspected fixture/);
   });
+
+  it('does not inspect private destinations', async () => {
+    const search = new NodeFederatedSearch({
+      mode: 'live',
+      fetch: (async () => new Response('secret', { status: 200 })) as unknown as typeof fetch,
+    });
+    expect(await search.inspect({ url: 'http://127.0.0.1/' })).toBeNull();
+  });
 });

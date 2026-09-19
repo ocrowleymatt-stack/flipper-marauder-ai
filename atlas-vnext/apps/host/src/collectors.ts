@@ -1,6 +1,7 @@
 import { resolve as dnsResolve } from 'node:dns/promises';
 import type { OsintTargetKind, PublicLookupResult } from '@atlas-vnext/contracts';
 import type { PublicLookupPort } from '@atlas-vnext/dungeon-osint';
+import { fetchPublicHttp } from './public-http.ts';
 
 const UA = 'Atlas-vNext/0.1 (+https://atlas.ocrowley.com)';
 const USERNAME_SITES: Array<{ id: string; url: (value: string) => string }> = [
@@ -105,12 +106,17 @@ export class NodePublicLookup implements PublicLookupPort {
   private async wikipedia(query: string, retrievedAt: string, signal?: AbortSignal): Promise<PublicLookupResult[]> {
     try {
       const url = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=3&format=json&origin=*`;
-      const response = await this.fetchImpl(url, {
-        signal: abortAfter(signal, this.timeoutMs),
-        headers: { 'user-agent': UA, accept: 'application/json' },
+      const page = await fetchPublicHttp({
+        fetch: this.fetchImpl,
+        url,
+        init: {
+          signal: abortAfter(signal, this.timeoutMs),
+          headers: { 'user-agent': UA, accept: 'application/json' },
+        },
+        maxBytes: 32_768,
       });
-      if (!response.ok) return [];
-      const body = (await response.json()) as { query?: { search?: Array<{ title: string; snippet: string }> } };
+      if (page.status < 200 || page.status >= 300) return [];
+      const body = JSON.parse(page.body) as { query?: { search?: Array<{ title: string; snippet: string }> } };
       return (body.query?.search ?? []).map((row) => {
         const page = `https://en.wikipedia.org/wiki/${encodeURIComponent(row.title.replace(/ /g, '_'))}`;
         return {
@@ -129,21 +135,24 @@ export class NodePublicLookup implements PublicLookupPort {
 
   private async httpHead(url: string, retrievedAt: string, signal?: AbortSignal): Promise<PublicLookupResult[]> {
     try {
-      const response = await this.fetchImpl(url, {
-        method: 'GET',
-        redirect: 'follow',
-        signal: abortAfter(signal, this.timeoutMs),
-        headers: { 'user-agent': UA, accept: 'text/html' },
+      const page = await fetchPublicHttp({
+        fetch: this.fetchImpl,
+        url,
+        init: {
+          method: 'GET',
+          signal: abortAfter(signal, this.timeoutMs),
+          headers: { 'user-agent': UA, accept: 'text/html' },
+        },
+        maxBytes: 32_768,
       });
-      const html = await response.text();
-      const title = extractTitle(html) || url;
+      const title = extractTitle(page.body) || page.url;
       return [
         {
           source: 'http.document',
-          summary: `${title} (${response.status})`,
-          confidence: response.ok ? 'confirmed' : 'possible',
-          evidence: strip(html).slice(0, 1_200),
-          url: response.url || url,
+          summary: `${title} (${page.status})`,
+          confidence: page.status >= 200 && page.status < 400 ? 'confirmed' : 'possible',
+          evidence: strip(page.body).slice(0, 1_200),
+          url: page.url,
           retrievedAt,
         },
       ];
@@ -166,23 +175,27 @@ export class NodePublicLookup implements PublicLookupPort {
     for (const site of USERNAME_SITES) {
       const url = site.url(value);
       try {
-        const response = await this.fetchImpl(url, {
-          method: 'GET',
-          redirect: 'manual',
-          signal: abortAfter(signal, this.timeoutMs),
-          headers: { 'user-agent': UA, accept: 'text/html' },
+        const page = await fetchPublicHttp({
+          fetch: this.fetchImpl,
+          url,
+          init: {
+            method: 'GET',
+            signal: abortAfter(signal, this.timeoutMs),
+            headers: { 'user-agent': UA, accept: 'text/html' },
+          },
+          maxBytes: 8_192,
         });
-        const claimed = response.status === 200;
-        const available = response.status === 404;
+        const claimed = page.status === 200;
+        const available = page.status === 404;
         out.push({
           source: `username.${site.id}`,
           summary: claimed
             ? `${value} appears claimed on ${site.id}`
             : available
               ? `${value} was not found on ${site.id}`
-              : `${site.id} returned HTTP ${response.status} for ${value}`,
+              : `${site.id} returned HTTP ${page.status} for ${value}`,
           confidence: claimed ? 'likely' : available ? 'possible' : 'possible',
-          evidence: JSON.stringify({ site: site.id, status: response.status, url }),
+          evidence: JSON.stringify({ site: site.id, status: page.status, url }),
           url,
           retrievedAt,
         });

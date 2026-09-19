@@ -209,6 +209,7 @@ export class MusicService {
               render.detail,
               'A text composition packet is stored, but there is no playable audio artefact yet, so this is not a finished track.',
             ].join('\n'),
+        { tenantId: actor.tenantId, workspaceId: projectId },
       );
     }
     return updated;

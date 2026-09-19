@@ -46,4 +46,14 @@ describe('extraction and deterministic chunking', () => {
     expect(a[0]?.locator.path).toBe('a.txt');
     expect(CHUNKER_VERSION).toBe('v1');
   });
+
+  it('treats audio uploads as opaque instead of failing extraction', () => {
+    const wav = new Uint8Array([
+      0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20,
+    ]);
+    const extracted = extractBytes(wav, 'audio/wav', 'theme.wav');
+    expect(extracted.text).toBe('');
+    expect(extracted.blocks).toEqual([]);
+    expect(extracted.structure).toMatchObject({ opaque: true, media: 'audio', mime: 'audio/wav' });
+  });
 });

@@ -6,6 +6,7 @@ import {
   fuseEngineHits,
   type RankedEngineHit,
 } from '@atlas-vnext/search';
+import { fetchPublicHttp } from './public-http.ts';
 
 const UA = 'Atlas-vNext/0.1 (+https://atlas.ocrowley.com)';
 const DEFAULT_TIMEOUT_MS = 4_000;
@@ -93,21 +94,24 @@ export class NodeFederatedSearch implements FederatedSearchPort {
       };
     }
     try {
-      const response = await this.fetchImpl(canonical, {
-        method: 'GET',
-        redirect: 'follow',
-        signal: abortAfter(input.signal, this.timeoutMs),
-        headers: { 'user-agent': UA, accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8' },
+      const page = await fetchPublicHttp({
+        fetch: this.fetchImpl,
+        url: canonical,
+        init: {
+          method: 'GET',
+          signal: abortAfter(input.signal, this.timeoutMs),
+          headers: { 'user-agent': UA, accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8' },
+        },
+        maxBytes: 32_768,
       });
-      const raw = await response.text();
-      const excerpt = stripHtml(raw).slice(0, 4_000);
-      const title = extractTitle(raw) || canonical;
+      const excerpt = stripHtml(page.body).slice(0, 4_000);
+      const title = extractTitle(page.body) || canonical;
       return {
         url: input.url,
         canonicalUrl: canonical,
         title,
         excerpt,
-        status: response.status,
+        status: page.status,
         retrievedAt: new Date().toISOString(),
       };
     } catch {

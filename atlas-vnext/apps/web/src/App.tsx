@@ -17,8 +17,11 @@ import {
   listConversations,
   listDungeons,
   listFiles,
+  listOsintFindings,
+  listOsintTargets,
   listProjectConversations,
   listProjects,
+  listResearch,
   runtimeWaitingLabel,
   sendMessage,
   uploadTextFile,
@@ -28,6 +31,7 @@ import {
   type Capability,
   type Conversation,
   type DoctorReport,
+  type DungeonRecord,
   type DungeonRegistration,
   type ExecutionRecord,
   type Project,
@@ -40,6 +44,14 @@ import { EstatePanel } from './estate';
 import { LoginForm } from './login';
 import { MarkdownBody } from './markdown';
 import { playCue, prefersReducedMotion } from './experience';
+import {
+  classifyAssistantResult,
+  findingsFromRecords,
+  mergeFindings,
+  stripPrimaryHashes,
+  type ParsedFinding,
+  type ParsedResult,
+} from './results';
 import {
   applyStream,
   approvalAuthorityLine,
@@ -66,7 +78,10 @@ type Surface =
   | 'website'
   | 'music'
   | 'privacy'
-  | 'operations';
+  | 'operations'
+  | 'settings';
+
+type PanelMode = 'closed' | 'run-details' | 'finding' | 'file' | 'sources' | 'project';
 
 export function App() {
   const [session, setSession] = useState<SessionState | null>(null);
@@ -100,6 +115,12 @@ export function App() {
   const [dropActive, setDropActive] = useState(false);
   const [doctor, setDoctor] = useState<DoctorReport | null>(null);
   const [doctorVisible, setDoctorVisible] = useState(false);
+  const [panelMode, setPanelMode] = useState<PanelMode>('closed');
+  const [selectedFinding, setSelectedFinding] = useState<ParsedFinding | null>(null);
+  const [selectedFile, setSelectedFile] = useState<ProjectFile | null>(null);
+  const [selectedResult, setSelectedResult] = useState<ParsedResult | null>(null);
+  const [osintFindings, setOsintFindings] = useState<DungeonRecord[]>([]);
+  const [researchBriefs, setResearchBriefs] = useState<DungeonRecord[]>([]);
   const bottom = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLElement>(null);
   const stickToBottom = useRef(true);
@@ -115,6 +136,8 @@ export function App() {
   const runLabel = busy ? 'Generating…' : runStatusLabel(latestExecution?.status, awaiting.length > 0);
   const currentProject = projects.find((item) => item.id === projectId) ?? null;
   const doctorView = doctorVisible && doctor ? doctorTone(doctor.state, doctor.checks) : null;
+  const panelOpen = panelMode !== 'closed' || diagnosticsOpen;
+  const durableFindings = useMemo(() => findingsFromRecords(osintFindings), [osintFindings]);
 
   const loadProjects = useCallback(async () => {
     const items = await listProjects();
@@ -125,18 +148,23 @@ export function App() {
   const loadConversation = useCallback(async (conversationId: string) => {
     const nextSnapshot = await getSnapshot(conversationId);
     setView(viewFromSnapshot(nextSnapshot));
-    const [conversationTools, assembled, pending] = await Promise.all([
+    const projectForConversation = nextSnapshot.conversation.projectId;
+    const [conversationTools, assembled, pending, targets, briefs] = await Promise.all([
       listConversationTools(conversationId).catch(() => []),
-      nextSnapshot.conversation.projectId
-        ? getProjectContext(nextSnapshot.conversation.projectId, nextSnapshot.conversation.title, conversationId).catch(
-            () => null,
-          )
+      projectForConversation
+        ? getProjectContext(projectForConversation, nextSnapshot.conversation.title, conversationId).catch(() => null)
         : Promise.resolve(null),
       listApprovals().catch(() => []),
+      projectForConversation ? listOsintTargets(projectForConversation).catch(() => []) : Promise.resolve([]),
+      projectForConversation ? listResearch(projectForConversation).catch(() => []) : Promise.resolve([]),
     ]);
     setTools(conversationTools);
     setContext(assembled);
     setApprovals(pending);
+    const mine = targets.filter((row) => row.conversationId === conversationId);
+    const findingsNested = await Promise.all(mine.map((target) => listOsintFindings(target.id).catch(() => [])));
+    setOsintFindings(findingsNested.flat());
+    setResearchBriefs(briefs.filter((row) => row.conversationId === conversationId));
     const executionId = nextSnapshot.executions.at(-1)?.id;
     if (executionId) {
       const inspected = await inspectExecution(executionId).catch(() => null);
@@ -162,6 +190,8 @@ export function App() {
         setTools([]);
         setContext(null);
         setInspection(null);
+        setOsintFindings([]);
+        setResearchBriefs([]);
       }
     },
     [loadConversation],
@@ -239,13 +269,30 @@ export function App() {
       }
       if (event.key === 'Escape') {
         setPaletteOpen(false);
-        setDiagnosticsOpen(false);
+        closePanel();
         setNavOpen(false);
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  function closePanel() {
+    setDiagnosticsOpen(false);
+    setPanelMode('closed');
+    setSelectedFinding(null);
+    setSelectedFile(null);
+    setSelectedResult(null);
+  }
+
+  function openRunDetails() {
+    setSelectedFinding(null);
+    setSelectedFile(null);
+    setSelectedResult(null);
+    setPanelMode('run-details');
+    setDiagnosticsOpen(true);
+    playCue('activate');
+  }
 
   function goToConversation() {
     setSurface('conversation');
@@ -310,6 +357,9 @@ export function App() {
       setView(emptyView(conversation));
       setTools([]);
       setInspection(null);
+      setOsintFindings([]);
+      setResearchBriefs([]);
+      closePanel();
       goToConversation();
       setStatus('New conversation.');
     } catch (err) {
@@ -494,6 +544,48 @@ export function App() {
     playCue('activate');
   }
 
+  function openFinding(finding: ParsedFinding, result?: ParsedResult | null) {
+    setSelectedFinding(finding);
+    setSelectedResult(result ?? null);
+    setSelectedFile(null);
+    setDiagnosticsOpen(false);
+    setPanelMode('finding');
+    setSurface('conversation');
+    playCue('activate');
+  }
+
+  function openSources(result: ParsedResult) {
+    setSelectedResult(result);
+    setSelectedFinding(null);
+    setSelectedFile(null);
+    setDiagnosticsOpen(false);
+    setPanelMode('sources');
+    setSurface('conversation');
+    playCue('activate');
+  }
+
+  function openFileDetails(file: ProjectFile) {
+    setSelectedFile(file);
+    setSelectedFinding(null);
+    setSelectedResult(null);
+    setDiagnosticsOpen(false);
+    setPanelMode('file');
+    playCue('activate');
+  }
+
+  async function onSignOut() {
+    await revokeSession();
+    setSession({
+      authenticated: false,
+      bootstrapAllowed: false,
+      loginAvailable: true,
+      csrfToken: null,
+      principal: null,
+    });
+    setView(null);
+    setStatus('Signed out.');
+  }
+
   async function onDecide(id: string, decision: 'approve' | 'deny') {
     try {
       await decideTool(id, decision);
@@ -516,12 +608,11 @@ export function App() {
     const q = paletteQuery.trim().toLowerCase();
     const surfaces: Array<{ id: Surface; label: string }> = [
       { id: 'conversation', label: 'Conversation' },
-      { id: 'files', label: 'Files' },
-      { id: 'context', label: 'Context' },
+      { id: 'files', label: 'Library' },
       { id: 'writing', label: 'Caspa' },
-      { id: 'operations', label: 'Help & Repair' },
+      { id: 'settings', label: 'Settings' },
       ...dungeons
-        .filter((item) => item.featureAvailable)
+        .filter((item) => item.featureAvailable && item.id !== 'writing')
         .map((item) => ({ id: item.id as Surface, label: item.navLabel.replace(/Studio/i, '').trim() })),
     ];
     return [
@@ -560,6 +651,7 @@ export function App() {
   }
 
   const threadTitle = conversationDisplayTitle(snapshot?.conversation.title, currentProject?.name ?? 'Conversation');
+  const showRunDetails = diagnosticsOpen || panelMode === 'run-details';
 
   return (
     <div
@@ -610,50 +702,24 @@ export function App() {
           <button type="button" className="ghost" onClick={() => setPaletteOpen(true)}>
             Search
           </button>
-          {doctorView ? (
-            <button
-              type="button"
-              className={`doctor-chip ${doctorView.tone}`}
-              data-testid="doctor-chip"
-              onClick={() => openSurface('operations')}
-              title={doctor?.state === 'ATTENTION_REQUIRED' ? 'Optional services need attention. Atlas can still work.' : doctor?.state}
-            >
-              <span className="doctor-dot" aria-hidden="true" />
-              {doctorView.label}
-            </button>
-          ) : null}
           <button
             type="button"
             className="ghost"
             data-testid="diagnostics-toggle"
-            aria-pressed={diagnosticsOpen}
-            onClick={() => setDiagnosticsOpen((open) => !open)}
-          >
-            {diagnosticsOpen ? 'Close details' : 'Run details'}
-          </button>
-          <button
-            type="button"
-            className="ghost"
+            aria-pressed={showRunDetails}
             onClick={() => {
-              void (async () => {
-                await revokeSession();
-                setSession({
-                  authenticated: false,
-                  bootstrapAllowed: false,
-                  loginAvailable: true,
-                  csrfToken: null,
-                  principal: null,
-                });
-                setView(null);
-                setStatus('Signed out.');
-              })();
+              if (showRunDetails) closePanel();
+              else openRunDetails();
             }}
           >
+            {showRunDetails ? 'Close details' : 'Run details'}
+          </button>
+          <button type="button" className="ghost" onClick={() => void onSignOut()}>
             Sign out
           </button>
         </div>
       </header>
-      <div className={`layout ${navOpen ? 'nav-open' : ''} ${diagnosticsOpen ? 'diagnostics-open' : ''}`}>
+      <div className={`layout ${navOpen ? 'nav-open' : ''} ${panelOpen ? 'diagnostics-open' : ''}`}>
         <nav className="nav" aria-label="Atlas">
           <button type="button" className="primary new-conversation" data-testid="new-conversation" onClick={() => void onCreateConversation()} disabled={projectsAvailable && !projectId}>
             New Chat
@@ -695,6 +761,25 @@ export function App() {
           </div>
           <div className="nav-section" data-testid="nav-projects">
             <h2>Projects</h2>
+            {projects.length === 0 ? (
+              <p className="muted">A project is a named workspace for chats, files, and results.</p>
+            ) : (
+              <ul className="plain project-list">
+                {projects.map((project) => (
+                  <li key={project.id}>
+                    <button
+                      type="button"
+                      className={project.id === projectId ? 'active' : ''}
+                      onClick={() => void onSelectProject(project.id)}
+                      aria-current={project.id === projectId ? 'page' : undefined}
+                    >
+                      <span className="conv-title">{project.name}</span>
+                      <span className="conv-meta">Workspace</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <form className="stack compact-form" onSubmit={(event) => void onCreateProject(event)}>
               <label htmlFor="project-name">New project</label>
               <input
@@ -726,7 +811,7 @@ export function App() {
             </ul>
           </div>
           <div className="nav-section" data-testid="nav-dungeons">
-            <h2>Dungeons</h2>
+            <h2>Skills</h2>
             <ul className="plain">
               <li>
                 <button type="button" className={surface === 'writing' ? 'active' : ''} data-testid="surface-writing" onClick={() => openSurface('writing')} disabled={!projectId}>
@@ -747,9 +832,27 @@ export function App() {
                     </button>
                   </li>
                 ))}
+            </ul>
+          </div>
+          <div className="nav-section nav-end" data-testid="nav-settings">
+            <h2>Account</h2>
+            <ul className="plain">
               <li>
-                <button type="button" className={surface === 'operations' ? 'active' : ''} onClick={() => openSurface('operations')}>
-                  Help & Repair
+                <button type="button" className={surface === 'settings' ? 'active' : ''} data-testid="surface-settings" onClick={() => openSurface('settings')}>
+                  Settings
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  data-testid="surface-advanced"
+                  className={showRunDetails ? 'active' : ''}
+                  onClick={() => {
+                    goToConversation();
+                    openRunDetails();
+                  }}
+                >
+                  Advanced
                 </button>
               </li>
             </ul>
@@ -769,18 +872,34 @@ export function App() {
             onAttach={onAttach}
             canAttach={Boolean(activeConversationId)}
             projectReady={Boolean(projectId)}
+            projectName={currentProject?.name ?? 'This project'}
+            conversationTitle={threadTitle}
+            onOpenFile={openFileDetails}
             onBack={goToConversation}
           />
         ) : surface === 'context' ? (
           <ContextSurface context={context} citations={citations} onBack={goToConversation} />
         ) : surface === 'operations' ? (
           <section className="workspace-wrap">
-            <SurfaceBack onBack={goToConversation} label="Help & Repair" />
+            <SurfaceBack onBack={() => openSurface('settings')} label="Help & Repair" />
             <EstatePanel dungeonId="operations" projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={setStatus} onError={setError} />
           </section>
+        ) : surface === 'settings' ? (
+          <SettingsSurface
+            session={session}
+            doctorView={doctorView}
+            doctor={doctor}
+            onHelp={() => openSurface('operations')}
+            onAdvanced={() => {
+              goToConversation();
+              openRunDetails();
+            }}
+            onSignOut={() => void onSignOut()}
+            onBack={goToConversation}
+          />
         ) : surface !== 'conversation' ? (
           <section className="workspace-wrap">
-            <SurfaceBack onBack={goToConversation} label={dungeons.find((item) => item.id === surface)?.navLabel.replace(/Studio/i, '').trim() ?? 'Tool'} />
+            <SurfaceBack onBack={goToConversation} label={dungeons.find((item) => item.id === surface)?.navLabel.replace(/Studio/i, '').trim() ?? 'Skill'} />
             <EstatePanel dungeonId={surface} projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={setStatus} onError={setError} />
           </section>
         ) : (
@@ -806,43 +925,58 @@ export function App() {
               }}
             >
               {!snapshot || snapshot.messages.length === 0 ? (
-                <div className="empty">
+                <div className="empty" data-testid="empty-conversation">
+                  <p className="eyebrow">Atlas</p>
                   <h2>Ask Atlas</h2>
-                  <p>Type below. Atlas will answer in this conversation, and the answer stays after you refresh.</p>
+                  <p>Talk here. Research, OSINT, files, and later specialist work return to this conversation.</p>
                 </div>
               ) : (
-                snapshot.messages.map((message) => (
-                  <article
-                    key={message.id}
-                    className={`message ${message.role}${busy && message.role === 'assistant' && message.id === snapshot.messages.at(-1)?.id ? ' streaming' : ''}`}
-                    data-role={message.role}
-                    data-testid={message.role === 'assistant' ? 'message-assistant' : 'message-user'}
-                  >
-                    <div className="role">{message.role === 'assistant' ? 'Atlas' : 'You'}</div>
-                    <div className="body" data-testid={message.role === 'assistant' ? 'assistant-output' : 'user-turn'}>
-                      {message.role === 'assistant' ? (
-                        message.content ? (
-                          <MarkdownBody text={message.content} />
-                        ) : busy ? (
-                          'Generating…'
+                snapshot.messages.map((message) => {
+                  const parsed = message.role === 'assistant' && message.content ? classifyAssistantResult(message.content) : null;
+                  const card =
+                    parsed?.kind === 'osint'
+                      ? { ...parsed, findings: mergeFindings(parsed.findings, durableFindings) }
+                      : parsed;
+                  return (
+                    <article
+                      key={message.id}
+                      className={`message ${message.role}${busy && message.role === 'assistant' && message.id === snapshot.messages.at(-1)?.id ? ' streaming' : ''}`}
+                      data-role={message.role}
+                      data-testid={message.role === 'assistant' ? 'message-assistant' : 'message-user'}
+                    >
+                      <div className="role">{message.role === 'assistant' ? 'Atlas' : 'You'}</div>
+                      <div className="body" data-testid={message.role === 'assistant' ? 'assistant-output' : 'user-turn'}>
+                        {message.role === 'assistant' ? (
+                          message.content ? (
+                            <MarkdownBody text={stripPrimaryHashes(message.content)} />
+                          ) : busy ? (
+                            'Generating…'
+                          ) : (
+                            ''
+                          )
                         ) : (
-                          ''
-                        )
-                      ) : (
-                        message.content
-                      )}
-                    </div>
-                    {message.role === 'assistant' && message.content ? (
-                      <button
-                        type="button"
-                        className="ghost compact copy"
-                        onClick={() => void navigator.clipboard.writeText(message.content)}
-                      >
-                        Copy
-                      </button>
-                    ) : null}
-                  </article>
-                ))
+                          message.content
+                        )}
+                      </div>
+                      {card ? (
+                        <ResultCard
+                          result={card}
+                          onOpenFinding={(finding) => openFinding(finding, card)}
+                          onOpenSources={() => openSources(card)}
+                        />
+                      ) : null}
+                      {message.role === 'assistant' && message.content ? (
+                        <button
+                          type="button"
+                          className="ghost compact copy"
+                          onClick={() => void navigator.clipboard.writeText(message.content)}
+                        >
+                          Copy
+                        </button>
+                      ) : null}
+                    </article>
+                  );
+                })
               )}
               {busy && view?.waitLabel ? (
                 <article className="message assistant waiting" aria-live="polite">
@@ -926,12 +1060,25 @@ export function App() {
             </form>
           </main>
         )}
-        {diagnosticsOpen ? (
-          <DiagnosticsDrawer
-            execution={latestExecution}
-            tools={inspection?.tools ?? tools}
-            onClose={() => setDiagnosticsOpen(false)}
-          />
+        {panelOpen ? (
+          showRunDetails ? (
+            <DiagnosticsDrawer execution={latestExecution} tools={inspection?.tools ?? tools} onClose={closePanel} />
+          ) : (
+            <ContextPanel
+              mode={panelMode}
+              finding={selectedFinding}
+              file={selectedFile}
+              result={selectedResult}
+              project={currentProject}
+              conversationTitle={threadTitle}
+              researchBriefs={researchBriefs}
+              onClose={closePanel}
+              onBackToChat={() => {
+                closePanel();
+                goToConversation();
+              }}
+            />
+          )
         ) : null}
       </div>
       {paletteOpen ? (
@@ -943,7 +1090,7 @@ export function App() {
               autoFocus
               value={paletteQuery}
               onChange={(event) => setPaletteQuery(event.target.value)}
-              placeholder="Conversation, project, or tool"
+              placeholder="Conversation, project, or skill"
             />
             <ul className="plain">
               {paletteItems.map((item) => (
@@ -974,6 +1121,51 @@ export function App() {
   );
 }
 
+function ResultCard({
+  result,
+  onOpenFinding,
+  onOpenSources,
+}: {
+  result: ParsedResult;
+  onOpenFinding: (finding: ParsedFinding) => void;
+  onOpenSources: () => void;
+}) {
+  return (
+    <section className="result-card" data-testid={`result-card-${result.kind}`} aria-label={`${result.kind} result`}>
+      <div className="result-card-head">
+        <p className="eyebrow">{result.kind === 'osint' ? 'OSINT' : 'Research'}</p>
+        <p className="meta">{result.state}</p>
+      </div>
+      {result.strongest ? <p className="result-strongest">{result.strongest}</p> : null}
+      {result.findings.length > 0 ? (
+        <ul className="plain result-findings">
+          {result.findings.slice(0, 6).map((finding) => (
+            <li key={finding.id}>
+              <button type="button" className="finding-open" data-testid="open-finding" onClick={() => onOpenFinding(finding)}>
+                <strong>{finding.source ?? finding.title}</strong>
+                <span className="meta">{finding.status ?? finding.confidence ?? 'observed'}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="row result-actions">
+        {result.sources.length > 0 ? (
+          <button type="button" className="ghost compact" data-testid="open-sources" onClick={onOpenSources}>
+            Sources
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function fileOrigin(file: ProjectFile): string {
+  if (file.path === 'acquisition' || file.path.startsWith('acquisition/')) return 'Acquired';
+  if (/^(generated|osint|research|caspa|website|music)\//i.test(file.path)) return 'Generated';
+  return 'Uploaded';
+}
+
 function SurfaceBack({ onBack, label }: { onBack: () => void; label: string }) {
   return (
     <div className="surface-back">
@@ -993,6 +1185,9 @@ function FilesSurface({
   onAttach,
   canAttach,
   projectReady,
+  projectName,
+  conversationTitle,
+  onOpenFile,
   onBack,
 }: {
   files: ProjectFile[];
@@ -1002,14 +1197,17 @@ function FilesSurface({
   onAttach: (fileId: string) => void;
   canAttach: boolean;
   projectReady: boolean;
+  projectName: string;
+  conversationTitle: string;
+  onOpenFile: (file: ProjectFile) => void;
   onBack: () => void;
 }) {
   return (
-    <main className="workspace" aria-label="Files">
-      <SurfaceBack onBack={onBack} label="Files" />
+    <main className="workspace" aria-label="Library">
+      <SurfaceBack onBack={onBack} label="Library" />
       <section className="estate-body">
-        <h1>Files</h1>
-        <p className="hint">Project files Atlas can use. Upload stays on the server.</p>
+        <h1>Library</h1>
+        <p className="hint">Files in {projectName}. Open one to see where it came from. Atlas does not show storage keys as the name of the file.</p>
         <form className="stack" onSubmit={(event) => void onUpload(event)}>
           <label htmlFor="file-path">Name</label>
           <input
@@ -1039,12 +1237,18 @@ function FilesSurface({
                 <div>
                   <strong>{file.displayName}</strong>
                   <span className="meta">
-                    {file.path} · {file.status}
+                    {fileOrigin(file)} · {projectName}
+                    {canAttach ? ` · ${conversationTitle}` : ''}
                   </span>
                 </div>
-                <button type="button" className="ghost compact" onClick={() => void onAttach(file.id)} disabled={!canAttach}>
-                  Use in conversation
-                </button>
+                <div className="row">
+                  <button type="button" className="ghost compact" data-testid="open-file" onClick={() => onOpenFile(file)}>
+                    Open
+                  </button>
+                  <button type="button" className="ghost compact" onClick={() => void onAttach(file.id)} disabled={!canAttach}>
+                    Use in conversation
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
@@ -1086,6 +1290,164 @@ function ContextSurface({
   );
 }
 
+function SettingsSurface({
+  session,
+  doctorView,
+  doctor,
+  onHelp,
+  onAdvanced,
+  onSignOut,
+  onBack,
+}: {
+  session: SessionState;
+  doctorView: { tone: string; label: string } | null;
+  doctor: DoctorReport | null;
+  onHelp: () => void;
+  onAdvanced: () => void;
+  onSignOut: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <main className="workspace" aria-label="Settings" data-testid="settings-surface">
+      <SurfaceBack onBack={onBack} label="Settings" />
+      <section className="estate-body">
+        <h1>Settings</h1>
+        <p className="hint">Account and operator tools. Routing, jobs, and infrastructure stay out of ordinary chat.</p>
+        <dl className="facts">
+          <div>
+            <dt>Signed in</dt>
+            <dd>{session.principal?.kind ?? 'session'}</dd>
+          </div>
+        </dl>
+        {doctorView ? (
+          <p className={`doctor-chip ${doctorView.tone}`} data-testid="doctor-chip">
+            <span className="doctor-dot" aria-hidden="true" />
+            {doctorView.label}
+            {doctor?.state === 'ATTENTION_REQUIRED' ? ' — optional services, Atlas can still work.' : null}
+          </p>
+        ) : null}
+        <div className="stack">
+          <button type="button" className="ghost" data-testid="open-help-repair" onClick={onHelp}>
+            Help & Repair
+          </button>
+          <button type="button" className="ghost" onClick={onAdvanced}>
+            Workbench / Run details
+          </button>
+          <button type="button" className="ghost" onClick={onSignOut}>
+            Sign out
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function ContextPanel({
+  mode,
+  finding,
+  file,
+  result,
+  project,
+  conversationTitle,
+  researchBriefs,
+  onClose,
+  onBackToChat,
+}: {
+  mode: PanelMode;
+  finding: ParsedFinding | null;
+  file: ProjectFile | null;
+  result: ParsedResult | null;
+  project: Project | null;
+  conversationTitle: string;
+  researchBriefs: DungeonRecord[];
+  onClose: () => void;
+  onBackToChat: () => void;
+}) {
+  const title = mode === 'file' ? 'File' : mode === 'sources' ? 'Sources' : mode === 'project' ? 'Project' : 'Finding';
+  return (
+    <aside className="diagnostics context-panel" aria-label={title} data-testid="context-panel">
+      <div className="row">
+        <h2>{title}</h2>
+        <button type="button" className="ghost compact" data-testid="context-close" onClick={onClose}>
+          Close
+        </button>
+      </div>
+      {mode === 'finding' && finding ? (
+        <dl className="facts" data-testid="finding-details">
+          <div>
+            <dt>Summary</dt>
+            <dd>{finding.summary}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>{finding.status ?? finding.confidence ?? 'observed'}</dd>
+          </div>
+          <div>
+            <dt>Kind</dt>
+            <dd>{finding.epistemicKind ?? 'observation'}</dd>
+          </div>
+          {finding.url ? (
+            <div>
+              <dt>Source</dt>
+              <dd>
+                <a href={finding.url} target="_blank" rel="noreferrer">
+                  {finding.url}
+                </a>
+              </dd>
+            </div>
+          ) : null}
+          {finding.evidenceHash ? (
+            <div>
+              <dt>Evidence</dt>
+              <dd className="meta">Stored with provenance. Key is not the name of this finding.</dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
+      {mode === 'sources' && result ? (
+        <ul className="plain" data-testid="source-list">
+          {result.sources.map((source) => (
+            <li key={`${source.title}-${source.url ?? ''}`}>
+              <strong>{source.title}</strong>
+              {source.url ? <p className="meta">{source.url}</p> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {mode === 'file' && file ? (
+        <dl className="facts" data-testid="file-details">
+          <div>
+            <dt>Name</dt>
+            <dd>{file.displayName}</dd>
+          </div>
+          <div>
+            <dt>Origin</dt>
+            <dd>{fileOrigin(file)}</dd>
+          </div>
+          <div>
+            <dt>Project</dt>
+            <dd>{project?.name ?? 'This project'}</dd>
+          </div>
+          <div>
+            <dt>Conversation</dt>
+            <dd>{conversationTitle}</dd>
+          </div>
+          <div>
+            <dt>Provenance</dt>
+            <dd className="meta">Available to this project. Storage keys stay in Advanced details.</dd>
+          </div>
+        </dl>
+      ) : null}
+      {researchBriefs.length > 0 && mode === 'sources' ? (
+        <p className="muted">{researchBriefs.length} stored research brief{researchBriefs.length === 1 ? '' : 's'} in this chat.</p>
+      ) : null}
+      <button type="button" className="ghost compact" data-testid="panel-back-to-chat" onClick={onBackToChat}>
+        Back to chat
+      </button>
+    </aside>
+  );
+}
+
 function DiagnosticsDrawer({
   execution,
   tools,
@@ -1103,6 +1465,7 @@ function DiagnosticsDrawer({
           Close
         </button>
       </div>
+      <p className="hint">Advanced / Workbench. Provider routing stays here, not in the conversation.</p>
       {!execution ? (
         <p className="muted">No run yet. Provider and model appear here after Atlas answers.</p>
       ) : (

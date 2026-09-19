@@ -245,8 +245,8 @@ function OsintPanel({
         <div>
           <h2>OSINT</h2>
           <p className="hint">
-            Working surface only. Ask from Atlas chat: “Run OSINT on [target]”. Public lookup uses host-injected
-            inspect. Jobs, CAS, and Authority stay on the platform.
+            Working surface only. Ask from Atlas chat: “Run OSINT on [target]”. Findings return to that conversation.
+            Public lookup uses host-injected inspect. Jobs, CAS, and Authority stay on the platform.
           </p>
         </div>
       </header>
@@ -530,7 +530,7 @@ function ResearchPanel({
       <header className="thread-header">
         <div>
           <h2>Research</h2>
-          <p className="hint">Retrieval is platform ContextService. This dungeon does not own a search stack.</p>
+          <p className="hint">Ask from Atlas chat. This desk stores briefs in the project. Retrieval is platform ContextService; this dungeon does not own a search stack.</p>
         </div>
       </header>
       <section className="estate-body">
@@ -662,6 +662,7 @@ function WebsitePanel({
       <header className="thread-header">
         <div>
           <h2>Website</h2>
+          <p className="hint">Working surface only. Website Studio product recovery is a later tranche. Preview is not production.</p>
           <p className="hint">Create a site for this project. Preview is temporary. Publishing is an owner action.</p>
         </div>
       </header>

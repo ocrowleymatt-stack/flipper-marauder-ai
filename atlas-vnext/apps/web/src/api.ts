@@ -455,6 +455,8 @@ export interface DungeonRecord {
   jobId: string | null;
   parentId: string | null;
   revision: number;
+  conversationId?: string | null;
+  workspaceId?: string | null;
 }
 
 export interface EffectivePolicyView {
@@ -688,6 +690,14 @@ export async function listOsintTargets(projectId: string): Promise<DungeonRecord
   return parseJson(
     await fetch(`/api/projects/${encodeURIComponent(projectId)}/osint/targets`, { credentials: 'include' }),
   );
+}
+
+export async function listOsintFindings(targetId: string): Promise<DungeonRecord[]> {
+  return parseJson(await fetch(`/api/osint/${encodeURIComponent(targetId)}/findings`, { credentials: 'include' }));
+}
+
+export async function getOsint(id: string): Promise<DungeonRecord> {
+  return parseJson(await fetch(`/api/osint/${encodeURIComponent(id)}`, { credentials: 'include' }));
 }
 
 export async function listCases(projectId: string): Promise<DungeonRecord[]> {

@@ -6,7 +6,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { Readable } from 'node:stream';
 import type { InspectedSource, SourceInspectPort } from '@atlas-vnext/contracts';
-import { assertPublicHttpUrl, isPrivateAddress } from '@atlas-vnext/search';
+import { assertPublicHttpUrl, isPrivateAddress, unwrapHostname } from '@atlas-vnext/search';
 
 const MAX_REDIRECTS = 5;
 const MAX_RESPONSE_BYTES = 2_000_000;
@@ -107,14 +107,15 @@ async function assertResolvedPublic(
   url: URL,
   lookupImpl: (hostname: string, options: { all: true; verbatim?: boolean }) => Promise<Array<{ address: string; family: number }>>,
 ): Promise<ResolvedAddress[]> {
-  if (isIP(url.hostname)) {
-    if (isPrivateAddress(url.hostname)) throw new Error('Private or reserved network addresses are not permitted.');
-    const family = isIP(url.hostname) === 6 ? 6 : 4;
-    return [{ address: url.hostname, family }];
+  const hostname = unwrapHostname(url.hostname);
+  if (isIP(hostname)) {
+    if (isPrivateAddress(hostname)) throw new Error('Private or reserved network addresses are not permitted.');
+    const family = isIP(hostname) === 6 ? 6 : 4;
+    return [{ address: hostname, family }];
   }
   let resolved;
   try {
-    resolved = await lookupImpl(url.hostname, { all: true, verbatim: true });
+    resolved = await lookupImpl(hostname, { all: true, verbatim: true });
   } catch {
     throw new Error('Hostname could not be resolved.');
   }
@@ -172,12 +173,12 @@ async function pinnedHttpTransport(input: {
     const req = lib.request(
       {
         protocol: parsed.protocol,
-        hostname: parsed.hostname,
+        hostname: unwrapHostname(parsed.hostname),
         port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
         path: `${parsed.pathname}${parsed.search}`,
         method,
         headers: headerRecord,
-        servername: parsed.protocol === 'https:' && !isIP(parsed.hostname) ? parsed.hostname : undefined,
+        servername: parsed.protocol === 'https:' && !isIP(unwrapHostname(parsed.hostname)) ? parsed.hostname : undefined,
         lookup: pinnedLookup(input.addresses),
       },
       (res) => {

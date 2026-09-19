@@ -98,7 +98,7 @@ export interface ConversationWorkHandler {
     tenantId?: string;
     principalId?: string;
     signal?: AbortSignal;
-  }): Promise<{ handled: boolean; text?: string } | void>;
+  }): Promise<{ handled: boolean; text?: string; failed?: boolean } | void>;
 }
 
 export class GeneratedOutputLimitError extends Error {
@@ -346,48 +346,80 @@ export class ConversationRuntime {
       });
 
       if (this.workHandler) {
-        const work = await this.workHandler({
-          conversationId,
-          content,
-          projectId: conversation.projectId ?? null,
-          tenantId: input.tenantId ?? conversation.tenantId,
-          principalId: input.principalId,
-          signal: controller.signal,
-        });
-        if (work && work.handled) {
-          const text = (work.text ?? 'Work completed.').trim() || 'Work completed.';
-          assistant = await this.deps.messages.append({
+        try {
+          const work = await this.workHandler({
             conversationId,
-            role: 'assistant',
-            content: text,
-            executionId,
+            content,
+            projectId: conversation.projectId ?? null,
+            tenantId: input.tenantId ?? conversation.tenantId,
+            principalId: input.principalId,
+            signal: controller.signal,
           });
-          assembled = text;
-          execution = await this.saveExecution({
-            ...execution,
-            assistantMessageId: assistant.id,
-          });
-          await this.publish(conversationId, 'message.appended', {
-            messageId: assistant.id,
-            role: 'assistant',
-          });
-          yield { type: 'message', message: assistant };
-          yield { type: 'execution', execution };
-          yield { type: 'assistant.delta', executionId, text };
-          yield { type: 'message.delta', messageId: assistant.id, content: text };
+          if (work && work.handled) {
+            const text =
+              (work.text ?? (work.failed ? 'Work did not complete.' : 'Work completed.')).trim() ||
+              (work.failed ? 'Work did not complete.' : 'Work completed.');
+            assistant = await this.deps.messages.append({
+              conversationId,
+              role: 'assistant',
+              content: text,
+              executionId,
+            });
+            assembled = text;
+            execution = await this.saveExecution({
+              ...execution,
+              assistantMessageId: assistant.id,
+            });
+            await this.publish(conversationId, 'message.appended', {
+              messageId: assistant.id,
+              role: 'assistant',
+            });
+            yield { type: 'message', message: assistant };
+            yield { type: 'execution', execution };
+            yield { type: 'assistant.delta', executionId, text };
+            yield { type: 'message.delta', messageId: assistant.id, content: text };
+            if (work.failed) {
+              const structured = failure('insufficient_evidence', text, false);
+              execution = await this.transition(
+                { ...execution, latencyMs: Date.now() - startedMs },
+                'failed',
+                { failureReason: structured },
+              );
+              settled = true;
+              yield { type: 'execution', execution };
+              yield { type: 'execution.failed', executionId, failure: structured };
+              yield { type: 'error', failure: structured };
+              yield { type: 'done' };
+              return;
+            }
+            execution = await this.transition(
+              { ...execution, latencyMs: Date.now() - startedMs },
+              'completed',
+            );
+            settled = true;
+            yield { type: 'assistant.completed', executionId, text };
+            yield {
+              type: 'execution.completed',
+              executionId,
+              provider: execution.selectedProvider,
+              model: execution.selectedModel,
+            };
+            yield { type: 'execution', execution };
+            yield { type: 'done' };
+            return;
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const structured = failure('provider_error', message, false);
           execution = await this.transition(
             { ...execution, latencyMs: Date.now() - startedMs },
-            'completed',
+            'failed',
+            { failureReason: structured },
           );
           settled = true;
-          yield { type: 'assistant.completed', executionId, text };
-          yield {
-            type: 'execution.completed',
-            executionId,
-            provider: execution.selectedProvider,
-            model: execution.selectedModel,
-          };
           yield { type: 'execution', execution };
+          yield { type: 'execution.failed', executionId, failure: structured };
+          yield { type: 'error', failure: structured };
           yield { type: 'done' };
           return;
         }

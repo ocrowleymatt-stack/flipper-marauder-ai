@@ -113,7 +113,11 @@ describe('search primitives', () => {
     expect(isPrivateAddress('::1%lo')).toBe(true);
     expect(isPrivateAddress('0000:0000:0000:0000:0000:0000:0000:0001')).toBe(true);
     expect(isPrivateAddress('2001:4860:4860::8888')).toBe(false);
+    expect(isPrivateAddress('[::1]')).toBe(true);
+    expect(isPrivateAddress('[::ffff:7f00:1]')).toBe(true);
     expect(() => assertPublicHttpUrl('http://localhost/secret')).toThrow(/Local-network/);
+    expect(() => assertPublicHttpUrl('http://[::1]/')).toThrow(/private/i);
+    expect(() => assertPublicHttpUrl('http://[::ffff:127.0.0.1]/')).toThrow(/private/i);
     expect(() => assertPublicHttpUrl('https://user:pass@example.com/')).toThrow(/credentials/);
     expect(() => assertPublicHttpUrl('file:///etc/passwd')).toThrow(/http/);
   });

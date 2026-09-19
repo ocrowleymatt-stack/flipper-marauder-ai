@@ -126,7 +126,7 @@ export class ResearchService {
       question: string;
       signal?: AbortSignal;
     },
-  ): Promise<{ handled: boolean; text?: string }> {
+  ): Promise<{ handled: boolean; text?: string; failed?: boolean }> {
     if (!this.deps.search || !this.deps.inspect) return { handled: false };
     if (!looksLikeResearchRequest(input.question)) return { handled: false };
     if (!input.projectId) return { handled: false };
@@ -135,11 +135,18 @@ export class ResearchService {
       question: input.question,
       conversationId: input.conversationId,
     });
-    const result = await this.run(actor, brief.id, {
-      conversationId: input.conversationId,
-      signal: input.signal,
-    });
-    return { handled: true, text: result.reportText };
+    try {
+      const result = await this.run(actor, brief.id, {
+        conversationId: input.conversationId,
+        signal: input.signal,
+      });
+      return { handled: true, text: result.reportText };
+    } catch (err) {
+      if (err instanceof ResearchError && (err.code === 'insufficient_evidence' || err.code === 'permission_denied')) {
+        return { handled: true, failed: true, text: err.message };
+      }
+      throw err;
+    }
   }
 
   async run(
@@ -210,7 +217,7 @@ export class ResearchService {
       text = text.trim() || 'No synthesis; retrieval slices remain the source of truth.';
     } else {
       text = composeReport({ question, assembled, web });
-      if (web.findings.length === 0 && assembled.slices.length === 0) {
+      if (web.findings.length === 0) {
         await this.store(actor).update(actor, brief.id, {
           status: 'failed',
           payload: { ...brief.payload, engines: web.engines, errors: web.errors },

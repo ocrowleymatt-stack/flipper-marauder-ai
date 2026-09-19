@@ -35,3 +35,13 @@ product work, Investigation caseboard.
 
 See `apps/host/tests/wave1-recovery.test.ts`, `dungeons/research/tests/research.test.ts`,
 `apps/host/tests/search-inspect.test.ts`, `platform/conversation/tests/history.test.ts`.
+
+## Wave 1B closeout (acceptance, not product)
+
+Live Search/Inspect/Research must be observed against real engines, not fixtures.
+`searchMode: 'live'` can run with mock LLM. Web research COMPLETED requires
+inspected web findings. Insufficient evidence posts into the requesting chat
+and marks the execution failed. Bracketed IPv6 literals are unwrapped before
+`isIP` / inspect pin.
+
+Isolated host only. Do not merge. Do not deploy public production.

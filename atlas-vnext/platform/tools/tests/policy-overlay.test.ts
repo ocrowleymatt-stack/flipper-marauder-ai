@@ -66,6 +66,35 @@ describe('effective policy overlay for tools', () => {
     expect(search.invocation.status).toBe('succeeded');
   });
 
+  it('denies retrieval.search for a principal that lacks network.public', async () => {
+    const registry = new ToolRegistry();
+    for (const def of PLATFORM_TOOL_CATALOGUE) registry.register(def);
+    const authority = new AuthorityEngine();
+    const tenantId = 'tenant_a';
+    const principalId = 'user_limited';
+    authority.grantMembership(principalId, tenantId);
+    for (const capability of ['tool.invoke.readonly', 'tool.invoke', 'project.read', 'file.read'] as const) {
+      authority.grantTo({ principalId, tenantId, capability });
+    }
+    const policy = new EffectivePolicyEngine(authority);
+    const overlay = policy.parse(tenantId, null, defaultEffectivePolicy(tenantId));
+    const engine = new ToolEngine({
+      registry,
+      invocations: new MemoryToolInvocationStore(),
+      approvals: new MemoryToolApprovalStore(),
+      authority,
+      policy,
+      resolvePolicy: () => overlay,
+      jailRoot: mkdtempSync(join(tmpdir(), 'atlas-jail-')),
+    });
+    const actor = { tenantId, principalId, workspaceId: 'wks_a' };
+    const callable = (await engine.listCallable(actor)).map((tool) => tool.id);
+    expect(callable).not.toContain('retrieval.search');
+    expect(callable).not.toContain('browser.navigate');
+    const search = await engine.invoke(actor, { toolId: 'retrieval.search', arguments: { query: 'Alpha' } });
+    expect(search.invocation.status).toBe('denied');
+  });
+
   it('advertises no tools when toolsEnabled is false', async () => {
     const { engine, actor } = engineWithPolicy('public', false);
     expect(await engine.listCallable(actor)).toEqual([]);

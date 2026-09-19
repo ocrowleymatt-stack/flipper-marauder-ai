@@ -217,4 +217,81 @@ describe('Research dungeon', () => {
     expect(result.synthesis.conversationId).toBe('con_atlas');
     expect(result.reportText).toMatch(/Sources inspected/);
   });
+
+  it('does not complete web research when inspect fails for every hit even if files exist', async () => {
+    const stack = await openDungeonStack('A copper kettle sings on the stove.');
+    persistences.push(stack.persistence);
+    const file = await stack.files.ingest(stack.actor, {
+      projectId: stack.project.id,
+      path: 'notes.md',
+      bytes: new TextEncoder().encode('A copper kettle sings on the stove.'),
+    });
+    for (let i = 0; i < 16; i += 1) {
+      if (!(await stack.files.processNextJob(stack.actor, 'research-inspect-fail'))) break;
+    }
+    const now = new Date().toISOString();
+    const search: FederatedSearchPort = {
+      async search(input): Promise<SearchReport> {
+        return {
+          query: input.query,
+          engines: ['brave'],
+          errors: [],
+          retrievedAt: now,
+          hits: [
+            {
+              engine: 'brave',
+              title: 'WWW',
+              url: 'https://en.wikipedia.org/wiki/World_Wide_Web',
+              canonicalUrl: 'https://en.wikipedia.org/wiki/World_Wide_Web',
+              snippet: 'The World Wide Web was invented at CERN.',
+              rank: 1,
+              retrievedAt: now,
+              source: 'en.wikipedia.org',
+            },
+          ],
+        };
+      },
+    };
+    const inspect: SourceInspectPort = {
+      async inspect() {
+        throw new Error('inspect failed');
+      },
+    };
+    const research = researchOf(stack, { search, inspect });
+    const brief = await research.create(stack.actor, {
+      projectId: stack.project.id,
+      question: 'Research the history of the World Wide Web using multiple independent sources.',
+      fileIds: [file.id],
+    });
+    await expect(research.run(stack.actor, brief.id)).rejects.toMatchObject({ code: 'insufficient_evidence' });
+    const listed = await research.list(stack.actor, stack.project.id);
+    expect(listed[0]?.status).toBe('failed');
+  });
+
+  it('denies web search for a same-tenant principal without network.public', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const member = { tenantId: stack.actor.tenantId, principalId: 'principal_member' };
+    await stack.persistence.ensurePrincipal({ id: member.principalId, displayName: 'member' });
+    stack.authority.grantMembership(member.principalId, member.tenantId);
+    for (const cap of ['artifact.read', 'artifact.write', 'project.read', 'file.read'] as const) {
+      stack.authority.grantTo({ principalId: member.principalId, tenantId: member.tenantId, capability: cap });
+    }
+    let searched = false;
+    const research = researchOf(stack, {
+      search: {
+        async search() {
+          searched = true;
+          throw new Error('search must not run');
+        },
+      },
+      inspect: fixtureInspect(),
+    });
+    const brief = await research.create(member, {
+      projectId: stack.project.id,
+      question: 'Research the history of the World Wide Web using multiple independent sources.',
+    });
+    await expect(research.run(member, brief.id)).rejects.toMatchObject({ code: 'insufficient_evidence' });
+    expect(searched).toBe(false);
+  });
 });

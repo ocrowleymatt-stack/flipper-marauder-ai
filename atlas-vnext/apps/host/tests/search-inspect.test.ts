@@ -113,6 +113,52 @@ describe('source inspect SSRF', () => {
     expect(page.truncated).toBe(true);
   });
 
+  it('rejects IPv6 loopback, ULA, mapped IPv4, mixed DNS, schemes, and long redirect chains', async () => {
+    const inspect = new NodeSourceInspect({
+      lookupImpl: async () => [{ address: '8.8.8.8', family: 4 }],
+    });
+    await expect(inspect.inspect({ url: 'http://[::1]/' })).rejects.toThrow(/private/i);
+    await expect(inspect.inspect({ url: 'http://[fd12:3456::1]/' })).rejects.toThrow(/private/i);
+    await expect(inspect.inspect({ url: 'http://[fe80::1]/' })).rejects.toThrow(/private/i);
+    await expect(inspect.inspect({ url: 'http://[::ffff:127.0.0.1]/' })).rejects.toThrow(/private/i);
+    await expect(inspect.inspect({ url: 'http://[::ffff:10.0.0.1]/' })).rejects.toThrow(/private/i);
+    await expect(inspect.inspect({ url: 'http://[::ffff:7f00:1]/' })).rejects.toThrow(/private/i);
+    await expect(inspect.inspect({ url: 'http://127.1.2.3/' })).rejects.toThrow(/private/i);
+    await expect(inspect.inspect({ url: 'http://172.16.0.1/' })).rejects.toThrow(/private/i);
+    await expect(inspect.inspect({ url: 'http://0.0.0.0/' })).rejects.toThrow(/private/i);
+    await expect(inspect.inspect({ url: 'file:///etc/passwd' })).rejects.toThrow(/http/i);
+    await expect(inspect.inspect({ url: 'ftp://example.com/file' })).rejects.toThrow(/http/i);
+    await expect(inspect.inspect({ url: 'gopher://example.com/1' })).rejects.toThrow(/http/i);
+
+    const mixed = new NodeSourceInspect({
+      lookupImpl: async () => [
+        { address: '8.8.8.8', family: 4 },
+        { address: '127.0.0.1', family: 4 },
+      ],
+      fetchImpl: async () => new Response('secret', { status: 200, headers: { 'content-type': 'text/plain' } }),
+    });
+    await expect(mixed.inspect({ url: 'https://public.test/mixed' })).rejects.toThrow(/private/i);
+
+    let hops = 0;
+    const chain = new NodeSourceInspect({
+      lookupImpl: async () => [{ address: '8.8.8.8', family: 4 }],
+      fetchImpl: async () => {
+        hops += 1;
+        return new Response(null, { status: 302, headers: { location: `https://public.test/r${hops}` } });
+      },
+    });
+    await expect(chain.inspect({ url: 'https://public.test/start' })).rejects.toThrow(/redirect/i);
+    expect(hops).toBeLessThanOrEqual(6);
+  });
+
+  it('rejects 6to4 encodings of private IPv4', async () => {
+    const inspect = new NodeSourceInspect({
+      lookupImpl: async () => [{ address: '2002:c0a8:1::1', family: 6 }],
+      fetchImpl: async () => new Response('secret', { status: 200, headers: { 'content-type': 'text/plain' } }),
+    });
+    await expect(inspect.inspect({ url: 'https://public.test/6to4' })).rejects.toThrow(/private/i);
+  });
+
   it('fixture inspect remains available for mock spines', async () => {
     const page = await new FixtureInspect().inspect({ url: 'https://example.org/a' });
     expect(page.ok).toBe(true);

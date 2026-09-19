@@ -31,10 +31,17 @@ export function isPrivateIpv6(address: string): boolean {
   );
 }
 
+export function unwrapHostname(hostname: string): string {
+  const trimmed = hostname.trim().toLowerCase();
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) return trimmed.slice(1, -1);
+  return trimmed;
+}
+
 export function isPrivateAddress(address: string): boolean {
-  const family = isIP(address);
-  if (family === 4) return isPrivateIpv4(address);
-  if (family === 6) return isPrivateIpv6(address);
+  const hostname = unwrapHostname(address);
+  const family = isIP(hostname);
+  if (family === 4) return isPrivateIpv4(hostname);
+  if (family === 6) return isPrivateIpv6(hostname);
   return true;
 }
 
@@ -51,7 +58,7 @@ export function assertPublicHttpUrl(rawUrl: string): URL {
   if (url.username || url.password) {
     throw new Error('URLs containing credentials are not permitted.');
   }
-  const hostname = url.hostname.toLowerCase();
+  const hostname = unwrapHostname(url.hostname);
   if (
     hostname === 'localhost' ||
     hostname.endsWith('.localhost') ||

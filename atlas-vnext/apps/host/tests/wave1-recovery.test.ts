@@ -328,4 +328,48 @@ describe('Wave 1 security', () => {
       );
     expect(records ?? []).toEqual([]);
   });
+
+  it('does not complete conversational web research when stored networkAccess is none', async () => {
+    const { url, spine } = await startHost();
+    expect(spine.privacy).toBeTruthy();
+    await spine.privacy!.update(
+      { tenantId: spine.tenantId, principalId: spine.principalId },
+      { patch: { networkAccess: 'none' }, confirm: 'CONFIRM' },
+    );
+    const session = await bootstrap(url);
+    const project = (await (
+      await fetch(`${url}/api/projects`, { method: 'POST', headers: auth(session), body: JSON.stringify({ name: 'NoNet' }) })
+    ).json()) as { id: string };
+    const conversation = (await (
+      await fetch(`${url}/api/projects/${project.id}/conversations`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({}),
+      })
+    ).json()) as { id: string };
+    const response = await fetch(`${url}/api/conversations/${conversation.id}/messages`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({
+        content:
+          'Research the history of the World Wide Web using multiple independent sources. Tell me what is strongly established.',
+        capability: 'nexus/fast',
+        tools: true,
+      }),
+    });
+    expect(response.ok).toBe(true);
+    const raw = await response.text();
+    expect(raw).toMatch(/execution\.failed|insufficient_evidence|Public network access denied/i);
+    const body = (await (
+      await fetch(`${url}/api/conversations/${conversation.id}`, { headers: { cookie: session.cookie } })
+    ).json()) as { executions?: Array<{ status: string }> };
+    expect(body.executions?.at(-1)?.status).toBe('failed');
+    const records = await spine.persistence
+      ?.forActor({ tenantId: spine.tenantId, principalId: spine.principalId })
+      .dungeonRecords.list(
+        { tenantId: spine.tenantId, principalId: spine.principalId },
+        { workspaceId: project.id, dungeon: 'research', kind: 'synthesis' },
+      );
+    expect(records ?? []).toEqual([]);
+  });
 });

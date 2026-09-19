@@ -98,6 +98,24 @@ describe('conversation history', () => {
     expect(compiled[0]?.content).toHaveLength(24);
   });
 
+  it('never exceeds the character budget across multiple turns', () => {
+    const messages = Array.from({ length: 30 }, (_, index) => ({
+      id: `m${index}`,
+      urn: `urn:atlas:message:m${index}`,
+      conversationId: 'c1',
+      role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `turn ${index} ${'y'.repeat(2_000)}`,
+      sequence: index,
+      executionId: null,
+      createdAt: '2026-09-19T00:00:00.000Z',
+      updatedAt: '2026-09-19T00:00:00.000Z',
+    }));
+    const compiled = compileConversationHistory(messages);
+    const chars = compiled.reduce((sum, row) => sum + row.content.length, 0);
+    expect(compiled.length).toBeLessThanOrEqual(HISTORY_MESSAGE_LIMIT);
+    expect(chars).toBeLessThanOrEqual(24_000);
+  });
+
   it('feeds prior turns to the executor so anaphora can resolve', async () => {
     const stores = memoryStores();
     const captured: Array<{ prompt: string; history?: Array<{ role: string; content: string }> }> = [];

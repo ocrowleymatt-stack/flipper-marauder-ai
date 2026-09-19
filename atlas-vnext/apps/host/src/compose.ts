@@ -121,6 +121,8 @@ export interface ComposeOptions {
   openPersistence?: (config: PersistenceConfig) => Promise<PlatformPersistence>;
   casRoot?: string;
   signal?: AbortSignal;
+  /** Override search/inspect independently of the execution plane. Default follows `mode`. */
+  searchMode?: 'live' | 'mock';
 }
 
 /**
@@ -337,8 +339,9 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     });
     credentials = bound.credentials;
     privacy = new PrivacyService({ persistence, authority, policy, ownerPrincipalId: principalId });
-    const searchPort = new NodeFederatedSearch(searchEnginesFromEnv(env, mode === 'live' ? 'live' : 'mock'));
-    const inspectPort = mode === 'live' ? new NodeSourceInspect() : new FixtureInspect();
+    const searchMode = options.searchMode ?? (mode === 'live' ? 'live' : 'mock');
+    const searchPort = new NodeFederatedSearch(searchEnginesFromEnv(env, searchMode));
+    const inspectPort = searchMode === 'live' ? new NodeSourceInspect() : new FixtureInspect();
     tools = new ToolEngine({
       registry: toolRegistry,
       invocations: bound.toolInvocations,
@@ -421,9 +424,12 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
         );
       } catch (err) {
         if (err instanceof ResearchError && err.code === 'insufficient_evidence') {
-          return { handled: true, text: err.message };
+          return { handled: true, failed: true, text: err.message };
         }
-        if (err instanceof ResearchError && (err.code === 'permission_denied' || err.code === 'not_found')) {
+        if (err instanceof ResearchError && err.code === 'permission_denied') {
+          return { handled: true, failed: true, text: err.message };
+        }
+        if (err instanceof ResearchError && err.code === 'not_found') {
           return { handled: false };
         }
         throw err;

@@ -89,6 +89,7 @@ export class PostgresPersistence implements PlatformPersistence {
       sites: siteStores.sites,
       sessions: authStores.sessions,
       directory: authStores.directory,
+      credentials: authStores.credentials,
       toolInvocations: toolStores.invocations,
       toolApprovals: toolStores.approvals,
       documents: createDocumentStore(this.tx, this.clock),

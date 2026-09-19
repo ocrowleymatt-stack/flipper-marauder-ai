@@ -48,6 +48,7 @@ async function startWorkbench() {
   const server = createHost({
     runtime: spine.runtime,
     auth: spine.auth,
+    login: spine.login,
     tools: spine.tools,
     projects: spine.projects,
     files: spine.files,
@@ -310,6 +311,7 @@ describe('Atlas Workbench host', () => {
     const server = createHost({
       runtime: spine.runtime,
       auth: spine.auth,
+      login: spine.login,
       tools: spine.tools,
       projects: spine.projects,
       files: spine.files,
@@ -499,5 +501,160 @@ describe('Atlas Workbench host', () => {
     expect(execution.execution.route.localOnly).toBe(true);
     expect(execution.execution.route.locality).toBe('local');
     expect(execution.execution.selectedProvider).toBe('ollama');
+  });
+
+  it('authenticates a provisioned credential in production without re-enabling bootstrap', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-workbench-login-'));
+    const spine = await composeSpine({
+      dataPath: join(dir, 'state.json'),
+      mode: 'mock',
+      persistence: memoryConfig('tenant_a'),
+      casRoot: join(dir, 'cas'),
+      env: {
+        ATLAS_TENANT_ID: 'tenant_a',
+        ATLAS_SESSION_SECRET: 'test-session-secret-not-for-production-use',
+        ATLAS_ALLOWED_ORIGINS: 'https://atlas.ocrowley.com',
+        ATLAS_SESSION_COOKIE: 'atlas_vnext_session',
+      },
+    });
+    spines.push(spine);
+    await spine.login.provision({
+      principalId: spine.principalId,
+      login: 'owner',
+      password: 'correct-horse-battery-staple',
+    });
+    await spine.persistence!.ensurePrincipal({ id: 'principal_member', displayName: 'member' });
+    await spine.persistence!.forActor({ tenantId: spine.tenantId, principalId: 'principal_member' }).directory.putTenantMembership({
+      principalId: 'principal_member',
+      tenantId: spine.tenantId,
+      role: 'member',
+      capabilities: [],
+      createdAt: new Date().toISOString(),
+    });
+    await spine.login.provision({
+      principalId: 'principal_member',
+      login: 'member',
+      password: 'member-horse-battery-staple',
+    });
+    const server = createHost({
+      runtime: spine.runtime,
+      auth: spine.auth,
+      login: spine.login,
+      tools: spine.tools,
+      projects: spine.projects,
+      files: spine.files,
+      context: spine.context,
+      persistence: spine.persistence,
+      doctor: spine.doctor,
+      repairs: spine.repairs,
+      tenantId: spine.tenantId,
+      principalId: spine.principalId,
+      production: true,
+      allowedOrigins: ['https://atlas.ocrowley.com'],
+    });
+    servers.push(server);
+    const bound = await listen(server, 0, '127.0.0.1');
+    const origin = { origin: 'https://atlas.ocrowley.com' };
+
+    const bootstrap = await fetch(`${bound.url}/api/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...origin },
+      body: '{}',
+    });
+    expect(bootstrap.status).toBe(401);
+
+    const unknown = await fetch(`${bound.url}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...origin },
+      body: JSON.stringify({ login: 'nobody', password: 'correct-horse-battery-staple' }),
+    });
+    const wrong = await fetch(`${bound.url}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...origin },
+      body: JSON.stringify({ login: 'owner', password: 'definitely-not-the-password' }),
+    });
+    expect(unknown.status).toBe(401);
+    expect(wrong.status).toBe(401);
+    expect(await unknown.json()).toEqual(await wrong.json());
+
+    const hostile = await fetch(`${bound.url}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+      body: JSON.stringify({ login: 'owner', password: 'correct-horse-battery-staple' }),
+    });
+    expect(hostile.status).toBe(403);
+
+    const issued = await fetch(`${bound.url}/api/auth/login?tenant=tenant_foreign`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...origin, 'x-atlas-tenant': 'tenant_foreign' },
+      body: JSON.stringify({
+        login: 'owner',
+        password: 'correct-horse-battery-staple',
+        tenantId: 'tenant_foreign',
+        tenant: 'tenant_foreign',
+      }),
+    });
+    expect(issued.status).toBe(200);
+    const loginBody = (await issued.json()) as { authenticated: boolean; csrfToken: string; principal: { id: string } };
+    expect(loginBody.authenticated).toBe(true);
+    expect(loginBody.principal.id).toBe(spine.principalId);
+    const cookie = issued.headers.get('set-cookie') ?? '';
+    expect(cookie).toMatch(/HttpOnly/i);
+    expect(cookie).toMatch(/SameSite=Lax/i);
+    expect(cookie).toMatch(/Secure/i);
+    expect(cookie).toMatch(/atlas_vnext_session=/);
+    expect(cookie).not.toMatch(/atlas_vnext_staging_session=/);
+
+    const session = await fetch(`${bound.url}/api/session`, { headers: { cookie } });
+    const sessionBody = (await session.json()) as { authenticated: boolean; bootstrapAllowed: boolean; loginAvailable: boolean };
+    expect(sessionBody.authenticated).toBe(true);
+    expect(sessionBody.bootstrapAllowed).toBe(false);
+    expect(sessionBody.loginAvailable).toBe(true);
+
+    const project = await fetch(`${bound.url}/api/projects`, {
+      method: 'POST',
+      headers: { cookie, 'x-atlas-csrf': loginBody.csrfToken, 'content-type': 'application/json', ...origin },
+      body: JSON.stringify({ name: 'Login project' }),
+    });
+    expect(project.status).toBe(201);
+
+    const noCsrf = await fetch(`${bound.url}/api/projects`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json', ...origin },
+      body: JSON.stringify({ name: 'No CSRF' }),
+    });
+    expect(noCsrf.status).toBe(403);
+
+    const doctor = await fetch(`${bound.url}/api/ops/doctor`, { headers: { cookie } });
+    expect(doctor.status).toBe(200);
+
+    const repair = await fetch(`${bound.url}/api/ops/repairs/repair.migrate_schema/apply`, {
+      method: 'POST',
+      headers: { cookie, 'x-atlas-csrf': loginBody.csrfToken, 'content-type': 'application/json', ...origin },
+      body: '{}',
+    });
+    expect(repair.status).toBe(200);
+    const repairBody = (await repair.json()) as { status: string; authorityDecision?: string };
+    expect(repairBody.status === 'denied' || repairBody.status === 'proposed').toBe(true);
+    expect(repairBody.status).not.toBe('applied');
+
+    const memberLogin = await fetch(`${bound.url}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...origin },
+      body: JSON.stringify({ login: 'member', password: 'member-horse-battery-staple' }),
+    });
+    expect(memberLogin.status).toBe(200);
+    const memberCookie = memberLogin.headers.get('set-cookie') ?? '';
+    const memberDoctor = await fetch(`${bound.url}/api/ops/doctor`, { headers: { cookie: memberCookie } });
+    expect(memberDoctor.status).toBe(404);
+
+    const revoked = await fetch(`${bound.url}/api/session/revoke`, {
+      method: 'POST',
+      headers: { cookie, 'x-atlas-csrf': loginBody.csrfToken, 'content-type': 'application/json', ...origin },
+      body: '{}',
+    });
+    expect(revoked.status).toBe(200);
+    const after = await fetch(`${bound.url}/api/projects`, { headers: { cookie } });
+    expect(after.status).toBe(401);
   });
 });

@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ANONYMOUS_RATE_TENANT,
   PlatformRateLimiter,
+  firstForwardedHop,
+  loginClientAddress,
   normalizeObservedAddress,
   resolveAdmissionIdentity,
   resolveRateLimitIdentity,
@@ -365,10 +367,64 @@ describe('admission rate limit before session resolution', () => {
     const identity = resolveAdmissionIdentity({
       pathname: '/api/conversations',
       remoteAddress: '192.0.2.10',
+      forwardedFor: '203.0.113.9',
       cookiePresent: true,
     });
     expect(identity.actorId).toBe('anon:ip:192.0.2.10:cookie');
     expect(identity.actorId).not.toContain('203.0.113');
+  });
+
+  it('keys native login by sanitized forwarded hop behind a trusted proxy, not the Docker gateway', () => {
+    const a = resolveAdmissionIdentity({
+      pathname: '/api/auth/login',
+      remoteAddress: '172.17.0.1',
+      forwardedFor: '203.0.113.10, 172.17.0.1',
+      cookiePresent: false,
+    });
+    const b = resolveAdmissionIdentity({
+      pathname: '/api/auth/login',
+      remoteAddress: '172.17.0.1',
+      forwardedFor: '203.0.113.11, 172.17.0.1',
+      cookiePresent: false,
+    });
+    expect(a.actorId).toBe('bootstrap:ip:203.0.113.10');
+    expect(b.actorId).toBe('bootstrap:ip:203.0.113.11');
+    expect(a.actorId).not.toBe(b.actorId);
+    expect(
+      resolveRateLimitIdentity({
+        actor: null,
+        authWired: true,
+        pathname: '/api/auth/login',
+        remoteAddress: '172.17.0.1',
+        forwardedFor: '203.0.113.10',
+      }).actorId,
+    ).toBe('bootstrap:ip:203.0.113.10');
+    expect(
+      loginClientAddress({ remoteAddress: '172.17.0.1', forwardedFor: '198.51.100.20' }),
+    ).toBe('198.51.100.20');
+  });
+
+  it('ignores forwarded hops on native login when the socket is a public client', () => {
+    const identity = resolveAdmissionIdentity({
+      pathname: '/api/auth/login',
+      remoteAddress: '192.0.2.10',
+      forwardedFor: '203.0.113.9',
+      cookiePresent: false,
+    });
+    expect(identity.actorId).toBe('bootstrap:ip:192.0.2.10');
+    expect(loginClientAddress({ remoteAddress: '192.0.2.10', forwardedFor: '203.0.113.9' })).toBe(
+      '192.0.2.10',
+    );
+  });
+
+  it('rejects non-IP forwarded hops instead of minting a fresh source key', () => {
+    expect(firstForwardedHop('not-an-ip')).toBeNull();
+    expect(firstForwardedHop('abcdef')).toBeNull();
+    expect(firstForwardedHop('999.999.999.999')).toBeNull();
+    expect(firstForwardedHop('203.0.113.10')).toBe('203.0.113.10');
+    expect(
+      loginClientAddress({ remoteAddress: '127.0.0.1', forwardedFor: 'attacker-token' }),
+    ).toBe('127.0.0.1');
   });
 
   it('rate-limits mutating forged cookies before CSRF session lookup', async () => {

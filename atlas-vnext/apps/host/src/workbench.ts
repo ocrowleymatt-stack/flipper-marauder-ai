@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { AuthService } from '@atlas-vnext/auth';
-import { AuthenticationError, SessionRevokedError } from '@atlas-vnext/auth';
+import type { AuthService, LoginService } from '@atlas-vnext/auth';
+import { AuthenticationError, OriginError, RateLimitedError, SessionRevokedError } from '@atlas-vnext/auth';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { ContextService } from '@atlas-vnext/context';
 import type { FilesService } from '@atlas-vnext/files';
@@ -11,10 +11,12 @@ import type { ProjectService } from '@atlas-vnext/projects';
 import { ToolError, type ToolEngine } from '@atlas-vnext/tools';
 import { DEFAULT_OPERATIONAL_LIMITS } from '@atlas-vnext/contracts';
 import { header, isMutating, json, publicFile, readJson, readRaw, urlPath, urlQuery } from './http.ts';
+import { loginClientAddress } from './limits.ts';
 
 export interface WorkbenchHostOptions {
   runtime: ConversationRuntime;
   auth?: AuthService;
+  login?: LoginService;
   tools?: ToolEngine;
   projects?: ProjectService | null;
   files?: FilesService | null;
@@ -109,6 +111,10 @@ export async function handleWorkbench(
   }
   if (req.method === 'POST' && pathname === '/api/session/revoke') {
     await handleRevokeSession(req, res, options);
+    return true;
+  }
+  if (req.method === 'POST' && pathname === '/api/auth/login') {
+    await handleNativeLogin(req, res, options);
     return true;
   }
 
@@ -444,6 +450,7 @@ async function handleGetSession(req: IncomingMessage, res: ServerResponse, optio
     json(res, 200, {
       authenticated: Boolean(options.tenantId && options.principalId),
       bootstrapAllowed: !options.production,
+      loginAvailable: Boolean(options.login),
       principal: options.principalId
         ? { id: options.principalId, tenantBound: Boolean(options.tenantId) }
         : null,
@@ -456,6 +463,7 @@ async function handleGetSession(req: IncomingMessage, res: ServerResponse, optio
     json(res, 200, {
       authenticated: false,
       bootstrapAllowed: !options.production,
+      loginAvailable: Boolean(options.login),
       principal: null,
       csrfToken: null,
     });
@@ -471,6 +479,7 @@ async function handleGetSession(req: IncomingMessage, res: ServerResponse, optio
     json(res, 200, {
       authenticated: true,
       bootstrapAllowed: false,
+      loginAvailable: Boolean(options.login),
       principal: {
         id: resolved.actor.principalId,
         kind: resolved.actor.kind,
@@ -484,6 +493,7 @@ async function handleGetSession(req: IncomingMessage, res: ServerResponse, optio
       json(res, 200, {
         authenticated: false,
         bootstrapAllowed: !options.production,
+        loginAvailable: Boolean(options.login),
         principal: null,
         csrfToken: null,
       });
@@ -491,6 +501,61 @@ async function handleGetSession(req: IncomingMessage, res: ServerResponse, optio
     }
     throw err;
   }
+}
+
+async function handleNativeLogin(req: IncomingMessage, res: ServerResponse, options: WorkbenchHostOptions): Promise<void> {
+  if (!options.login || !options.auth) {
+    json(res, 503, { error: 'Native login is unavailable.' });
+    return;
+  }
+  const body = await readJson(req, options.maxRequestBytes);
+  const login = typeof body.login === 'string' ? body.login : typeof body.username === 'string' ? body.username : '';
+  const password = typeof body.password === 'string' ? body.password : '';
+  try {
+    const issued = await options.login.authenticate({
+      login,
+      password,
+      origin: header(req, 'origin'),
+      userAgent: header(req, 'user-agent'),
+      sourceKey: loginSourceKey(req),
+      claimedTenantId:
+        (typeof body.tenantId === 'string' && body.tenantId) ||
+        (typeof body.tenant === 'string' && body.tenant) ||
+        header(req, 'x-atlas-tenant') ||
+        urlQuery(req).get('tenant'),
+    });
+    res.setHeader('Set-Cookie', options.auth.cookieHeader(issued.sessionId, options.production === true));
+    json(res, 200, {
+      authenticated: true,
+      bootstrapAllowed: false,
+      loginAvailable: true,
+      csrfToken: issued.csrfToken,
+      principal: { id: issued.principalId, kind: 'user', tenantBound: true },
+    });
+  } catch (err) {
+    if (err instanceof RateLimitedError) {
+      res.setHeader('Retry-After', '300');
+      json(res, 429, { error: 'Too many login attempts. Try again later.' });
+      return;
+    }
+    if (err instanceof OriginError) {
+      json(res, 403, { error: 'Origin validation failed.' });
+      return;
+    }
+    if (err instanceof AuthenticationError && err.code === 'unauthenticated') {
+      json(res, 401, { error: 'Invalid credentials.' });
+      return;
+    }
+    throw err;
+  }
+}
+
+function loginSourceKey(req: IncomingMessage): string {
+  const ip = loginClientAddress({
+    remoteAddress: req.socket?.remoteAddress,
+    forwardedFor: header(req, 'x-forwarded-for'),
+  });
+  return ip ? `ip:${ip}` : 'ip:unknown';
 }
 
 async function handleIssueSession(req: IncomingMessage, res: ServerResponse, options: WorkbenchHostOptions): Promise<void> {

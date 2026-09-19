@@ -71,8 +71,9 @@ Production-shaped, not a vendor SDK.
 | CSRF | required for mutating requests that carry the session cookie |
 | Origin | validated when an allow-list is configured |
 | Cookies | `HttpOnly; SameSite=Lax; Path=/;` + `Secure` in production |
+| Native login | Password credential → verify → existing `issueSession`. No client tenant. Production bootstrap (`POST /api/session`) stays disabled. |
 
-Production fails closed without a session signing secret (`ATLAS_SESSION_SECRET`).
+Production fails closed without a session signing secret (`ATLAS_SESSION_SECRET`). First production owner credentials are provisioned by the operator CLI (`scripts/provision-login.ts`), not by an HTTP bootstrap.
 
 Local/dev file-mode chat keeps working without cookies (existing conversation spine). When a session cookie **is** present, CSRF is enforced.
 

@@ -66,6 +66,16 @@ export function throwIfSecretLeaked(message: string, secret: string | undefined)
  * unclassified Error messages. Do not treat `invalid-argument` or a generic
  * 400 as authentication failure.
  */
+export function isContentFilterBody(body: string): boolean {
+  if (!body) return false;
+  return (
+    /content filter/i.test(body) ||
+    /filtered by the content filter/i.test(body) ||
+    /"code"\s*:\s*"content_filter"/i.test(body) ||
+    /prompt was filtered/i.test(body)
+  );
+}
+
 export function isAuthenticationFailureBody(body: string): boolean {
   if (!body) return false;
   return (
@@ -105,6 +115,9 @@ export function classifyProviderFailure(err: unknown): ClassifiedFailure {
   }
   if (/permission denied|forbidden|\b403\b/i.test(message)) {
     return { retryClass: 'terminal', code: 'permission_denied', retryable: false };
+  }
+  if (isContentFilterBody(message) || /content_filter/i.test(message)) {
+    return { retryClass: 'terminal', code: 'content_filter', retryable: false };
   }
   if (
     /missing credentials|authentication_failure|unauthorized|\b401\b/i.test(message) ||
@@ -147,6 +160,9 @@ function classifyHttpStatus(status: number, body: string): { code: string; retry
   }
   if (status === 404) {
     return { code: 'not_found', retryable: false };
+  }
+  if (status === 400 && isContentFilterBody(body)) {
+    return { code: 'content_filter', retryable: false };
   }
   if (status === 400 && isAuthenticationFailureBody(body)) {
     return { code: 'authentication_failure', retryable: false };

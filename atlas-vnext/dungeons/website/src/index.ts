@@ -1,10 +1,20 @@
 import { randomUUID } from 'node:crypto';
-import type { DungeonId, DungeonRegistration } from '@atlas-vnext/contracts';
+import type { DungeonId, DungeonRegistration, SiteGeneratePort } from '@atlas-vnext/contracts';
 import type { ConversationRuntime } from '@atlas-vnext/conversation';
 import type { FilesService } from '@atlas-vnext/files';
-import type { PersistenceActor, PlatformPersistence, SiteRecord, SiteRevisionRecord } from '@atlas-vnext/persistence';
+import type {
+  DungeonRecordRow,
+  PersistenceActor,
+  PlatformPersistence,
+  SiteRecord,
+  SiteRevisionRecord,
+} from '@atlas-vnext/persistence';
 import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import type { ProjectService } from '@atlas-vnext/projects';
+import { assembleSiteHtml } from './assemble.ts';
+import { auditSiteHtml, sanitizeSiteHtml, type SiteAudit } from './audit.ts';
+import { looksLikeWebsiteFollowup, looksLikeWebsiteRequest, titleFromBrief } from './intent.ts';
+import { composeWebsiteReport, isContentFilterError } from './report.ts';
 
 export const dungeonId: DungeonId = 'website';
 
@@ -51,6 +61,16 @@ export interface WebsiteActor extends PersistenceActor {
   tenantId: string;
 }
 
+export type SiteGenerateResult = {
+  site: SiteRecord;
+  revision: SiteRevisionRecord;
+  html: string;
+  executionId: string | null;
+  source: 'model' | 'assembler';
+  audit: SiteAudit;
+  reportText: string;
+};
+
 export class WebsiteStudioService {
   constructor(
     private readonly deps: {
@@ -60,6 +80,7 @@ export class WebsiteStudioService {
       runtime: ConversationRuntime;
       authority: AuthorityEngine;
       policy: EffectivePolicyEngine;
+      generate?: SiteGeneratePort;
     },
   ) {}
 
@@ -74,7 +95,7 @@ export class WebsiteStudioService {
     return this.deps.persistence.forActor(actor).sites.create(actor, {
       id,
       workspaceId: project.id,
-      name: input.name.trim() || 'Site',
+      name: input.name.trim() || titleFromBrief(input.brief) || 'Site',
       urn: `urn:atlas:site:${id}`,
     });
   }
@@ -86,7 +107,49 @@ export class WebsiteStudioService {
     return site;
   }
 
-  async generate(actor: WebsiteActor, id: string, brief: string) {
+  async maybeRunFromConversation(
+    actor: WebsiteActor,
+    input: {
+      conversationId: string;
+      projectId: string | null;
+      question: string;
+      signal?: AbortSignal;
+    },
+  ): Promise<{ handled: boolean; text?: string; failed?: boolean }> {
+    if (!input.projectId) return { handled: false };
+    if (looksLikeWebsiteFollowup(input.question) && !looksLikeWebsiteRequest(input.question)) {
+      return this.answerFollowup(actor, {
+        conversationId: input.conversationId,
+        projectId: input.projectId,
+        question: input.question,
+      });
+    }
+    if (!looksLikeWebsiteRequest(input.question)) return { handled: false };
+    try {
+      const site = await this.create(actor, {
+        projectId: input.projectId,
+        name: titleFromBrief(input.question),
+        brief: input.question,
+      });
+      const generated = await this.generate(actor, site.id, input.question, {
+        conversationId: input.conversationId,
+        signal: input.signal,
+      });
+      return { handled: true, text: generated.reportText };
+    } catch (err) {
+      if (err instanceof WebsiteError && (err.code === 'permission_denied' || err.code === 'not_found')) {
+        return { handled: true, failed: true, text: err.message };
+      }
+      throw err;
+    }
+  }
+
+  async generate(
+    actor: WebsiteActor,
+    id: string,
+    brief: string,
+    options: { conversationId?: string | null; signal?: AbortSignal } = {},
+  ): Promise<SiteGenerateResult> {
     const site = await this.get(actor, id);
     this.authorize(actor, 'artifact.write', site.workspaceId, site.tenantId);
     const policy = await this.effectivePolicy(actor);
@@ -98,24 +161,11 @@ export class WebsiteStudioService {
       resource: { type: 'artifact', id: site.id, tenantId: site.tenantId, workspaceId: site.workspaceId },
     });
     if (!write.allowed) throw new WebsiteError('permission_denied', GENERIC_DENY, 404);
-    const conversation = await this.deps.runtime.createConversation({ title: site.name, projectId: site.workspaceId });
-    let html = '';
-    let executionId: string | null = null;
-    for await (const event of this.deps.runtime.sendMessage(conversation.id, {
-      content: `${this.deps.policy.scopedModelInstructions(policy)}\n\nGenerate a complete, accessible HTML document for this site brief. Return HTML only.\n\n${brief}`,
-      capability: 'nexus/code',
-      privacy: this.deps.policy.runtimePrivacy(policy),
-      principalId: actor.principalId,
-      tenantId: actor.tenantId,
-    })) {
-      if (event.type === 'execution') executionId = event.execution.id;
-      if (event.type === 'assistant.delta' && event.text) html += event.text;
-      if (event.type === 'assistant.completed' && event.text) html = event.text;
-    }
-    const cleaned = stripFences(html.trim()) || '<!doctype html><html lang="en"><title>Empty site</title><p>No HTML produced.</p></html>';
+
+    const produced = await this.produceHtml(brief, options.signal);
     const artefact = await this.deps.files.createTextArtefact(actor, {
       projectId: site.workspaceId,
-      text: cleaned,
+      text: produced.html,
       type: 'website.html',
     });
     if (!artefact.contentHash) throw new WebsiteError('malformed', 'Generated site is missing a content hash.');
@@ -138,24 +188,56 @@ export class WebsiteStudioService {
         path: 'index.html',
         contentHash: artefact.contentHash,
         mimeType: 'text/html',
-        sizeBytes: cleaned.length,
+        sizeBytes: Buffer.byteLength(produced.html, 'utf8'),
       },
     ]);
-    await sites.setCurrentRevision(actor, site.id, revision.id);
+    const next = await sites.setCurrentRevision(actor, site.id, revision.id);
     await this.deps.persistence.forActor(actor).provenance.record({
       artefactId: artefact.id,
       projectId: site.workspaceId,
-      sourceInputs: [site.id, brief.slice(0, 64)],
+      sourceInputs: [site.id, brief.slice(0, 64), produced.source],
       inputManifestHash: revision.manifestHash,
       provider: 'atlas.website',
-      model: 'site.generate',
+      model: produced.source === 'model' ? 'site.generate.model' : 'site.assemble',
       toolCalls: [],
-      jobId: executionId,
+      jobId: null,
       timestamp: new Date().toISOString(),
       traceId: `website:${site.id}:${revision.id}`,
       capability: 'website',
     });
-    return { site: await this.get(actor, site.id), revision, html: cleaned, executionId };
+    await this.deps.persistence.forActor(actor).dungeonRecords.create(actor, {
+      workspaceId: site.workspaceId,
+      dungeon: 'website',
+      kind: 'site',
+      title: next.name,
+      status: 'completed',
+      payload: {
+        siteId: next.id,
+        brief: brief.slice(0, 400),
+        source: produced.source,
+        audit: produced.audit,
+      },
+      artefactId: artefact.id,
+      contentHash: artefact.contentHash,
+      conversationId: options.conversationId ?? null,
+    });
+    const reportText = composeWebsiteReport({
+      title: next.name,
+      siteId: next.id,
+      source: produced.source,
+      note: produced.note,
+      audit: produced.audit,
+      html: produced.html,
+    });
+    return {
+      site: next,
+      revision,
+      html: produced.html,
+      executionId: null,
+      source: produced.source,
+      audit: produced.audit,
+      reportText,
+    };
   }
 
   async preview(actor: WebsiteActor, id: string): Promise<{ html: string; revision: SiteRevisionRecord | null }> {
@@ -188,6 +270,87 @@ export class WebsiteStudioService {
     return { site, revision };
   }
 
+  private async answerFollowup(
+    actor: WebsiteActor,
+    input: { conversationId: string; projectId: string; question: string },
+  ): Promise<{ handled: boolean; text?: string; failed?: boolean }> {
+    try {
+      await this.requireProject(actor, input.projectId, 'artifact.read');
+    } catch (err) {
+      if (err instanceof WebsiteError && err.code === 'permission_denied') {
+        return { handled: true, failed: true, text: err.message };
+      }
+      throw err;
+    }
+    const records = await this.deps.persistence.forActor(actor).dungeonRecords.list(actor, {
+      workspaceId: input.projectId,
+      dungeon: 'website',
+      kind: 'site',
+    });
+    const mine = records
+      .filter((row) => row.conversationId === input.conversationId && row.status === 'completed')
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const research = await this.deps.persistence.forActor(actor).dungeonRecords.list(actor, {
+      workspaceId: input.projectId,
+      dungeon: 'research',
+    });
+    const later = research.some(
+      (row) =>
+        row.conversationId === input.conversationId &&
+        row.status === 'completed' &&
+        mine[0] &&
+        row.updatedAt > mine[0].updatedAt,
+    );
+    if (later) return { handled: false };
+    const latest = mine[0];
+    if (!latest) return { handled: false };
+    const siteId = typeof latest.payload.siteId === 'string' ? latest.payload.siteId : null;
+    if (!siteId) return { handled: false };
+    const preview = await this.preview(actor, siteId);
+    const q = input.question.toLowerCase();
+    if (/\bpublish|promote\b/.test(q)) {
+      return {
+        handled: true,
+        text: 'Publishing is an owner action in Website. Preview is stored; production still needs deployment.promote and repository write.',
+      };
+    }
+    if (/\bfiles?|html\b/.test(q)) {
+      return { handled: true, text: `Canonical file: index.html (${preview.revision?.manifestHash?.slice(0, 12) ?? 'no hash'}).` };
+    }
+    const excerpt = preview.html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 280);
+    return { handled: true, text: `Preview is ready for ${latest.title}. ${excerpt}` };
+  }
+
+  private async produceHtml(
+    brief: string,
+    signal?: AbortSignal,
+  ): Promise<{ html: string; source: 'model' | 'assembler'; audit: SiteAudit; note?: string }> {
+    let note: string | undefined;
+    let html = '';
+    let source: 'model' | 'assembler' = 'assembler';
+    if (this.deps.generate) {
+      try {
+        const generated = await this.deps.generate.generateHtml({ brief, signal });
+        html = sanitizeSiteHtml(generated.html);
+        source = 'model';
+      } catch (err) {
+        source = 'assembler';
+        note = isContentFilterError(err)
+          ? 'The model declined this brief. Atlas assembled a first draft instead of failing the run.'
+          : 'Model generation failed. Atlas assembled a first draft from the brief.';
+      }
+    }
+    let audit = html ? auditSiteHtml(html) : { ok: false, findings: ['No HTML.'] };
+    if (!audit.ok) {
+      html = assembleSiteHtml(brief);
+      source = 'assembler';
+      audit = auditSiteHtml(html);
+      note ??= 'Atlas assembled a first-draft page from the brief.';
+    }
+    if (!audit.ok) throw new WebsiteError('malformed', 'Website HTML failed audit.');
+    return { html, source, audit, note };
+  }
+
   private async effectivePolicy(actor: WebsiteActor) {
     return this.deps.policy.loadForDungeon(actor.tenantId, 'website', (dungeonId) =>
       this.deps.persistence.forActor(actor).privacy.getPolicy(actor, dungeonId),
@@ -212,6 +375,8 @@ export class WebsiteStudioService {
   }
 }
 
-function stripFences(text: string): string {
-  return text.replace(/^```html\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '');
-}
+export { looksLikeWebsiteFollowup, looksLikeWebsiteRequest, titleFromBrief } from './intent.ts';
+export { assembleSiteHtml } from './assemble.ts';
+export { auditSiteHtml, sanitizeSiteHtml } from './audit.ts';
+
+export type { DungeonRecordRow };

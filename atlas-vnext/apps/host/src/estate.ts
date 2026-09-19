@@ -284,7 +284,13 @@ async function handleWebsite(
   }
   if (req.method === 'POST' && generate) {
     const body = await readJson(req, options.maxRequestBytes);
-    json(res, 200, await service.generate(writingActor, decodeURIComponent(generate[1]!), typeof body.brief === 'string' ? body.brief : ''));
+    json(
+      res,
+      200,
+      await service.generate(writingActor, decodeURIComponent(generate[1]!), typeof body.brief === 'string' ? body.brief : '', {
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : null,
+      }),
+    );
     return true;
   }
   if (req.method === 'GET' && preview) {

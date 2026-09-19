@@ -19,23 +19,15 @@ export function isPrivateIpv4(address: string): boolean {
 }
 
 export function isPrivateIpv6(address: string): boolean {
-  const normalized = address.toLowerCase();
-  if (normalized.startsWith('::ffff:')) {
-    const mapped = normalized.slice('::ffff:'.length);
-    if (isIP(mapped) === 4) return isPrivateIpv4(mapped);
-  }
-  const encoded = encodedIpv4(normalized);
+  const groups = ipv6Groups(address);
+  if (!groups) return true;
+  const encoded = encodedIpv4FromGroups(groups);
   if (encoded) return isPrivateIpv4(encoded);
+  const prefix = groups[0] ?? 0;
   return (
-    normalized === '::' ||
-    normalized === '::1' ||
-    normalized.startsWith('fc') ||
-    normalized.startsWith('fd') ||
-    normalized.startsWith('fe8') ||
-    normalized.startsWith('fe9') ||
-    normalized.startsWith('fea') ||
-    normalized.startsWith('feb') ||
-    normalized.startsWith('ff')
+    (prefix & 0xfe00) === 0xfc00 ||
+    (prefix & 0xffc0) === 0xfe80 ||
+    (prefix & 0xff00) === 0xff00
   );
 }
 
@@ -75,9 +67,7 @@ export function assertPublicHttpUrl(rawUrl: string): URL {
   return url;
 }
 
-function encodedIpv4(address: string): string | null {
-  const groups = ipv6Groups(address);
-  if (!groups) return null;
+function encodedIpv4FromGroups(groups: number[]): string | null {
   const octet = (group: number): [number, number] => [group >> 8, group & 0xff];
   if (groups[0] === 0x2002) {
     const [a, b] = octet(groups[1] ?? 0);
@@ -103,6 +93,18 @@ function encodedIpv4(address: string): string | null {
     groups[3] === 0 &&
     groups[4] === 0 &&
     groups[5] === 0xffff
+  ) {
+    const [a, b] = octet(groups[6] ?? 0);
+    const [c, d] = octet(groups[7] ?? 0);
+    return `${a}.${b}.${c}.${d}`;
+  }
+  if (
+    groups[0] === 0 &&
+    groups[1] === 0 &&
+    groups[2] === 0 &&
+    groups[3] === 0 &&
+    groups[4] === 0 &&
+    groups[5] === 0
   ) {
     const [a, b] = octet(groups[6] ?? 0);
     const [c, d] = octet(groups[7] ?? 0);

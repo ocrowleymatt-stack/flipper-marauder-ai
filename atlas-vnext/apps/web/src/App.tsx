@@ -392,7 +392,9 @@ export function App() {
       }
       if (abort.signal.aborted) {
         setStatus('Stopped.');
-        await loadConversation(conversationId).catch(() => undefined);
+        if (abortRef.current === abort) {
+          await loadConversation(conversationId).catch(() => undefined);
+        }
         return;
       }
       await loadConversation(conversationId);
@@ -402,15 +404,19 @@ export function App() {
     } catch (err) {
       if (abort.signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
         setStatus('Stopped.');
-        await loadConversation(conversationId).catch(() => undefined);
+        if (abortRef.current === abort) {
+          await loadConversation(conversationId).catch(() => undefined);
+        }
         return;
       }
       playCue('warn');
       setError(err instanceof Error ? err.message : String(err));
       setStatus('Request failed.');
     } finally {
-      if (abortRef.current === abort) abortRef.current = null;
-      setBusy(false);
+      if (abortRef.current === abort) {
+        abortRef.current = null;
+        setBusy(false);
+      }
     }
   }
 
@@ -437,7 +443,6 @@ export function App() {
     if (live) {
       await cancelExecution(live.id).catch(() => undefined);
     }
-    setBusy(false);
     setStatus('Stopped.');
   }
 

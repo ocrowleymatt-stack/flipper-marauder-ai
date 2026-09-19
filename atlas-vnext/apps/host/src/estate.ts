@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { DungeonId } from '@atlas-vnext/contracts';
+import { osintTargetKindSchema } from '@atlas-vnext/contracts';
 import { AuthenticationError } from '@atlas-vnext/auth';
 import { DungeonError, OsintService } from '@atlas-vnext/dungeon-osint';
 import { InvestigationError, InvestigationService } from '@atlas-vnext/dungeon-investigation';
@@ -81,14 +82,16 @@ async function handleOsint(
   }
   if (req.method === 'POST' && projectScans) {
     const body = await readJson(req, options.maxRequestBytes);
+    const kind = osintTargetKindSchema.safeParse(body.kind);
     json(
       res,
       201,
       await osint.scan(writingActor, {
         projectId: decodeURIComponent(projectScans[1]!),
-        kind: body.kind === 'email' || body.kind === 'username' || body.kind === 'ip' || body.kind === 'person' || body.kind === 'organisation' ? body.kind : 'domain',
+        kind: kind.success ? kind.data : 'domain',
         value: typeof body.value === 'string' ? body.value : '',
         synthesize: body.synthesize !== false,
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : null,
       }),
     );
     return true;

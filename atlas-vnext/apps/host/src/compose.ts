@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { HealthCheckState, OperationalLimits, ProviderHealth } from '@atlas-vnext/contracts';
+import type { HealthCheckState, OperationalLimits, ProviderHealth, SourceInspectPort } from '@atlas-vnext/contracts';
 import { ConversationRuntime, type ToolOrchestrator } from '@atlas-vnext/conversation';
 import {
   AuthService,
@@ -44,7 +44,7 @@ import {
   ToolRegistry,
 } from '@atlas-vnext/tools';
 import { WritingService } from '@atlas-vnext/dungeon-writing';
-import { OsintService } from '@atlas-vnext/dungeon-osint';
+import { OsintService, DungeonError, looksLikeOsintFollowup } from '@atlas-vnext/dungeon-osint';
 import { InvestigationService } from '@atlas-vnext/dungeon-investigation';
 import { ResearchError, ResearchService } from '@atlas-vnext/dungeon-research';
 import { WebsiteStudioService } from '@atlas-vnext/dungeon-website';
@@ -60,7 +60,7 @@ import { ShutdownController, readOperationalLimits, type HealthProbe } from './o
 import { PlatformRateLimiter, ResourceGuard } from './limits.ts';
 import { readTimeoutContract, type TimeoutContract } from './production-config.ts';
 import { raceStartup, raceStartupCloseable, throwIfStartupAborted } from './startup-deadline.ts';
-import { NodePublicLookup } from './collectors.ts';
+import { NodePublicLookup, looksLikeOsintQuestion } from './collectors.ts';
 import { NodeFederatedSearch, searchEnginesFromEnv } from './search.ts';
 import { FixtureInspect, NodeSourceInspect } from './inspect.ts';
 import { productionToolAdapters } from './web-tools.ts';
@@ -123,6 +123,11 @@ export interface ComposeOptions {
   signal?: AbortSignal;
   /** Override search/inspect independently of the execution plane. Default follows `mode`. */
   searchMode?: 'live' | 'mock';
+  /**
+   * OSINT always uses Wave 1 source inspect, never the research FixtureInspect
+   * (which would false-confirm every username). Tests may inject a port.
+   */
+  osintInspect?: SourceInspectPort;
 }
 
 /**
@@ -395,7 +400,11 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       runtime,
       authority,
       policy,
-      collector: new NodePublicLookup(),
+      collector: new NodePublicLookup({
+        inspect: options.osintInspect ?? new NodeSourceInspect(),
+        search: searchPort,
+        spiderfootUrl: env.SPIDERFOOT_URL || env.ATLAS_SPIDERFOOT_URL,
+      }),
     });
     investigation = new InvestigationService({ persistence, projects, files, runtime, authority, policy, context });
     research = new ResearchService({
@@ -412,16 +421,33 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     runtime.setWorkHandler(async (input) => {
       const actorPrincipal = input.principalId?.trim();
       if (!actorPrincipal) return { handled: false };
-      try {
-        return await research!.maybeRunFromConversation(
-          { tenantId: input.tenantId?.trim() || tenantId, principalId: actorPrincipal },
-          {
+      const actor = { tenantId: input.tenantId?.trim() || tenantId, principalId: actorPrincipal };
+      if (looksLikeOsintQuestion(input.content) || looksLikeOsintFollowup(input.content)) {
+        try {
+          const osintResult = await osint!.maybeRunFromConversation(actor, {
             conversationId: input.conversationId,
             projectId: input.projectId,
             question: input.content,
             signal: input.signal,
-          },
-        );
+          });
+          if (osintResult.handled) return osintResult;
+        } catch (err) {
+          if (err instanceof DungeonError && (err.code === 'insufficient_evidence' || err.code === 'permission_denied')) {
+            return { handled: true, failed: true, text: err.message };
+          }
+          if (err instanceof DungeonError && err.code === 'not_found') {
+            return { handled: false };
+          }
+          throw err;
+        }
+      }
+      try {
+        return await research!.maybeRunFromConversation(actor, {
+          conversationId: input.conversationId,
+          projectId: input.projectId,
+          question: input.content,
+          signal: input.signal,
+        });
       } catch (err) {
         if (err instanceof ResearchError && err.code === 'insufficient_evidence') {
           return { handled: true, failed: true, text: err.message };

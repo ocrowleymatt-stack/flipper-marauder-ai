@@ -193,7 +193,12 @@ function OsintPanel({
   const [kind, setKind] = useState('username');
   const [value, setValue] = useState('');
   const [targets, setTargets] = useState<DungeonRecord[]>([]);
-  const [latest, setLatest] = useState<{ findings: DungeonRecord[]; dossier?: DungeonRecord } | null>(null);
+  const [latest, setLatest] = useState<{
+    findings: DungeonRecord[];
+    dossier?: DungeonRecord;
+    correlations?: DungeonRecord[];
+    target?: DungeonRecord;
+  } | null>(null);
 
   const reload = useCallback(async () => {
     setTargets(await listOsintTargets(projectId));
@@ -211,10 +216,15 @@ function OsintPanel({
     try {
       playCue('tool');
       const result = await scanOsint(projectId, kind, value.trim());
-      setLatest({ findings: result.findings, dossier: result.dossier });
+      setLatest({
+        findings: result.findings,
+        dossier: result.dossier,
+        correlations: result.correlations,
+        target: result.target,
+      });
       await reload();
       playCue('complete');
-      onStatus('OSINT scan stored as findings. Synthesis used Nexus, not a private provider.');
+      onStatus('OSINT scan stored as findings. Prefer the requesting Atlas conversation for the report.');
     } catch (err) {
       playCue('warn');
       onError(err instanceof Error ? err.message : String(err));
@@ -223,19 +233,29 @@ function OsintPanel({
     }
   }
 
+  const observations = (latest?.findings ?? []).filter((item) => item.payload.epistemicKind !== 'correlation');
+  const correlations = latest?.correlations?.length
+    ? latest.correlations
+    : (latest?.findings ?? []).filter((item) => item.kind === 'correlation' || item.payload.epistemicKind === 'correlation');
+  const reportText = typeof latest?.target?.payload.reportText === 'string' ? latest.target.payload.reportText : null;
+
   return (
     <main className="workspace estate" aria-label="OSINT">
       <header className="thread-header">
         <div>
           <h2>OSINT</h2>
-          <p className="hint">Public lookup is host-injected. Jobs, CAS, Nexus, and Authority stay on the platform.</p>
+          <p className="hint">
+            Working surface only. Ask from Atlas chat: “Run OSINT on [target]”. Public lookup uses host-injected
+            inspect. Jobs, CAS, and Authority stay on the platform.
+          </p>
         </div>
       </header>
       <section className="estate-body">
+        <p className="muted">Open Chats to return to the conversation that requested a scan.</p>
         <form className="stack" onSubmit={(event) => void onScan(event)}>
           <label htmlFor="osint-kind">Target kind</label>
           <select id="osint-kind" value={kind} onChange={(event) => setKind(event.target.value)} disabled={busy}>
-            {['username', 'email', 'domain', 'person', 'organisation', 'ip'].map((item) => (
+            {['username', 'email', 'domain', 'ip', 'url', 'person', 'organisation'].map((item) => (
               <option key={item} value={item}>
                 {item}
               </option>
@@ -248,14 +268,50 @@ function OsintPanel({
           </button>
         </form>
         <RecordList title="Targets" items={targets} />
-        {latest ? (
-          <RecordList title="Latest findings" items={latest.findings} />
+        {reportText ? (
+          <section>
+            <h3>Report</h3>
+            <pre className="muted" style={{ whiteSpace: 'pre-wrap' }}>
+              {reportText}
+            </pre>
+          </section>
+        ) : null}
+        {observations.length ? (
+          <section>
+            <h3>Observations</h3>
+            <ul className="plain">
+              {observations.map((item) => (
+                <li key={item.id}>
+                  <span>{item.title}</span>
+                  <span className="meta">
+                    {' '}
+                    · {String(item.payload.status ?? item.status)} · {String(item.payload.epistemicKind ?? 'observation')}
+                    {item.payload.url ? ` · ${String(item.payload.url)}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        {correlations.length ? (
+          <section>
+            <h3>Correlations (not facts)</h3>
+            <ul className="plain">
+              {correlations.map((item) => (
+                <li key={item.id}>
+                  <span>{item.title}</span>
+                  <span className="meta"> · correlation</span>
+                </li>
+              ))}
+            </ul>
+          </section>
         ) : null}
         {latest?.dossier ? <p className="muted">Dossier artefact {latest.dossier.artefactId}</p> : null}
       </section>
     </main>
   );
 }
+
 
 function InvestigationPanel({
   projectId,

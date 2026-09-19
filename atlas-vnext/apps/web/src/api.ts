@@ -672,6 +672,7 @@ export async function scanOsint(projectId: string, kind: string, value: string):
   target: DungeonRecord;
   findings: DungeonRecord[];
   dossier?: DungeonRecord;
+  correlations?: DungeonRecord[];
 }> {
   return parseJson(
     await fetch(`/api/projects/${encodeURIComponent(projectId)}/osint/scans`, {

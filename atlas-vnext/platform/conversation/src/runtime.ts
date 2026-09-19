@@ -138,6 +138,31 @@ export class ConversationRuntime {
     return this.deps.executions.get(executionId);
   }
 
+  async postNotice(
+    conversationId: string,
+    content: string,
+    scope?: { tenantId?: string; workspaceId?: string | null },
+  ): Promise<Message | null> {
+    const conversation = await this.deps.conversations.get(conversationId);
+    if (!conversation) return null;
+    if (scope?.tenantId && conversation.tenantId && conversation.tenantId !== scope.tenantId) return null;
+    if (scope?.workspaceId) {
+      const workspace = conversation.workspaceId ?? conversation.projectId ?? null;
+      if (workspace !== scope.workspaceId) return null;
+    }
+    return this.transact(async () => {
+      const message = await this.deps.messages.append({
+        conversationId,
+        role: 'assistant',
+        content,
+        executionId: null,
+      });
+      await this.touchConversation(conversation, content);
+      await this.publish(conversationId, 'message.appended', { messageId: message.id, role: 'assistant' });
+      return message;
+    });
+  }
+
   async recoverInFlight(reason = 'Process restarted before the execution finished.'): Promise<ExecutionRecord[]> {
     const inflight = await this.deps.executions.listInFlight();
     const recovered: ExecutionRecord[] = [];

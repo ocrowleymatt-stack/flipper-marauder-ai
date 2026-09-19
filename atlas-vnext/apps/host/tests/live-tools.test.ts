@@ -370,4 +370,75 @@ describe('live provider tool orchestration', () => {
     expectSideEffectToolsAbsent(advertisedToolPayload(chatBodies[0]));
     expect(chatBodies[0]?.tools).toBeUndefined();
   });
+
+  it('does not advertise or invoke network tools when stored networkAccess is none', async () => {
+    const { spine, bodies } = await startLiveSpine(async () =>
+      responseFromText(200, sse(['{"choices":[{"delta":{"content":"local only"}}]}', '[DONE]']), {
+        'content-type': 'text/event-stream',
+      }),
+    );
+    const server = createHost({
+      runtime: spine.runtime,
+      auth: spine.auth,
+      tools: spine.tools,
+      projects: spine.projects,
+      files: spine.files,
+      context: spine.context,
+      persistence: spine.persistence,
+      writing: spine.writing,
+      privacy: spine.privacy,
+      tenantId: spine.tenantId,
+      principalId: spine.principalId,
+      flags: spine.flags,
+      killSwitches: spine.killSwitches,
+      resources: spine.resources,
+      maxRequestBytes: spine.limits.maxRequestBytes,
+      maxUploadBytes: spine.limits.maxUploadBytes,
+      timeouts: spine.timeouts,
+    });
+    servers.push(server);
+    const bound = await listen(server, 0, '127.0.0.1');
+    const sessionRes = await fetch(`${bound.url}/api/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const sessionBody = (await sessionRes.json()) as { csrfToken: string };
+    const headers = {
+      cookie: sessionRes.headers.get('set-cookie') ?? '',
+      'x-atlas-csrf': sessionBody.csrfToken,
+      'content-type': 'application/json',
+    };
+    const policyRes = await fetch(`${bound.url}/api/privacy/policy`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ patch: { networkAccess: 'none' }, confirm: 'CONFIRM' }),
+    });
+    expect(policyRes.status).toBe(200);
+    const actor = { tenantId: spine.tenantId, principalId: spine.principalId };
+    const callable = (await spine.tools.listCallable(actor)).map((tool) => tool.id);
+    expect(callable).toContain('job.run');
+    expect(callable).not.toContain('retrieval.search');
+    expect(callable).not.toContain('api.read');
+    expect(callable).not.toContain('browser.navigate');
+    const denied = await spine.tools.invoke(actor, { toolId: 'retrieval.search', arguments: { query: 'Alpha' } });
+    expect(denied.invocation.status).toBe('denied');
+
+    const conversation = await spine.runtime.createConversation({ title: 'network-off' });
+    const onRes = await fetch(`${bound.url}/api/conversations/${conversation.id}/messages`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ content: 'search anyway', capability: 'nexus/fast', tools: true }),
+    });
+    expect(onRes.ok).toBe(true);
+    await onRes.text();
+    const chatBodies = bodies.filter((body) => Array.isArray(body.messages));
+    expect(chatBodies.length).toBeGreaterThan(0);
+    const advertised = advertisedToolPayload(chatBodies[0]);
+    expect(advertised).not.toContain('retrieval.search');
+    expect(advertised).not.toContain('retrieval__search');
+    expect(advertised).not.toContain('api.read');
+    expect(advertised).not.toContain('api__read');
+    expect(advertised).toContain('job__run');
+  });
 });

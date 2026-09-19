@@ -50,7 +50,7 @@ export class OsintService {
 
   async scan(
     actor: OsintActor,
-    input: { projectId: string; kind: OsintTargetKind; value: string; synthesize?: boolean },
+    input: { projectId: string; kind: OsintTargetKind; value: string; synthesize?: boolean; conversationId?: string },
   ): Promise<{ target: DungeonRecordRow; findings: DungeonRecordRow[]; dossier?: DungeonRecordRow }> {
     const project = await this.requireProject(actor, input.projectId, 'artifact.write');
     const policy = await this.effectivePolicy(actor);
@@ -88,8 +88,9 @@ export class OsintService {
       kind: 'target',
       title: input.value,
       status: 'running',
-      payload: { kind: input.kind, value: input.value },
+      payload: { kind: input.kind, value: input.value, conversationId: input.conversationId ?? null },
       jobId: job.id,
+      conversationId: input.conversationId ?? null,
     });
 
     try {
@@ -108,6 +109,12 @@ export class OsintService {
         expectedRevision: target.revision,
       });
       await jobs.complete(actor, job.id);
+      if (input.conversationId) {
+        await this.deps.runtime.postNotice(input.conversationId, formatOsintNotice(input.value, findings), {
+          tenantId: actor.tenantId,
+          workspaceId: project.id,
+        });
+      }
       return { target: updated, findings, dossier };
     } catch (err) {
       const failure: StructuredFailure = {
@@ -144,7 +151,13 @@ export class OsintService {
       kind: 'finding',
       title: hit.summary.slice(0, 120),
       status: 'completed',
-      payload: { source: hit.source, confidence: hit.confidence, summary: hit.summary },
+      payload: {
+        source: hit.source,
+        confidence: hit.confidence,
+        summary: hit.summary,
+        url: hit.url ?? null,
+        retrievedAt: hit.retrievedAt ?? new Date().toISOString(),
+      },
       artefactId: artefact.id,
       contentHash: artefact.contentHash,
       jobId,
@@ -245,4 +258,28 @@ export class OsintService {
       throw new DungeonError('permission_denied', GENERIC_DENY, 401);
     }
   }
+}
+
+function formatOsintNotice(target: string, findings: DungeonRecordRow[]): string {
+  const ranked = [...findings].sort((a, b) => rankConfidence(String(a.payload.confidence)) - rankConfidence(String(b.payload.confidence)));
+  const strongest = ranked[0];
+  const lines = [
+    `## OSINT findings for ${target}`,
+    `Recorded ${findings.length} finding${findings.length === 1 ? '' : 's'}.`,
+    strongest
+      ? `Strongest finding: ${String(strongest.payload.summary ?? strongest.title)} (${String(strongest.payload.confidence)}; ${String(strongest.payload.source)}${strongest.payload.url ? `; ${String(strongest.payload.url)}` : ''})`
+      : 'No findings.',
+    '',
+    ...findings.map((item) => {
+      const url = item.payload.url ? ` — ${String(item.payload.url)}` : '';
+      return `- **${String(item.payload.confidence)}** ${String(item.payload.summary ?? item.title)} (${String(item.payload.source)})${url}`;
+    }),
+  ];
+  return lines.join('\n');
+}
+
+function rankConfidence(value: string): number {
+  if (value === 'confirmed') return 0;
+  if (value === 'likely') return 1;
+  return 2;
 }

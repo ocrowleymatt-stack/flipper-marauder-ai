@@ -118,7 +118,7 @@ export async function handleWorkbench(
     return true;
   }
 
-  if (pathname === '/api/projects' || pathname.startsWith('/api/projects/') || pathname.startsWith('/api/files/') || pathname.startsWith('/api/context/') || pathname === '/api/approvals') {
+  if (pathname === '/api/projects' || pathname.startsWith('/api/projects/') || pathname.startsWith('/api/files/') || pathname.startsWith('/api/artefacts/') || pathname.startsWith('/api/context/') || pathname === '/api/approvals') {
     if (/\/(documents|osint|cases|research|sites|compositions)(?:\/|$)/.test(pathname)) return false;
     const actor = await resolveActor(req, options);
     if (!actor) {
@@ -192,6 +192,17 @@ export async function handleWorkbench(
         }
         const latest = (await requireFiles(options).getMetadata(actor, file.id)) ?? file;
         json(res, 201, publicFile(latest));
+        return true;
+      }
+      const artefactMatch = pathname.match(/^\/api\/artefacts\/([^/]+)$/);
+      if (req.method === 'GET' && artefactMatch) {
+        const packed = await requireFiles(options).readArtefactBytes(actor, decodeURIComponent(artefactMatch[1]!));
+        res.writeHead(200, {
+          'Content-Type': packed.mimeType || 'application/octet-stream',
+          'Cache-Control': 'private, max-age=120',
+          'X-Atlas-Artefact': packed.artefact.id,
+        });
+        res.end(Buffer.from(packed.bytes));
         return true;
       }
       const projectConversations = pathname.match(/^\/api\/projects\/([^/]+)\/conversations$/);

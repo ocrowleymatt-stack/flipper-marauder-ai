@@ -45,6 +45,7 @@ export default defineConfig({
       '@atlas-vnext/tools': resolve(root, 'platform/tools/src/index.ts'),
       '@atlas-vnext/plugins': resolve(root, 'platform/plugins/src/index.ts'),
       '@atlas-vnext/secrets': resolve(root, 'platform/secrets/src/index.ts'),
+      '@atlas-vnext/search': resolve(root, 'platform/search/src/index.ts'),
       '@atlas-vnext/dungeon-writing': resolve(root, 'dungeons/writing/src/index.ts'),
       '@atlas-vnext/dungeon-osint': resolve(root, 'dungeons/osint/src/index.ts'),
       '@atlas-vnext/dungeon-investigation': resolve(root, 'dungeons/investigation/src/index.ts'),

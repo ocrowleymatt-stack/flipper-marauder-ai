@@ -13,6 +13,14 @@ export { buildSimplePdf } from './pdf.ts';
 export { buildSimpleDocx } from './docx.ts';
 
 export function extractBytes(bytes: Uint8Array, mime: AllowedMime, path: string): ExtractionResult {
+  if (mime.startsWith('audio/')) {
+    return {
+      text: '',
+      blocks: [],
+      pageCount: null,
+      structure: { opaque: true, media: 'audio', mime, bytes: bytes.byteLength, path },
+    };
+  }
   switch (mime) {
     case 'text/plain':
       return extractPlainText(bytes, path, false);

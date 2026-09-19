@@ -10,16 +10,68 @@ import { openFilesystemCas } from '@atlas-vnext/storage';
 import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 
 export function stubRuntime(text = 'Atlas dungeon output.'): ConversationRuntime {
+  const conversations = new Map<
+    string,
+    {
+      conversation: {
+        id: string;
+        urn: string;
+        title: string;
+        projectId: string | null;
+        createdAt: string;
+        updatedAt: string;
+      };
+      messages: Array<{
+        id: string;
+        urn: string;
+        conversationId: string;
+        role: 'user' | 'assistant' | 'system';
+        content: string;
+        sequence: number;
+        executionId: string | null;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+    }
+  >();
   return {
     async createConversation(input: { title?: string; projectId?: string | null } = {}) {
-      return {
-        id: `con_${Math.random().toString(16).slice(2)}`,
-        urn: 'urn:atlas:conversation:stub',
+      const id = `con_${Math.random().toString(16).slice(2)}`;
+      const now = new Date().toISOString();
+      const conversation = {
+        id,
+        urn: `urn:atlas:conversation:${id}`,
         title: input.title ?? 'stub',
         projectId: input.projectId ?? null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        createdAt: now,
+        updatedAt: now,
       };
+      conversations.set(id, { conversation, messages: [] });
+      return conversation;
+    },
+    async getSnapshot(conversationId: string) {
+      const row = conversations.get(conversationId);
+      if (!row) return null;
+      return { conversation: row.conversation, messages: row.messages, executions: [] };
+    },
+    async postNotice(conversationId: string, content: string, scope?: { tenantId?: string; workspaceId?: string | null }) {
+      const row = conversations.get(conversationId);
+      if (!row) return null;
+      if (scope?.workspaceId && row.conversation.projectId !== scope.workspaceId) return null;
+      const now = new Date().toISOString();
+      const message = {
+        id: `msg_${Math.random().toString(16).slice(2)}`,
+        urn: 'urn:atlas:message:stub',
+        conversationId: row.conversation.id,
+        role: 'assistant' as const,
+        content,
+        sequence: row.messages.length + 1,
+        executionId: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      row.messages.push(message);
+      return message;
     },
     async *sendMessage() {
       yield { type: 'execution', execution: { id: 'exe_stub' } };

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   DEFAULT_OPERATIONAL_LIMITS,
+  type EffectivePolicy,
   type OperationalLimits,
   type ToolApproval,
   type ToolDefinition,
@@ -13,7 +14,7 @@ import {
 import type { EventBus } from '@atlas-vnext/events';
 import type { DurableJobEngine } from '@atlas-vnext/jobs';
 import { logPlatform } from '@atlas-vnext/observability';
-import { AuthorityDeniedError, AuthorityEngine } from '@atlas-vnext/permissions';
+import { AuthorityDeniedError, AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import { defaultAdapters, type CommandRunner, type ToolAdapter, type ToolAdapterResult } from './adapters.ts';
 import { DuplicateSideEffectError, IncompleteToolCallError, ToolCancelUnconfirmedError, ToolError, UnknownToolError, createAbortError, isAbortError } from './errors.ts';
 import { sha256Stable } from './hash.ts';
@@ -27,6 +28,8 @@ export interface ToolEngineOptions {
   invocations: ToolInvocationStore;
   approvals: ToolApprovalStore;
   authority: AuthorityEngine;
+  policy?: EffectivePolicyEngine;
+  resolvePolicy?: (actor: ToolActor) => EffectivePolicy | Promise<EffectivePolicy>;
   adapters?: ToolAdapter[];
   jobs?: DurableJobEngine;
   events?: EventBus;
@@ -156,34 +159,17 @@ export class ToolEngine {
     return this.invokeNew(actor, request, definition, argumentHash, idempotencyKey, options.signal);
   }
 
-  listCallable(actor: ToolActor): CallableToolDefinition[] {
+  async listCallable(actor: ToolActor): Promise<CallableToolDefinition[]> {
     this.assertActor(actor);
+    const overlay = await this.overlayFor(actor);
+    if (!overlay.ok) return [];
     const out: CallableToolDefinition[] = [];
     for (const definition of this.options.registry.list()) {
       if (definition.pluginId) {
         const enabled = this.options.pluginEnabled?.(definition.pluginId) ?? true;
         if (!enabled) continue;
       }
-      const allowed = definition.requiredCapabilities.every((capability) => {
-        const verdict = this.options.authority.decide({
-          principal: {
-            principalId: actor.principalId,
-            kind: 'user',
-            tenantId: actor.tenantId,
-            workspaceId: actor.workspaceId ?? null,
-          },
-          capability,
-          resource: {
-            type: 'tool',
-            id: definition.id,
-            tenantId: actor.tenantId,
-            workspaceId: actor.workspaceId ?? null,
-          },
-          fromPlugin: Boolean(definition.pluginId),
-        });
-        return verdict.decision === 'ALLOW';
-      });
-      if (!allowed) continue;
+      if (!this.capabilitiesAllowed(actor, definition, overlay.policy)) continue;
       out.push({
         id: definition.id,
         description: definition.description,
@@ -678,7 +664,61 @@ export class ToolEngine {
 
   private async authorise(actor: ToolActor, invocation: ToolInvocation, definition: ToolDefinition): Promise<ToolInvocation> {
     if (invocation.status === 'failed') return invocation;
-    for (const capability of definition.requiredCapabilities) {
+    const overlay = await this.overlayFor(actor);
+    if (!overlay.ok || !this.capabilitiesAllowed(actor, definition, overlay.policy)) {
+      const denied = await this.transition(invocation, 'denied', {
+        failureReason: failure('policy_denied', 'Permission denied.', false),
+      });
+      await this.emit(denied, 'tool.denied');
+      return denied;
+    }
+    const authorised = await this.transition(invocation, 'authorised');
+    await this.emit(authorised, 'tool.authorised');
+    return authorised;
+  }
+
+  private async overlayFor(
+    actor: ToolActor,
+  ): Promise<{ ok: true; policy: EffectivePolicy | null } | { ok: false }> {
+    if (!this.options.policy || !this.options.resolvePolicy) return { ok: true, policy: null };
+    try {
+      return { ok: true, policy: await this.options.resolvePolicy(actor) };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  private capabilitiesAllowed(
+    actor: ToolActor,
+    definition: ToolDefinition,
+    policy: EffectivePolicy | null,
+  ): boolean {
+    if (policy) {
+      if (!policy.toolsEnabled) return false;
+      const engine = this.options.policy;
+      if (!engine) return false;
+      return definition.requiredCapabilities.every((capability) => {
+        const decision = engine.authorize({
+          principal: {
+            principalId: actor.principalId,
+            kind: 'user',
+            tenantId: actor.tenantId,
+            workspaceId: actor.workspaceId ?? null,
+          },
+          capability,
+          policy,
+          fromPlugin: Boolean(definition.pluginId),
+          resource: {
+            type: 'tool',
+            id: definition.id,
+            tenantId: actor.tenantId,
+            workspaceId: actor.workspaceId ?? null,
+          },
+        });
+        return decision.allowed;
+      });
+    }
+    return definition.requiredCapabilities.every((capability) => {
       const verdict = this.options.authority.decide({
         principal: {
           principalId: actor.principalId,
@@ -695,17 +735,8 @@ export class ToolEngine {
         },
         fromPlugin: Boolean(definition.pluginId),
       });
-      if (verdict.decision !== 'ALLOW') {
-        const denied = await this.transition(invocation, 'denied', {
-          failureReason: failure(verdict.reasonCode ?? 'capability_missing', verdict.message, false),
-        });
-        await this.emit(denied, 'tool.denied');
-        return denied;
-      }
-    }
-    const authorised = await this.transition(invocation, 'authorised');
-    await this.emit(authorised, 'tool.authorised');
-    return authorised;
+      return verdict.decision === 'ALLOW';
+    });
   }
 
   private async suspendForApproval(invocation: ToolInvocation): Promise<ToolInvocation> {

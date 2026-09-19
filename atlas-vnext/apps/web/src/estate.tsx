@@ -42,6 +42,7 @@ export function EstatePanel({
   setBusy,
   onStatus,
   onError,
+  conversationId,
 }: {
   dungeonId: string;
   projectId: string | null;
@@ -50,6 +51,7 @@ export function EstatePanel({
   setBusy: (value: boolean) => void;
   onStatus: (value: string) => void;
   onError: (value: string | null) => void;
+  conversationId?: string | null;
 }) {
   if (dungeonId === 'privacy') {
     return <PrivacyPanel busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
@@ -67,17 +69,17 @@ export function EstatePanel({
       </main>
     );
   }
-  if (dungeonId === 'osint') return <OsintPanel projectId={projectId} busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
+  if (dungeonId === 'osint') return <OsintPanel projectId={projectId} busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} conversationId={conversationId} />;
   if (dungeonId === 'investigation') {
     return <InvestigationPanel projectId={projectId} busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
   }
   if (dungeonId === 'research') {
-    return <ResearchPanel projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
+    return <ResearchPanel projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} conversationId={conversationId} />;
   }
   if (dungeonId === 'website') {
     return <WebsitePanel projectId={projectId} busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
   }
-  if (dungeonId === 'music') return <MusicPanel projectId={projectId} busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
+  if (dungeonId === 'music') return <MusicPanel projectId={projectId} busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} conversationId={conversationId} />;
   return (
     <main className="workspace" aria-label="Dungeon">
       <div className="empty">
@@ -183,12 +185,14 @@ function OsintPanel({
   setBusy,
   onStatus,
   onError,
+  conversationId,
 }: {
   projectId: string;
   busy: boolean;
   setBusy: (value: boolean) => void;
   onStatus: (value: string) => void;
   onError: (value: string | null) => void;
+  conversationId?: string | null;
 }) {
   const [kind, setKind] = useState('username');
   const [value, setValue] = useState('');
@@ -210,11 +214,11 @@ function OsintPanel({
     onError(null);
     try {
       playCue('tool');
-      const result = await scanOsint(projectId, kind, value.trim());
+      const result = await scanOsint(projectId, kind, value.trim(), conversationId);
       setLatest({ findings: result.findings, dossier: result.dossier });
       await reload();
       playCue('complete');
-      onStatus('OSINT scan stored as findings. Synthesis used Nexus, not a private provider.');
+      onStatus('OSINT findings stored and posted to this chat.');
     } catch (err) {
       playCue('warn');
       onError(err instanceof Error ? err.message : String(err));
@@ -228,7 +232,7 @@ function OsintPanel({
       <header className="thread-header">
         <div>
           <h2>OSINT</h2>
-          <p className="hint">Public lookup is host-injected. Jobs, CAS, Nexus, and Authority stay on the platform.</p>
+          <p className="hint">Ask Atlas to research a target. Findings persist here and appear in the requesting chat.</p>
         </div>
       </header>
       <section className="estate-body">
@@ -430,6 +434,7 @@ function ResearchPanel({
   setBusy,
   onStatus,
   onError,
+  conversationId,
 }: {
   projectId: string;
   files: ProjectFile[];
@@ -437,6 +442,7 @@ function ResearchPanel({
   setBusy: (value: boolean) => void;
   onStatus: (value: string) => void;
   onError: (value: string | null) => void;
+  conversationId?: string | null;
 }) {
   const [question, setQuestion] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
@@ -456,11 +462,11 @@ function ResearchPanel({
     setBusy(true);
     try {
       playCue('tool');
-      const brief = await createResearch(projectId, question.trim(), selected);
-      await runResearch(brief.id);
+      const brief = await createResearch(projectId, question.trim(), selected, conversationId);
+      await runResearch(brief.id, conversationId);
       await reload();
       playCue('complete');
-      onStatus('Research synthesis stored with backend citations.');
+      onStatus('Research completed. Findings and citations are in this chat.');
     } catch (err) {
       playCue('warn');
       onError(err instanceof Error ? err.message : String(err));
@@ -474,7 +480,7 @@ function ResearchPanel({
       <header className="thread-header">
         <div>
           <h2>Research</h2>
-          <p className="hint">Retrieval is platform ContextService. This dungeon does not own a search stack.</p>
+          <p className="hint">Iterative multi-source research. Project files are one source class, not the whole stack.</p>
         </div>
       </header>
       <section className="estate-body">
@@ -656,12 +662,14 @@ function MusicPanel({
   setBusy,
   onStatus,
   onError,
+  conversationId,
 }: {
   projectId: string;
   busy: boolean;
   setBusy: (value: boolean) => void;
   onStatus: (value: string) => void;
   onError: (value: string | null) => void;
+  conversationId?: string | null;
 }) {
   const [title, setTitle] = useState('');
   const [brief, setBrief] = useState('');
@@ -681,11 +689,11 @@ function MusicPanel({
     setBusy(true);
     try {
       playCue('tool');
-      const created = await createComposition(projectId, title.trim() || 'Untitled composition', brief.trim());
-      await composeMusic(created.id);
+      const created = await createComposition(projectId, title.trim() || 'Untitled composition', brief.trim(), conversationId);
+      await composeMusic(created.id, conversationId);
       await reload();
       playCue('complete');
-      onStatus('Composition packet stored. GPU runtimes stay in Execution.');
+      onStatus('Playable track stored in Files and posted to this chat.');
     } catch (err) {
       playCue('warn');
       onError(err instanceof Error ? err.message : String(err));
@@ -699,7 +707,7 @@ function MusicPanel({
       <header className="thread-header">
         <div>
           <h2>Music</h2>
-          <p className="hint">Structure and lyrics through Nexus. This surface does not lease GPUs.</p>
+          <p className="hint">A track is complete only when playable audio exists. Listen in the chat.</p>
         </div>
       </header>
       <section className="estate-body">

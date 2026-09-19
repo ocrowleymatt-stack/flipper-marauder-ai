@@ -64,6 +64,7 @@ const PACKAGE_LAYER: Record<string, Layer> = {
   '@atlas-vnext/storage': 'storage',
   '@atlas-vnext/files': 'files',
   '@atlas-vnext/acquisition': 'files',
+  '@atlas-vnext/search': 'files',
   '@atlas-vnext/context': 'context',
   '@atlas-vnext/auth': 'auth',
   '@atlas-vnext/tools': 'tools',
@@ -196,6 +197,7 @@ export function classifyPath(relPath: string): { layer: Layer; dungeon?: string 
   if (normalised.startsWith('platform/storage/')) return { layer: 'storage' };
   if (normalised.startsWith('platform/files/')) return { layer: 'files' };
   if (normalised.startsWith('platform/acquisition/')) return { layer: 'files' };
+  if (normalised.startsWith('platform/search/')) return { layer: 'files' };
   if (normalised.startsWith('platform/context/')) return { layer: 'context' };
   if (normalised.startsWith('platform/auth/')) return { layer: 'auth' };
   if (normalised.startsWith('platform/tools/')) return { layer: 'tools' };
@@ -577,6 +579,7 @@ function analyzePackageJson(root: string, overlays: Record<string, string>): Vio
     ['platform/storage/package.json', 'platform'],
     ['platform/files/package.json', 'platform'],
     ['platform/acquisition/package.json', 'platform'],
+    ['platform/search/package.json', 'platform'],
     ['platform/context/package.json', 'platform'],
     ['platform/auth/package.json', 'platform'],
     ['platform/tools/package.json', 'platform'],

@@ -94,6 +94,8 @@ export const publicLookupResultSchema = z.object({
   summary: z.string().min(1),
   confidence: osintConfidenceSchema,
   evidence: z.string().min(1),
+  url: z.string().min(1).optional(),
+  retrievedAt: z.string().min(1).optional(),
 });
 export type PublicLookupResult = z.infer<typeof publicLookupResultSchema>;
 

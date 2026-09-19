@@ -7,6 +7,16 @@ export const ALLOWED_MIME_TYPES = [
   'application/json',
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/flac',
+  'audio/ogg',
+  'audio/opus',
+  'audio/mp4',
+  'audio/aac',
+  'audio/aiff',
 ] as const;
 
 export type AllowedMime = (typeof ALLOWED_MIME_TYPES)[number];
@@ -29,6 +39,25 @@ const DOCX =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document' as const;
 
 export function sniffMime(bytes: Uint8Array): string | null {
+  if (bytes.length >= 12) {
+    const riff =
+      bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46;
+    const wave =
+      bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45;
+    if (riff && wave) return 'audio/wav';
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x66 && bytes[1] === 0x4c && bytes[2] === 0x61 && bytes[3] === 0x43) {
+    return 'audio/flac';
+  }
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    return 'audio/mpeg';
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1]! & 0xe0) === 0xe0) {
+    return 'audio/mpeg';
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x4f && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53) {
+    return 'audio/ogg';
+  }
   if (bytes.length >= 5 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
     return 'application/pdf';
   }
@@ -50,6 +79,14 @@ export function mimeFromFilename(filename: string): AllowedMime | null {
   if (lower.endsWith('.txt')) return 'text/plain';
   if (lower.endsWith('.pdf')) return 'application/pdf';
   if (lower.endsWith('.docx')) return DOCX;
+  if (lower.endsWith('.wav')) return 'audio/wav';
+  if (lower.endsWith('.mp3')) return 'audio/mpeg';
+  if (lower.endsWith('.flac')) return 'audio/flac';
+  if (lower.endsWith('.ogg')) return 'audio/ogg';
+  if (lower.endsWith('.opus')) return 'audio/opus';
+  if (lower.endsWith('.m4a')) return 'audio/mp4';
+  if (lower.endsWith('.aac')) return 'audio/aac';
+  if (lower.endsWith('.aiff') || lower.endsWith('.aif')) return 'audio/aiff';
   return null;
 }
 
@@ -71,6 +108,12 @@ export function resolveMime(input: {
     throw new UnsupportedMediaError(`Refusing executable or macro-enabled upload (${declared}). Uploads are data.`);
   }
   const sniffed = sniffMime(input.bytes);
+  if (sniffed?.startsWith('audio/')) {
+    if (declared && !declared.startsWith('audio/') && declared !== 'application/octet-stream') {
+      throw new UnsupportedMediaError(`Declared MIME ${declared} does not match sniffed ${sniffed}.`);
+    }
+    return (ALLOWED_MIME_TYPES as readonly string[]).includes(sniffed) ? (sniffed as AllowedMime) : 'audio/wav';
+  }
   if (sniffed === 'application/zip') {
     throw new UnsupportedMediaError('Generic ZIP archives are not ingested; DOCX is the only ZIP-based format.');
   }

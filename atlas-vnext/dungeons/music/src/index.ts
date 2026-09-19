@@ -4,13 +4,14 @@ import type { FilesService } from '@atlas-vnext/files';
 import type { DungeonRecordRow, PersistenceActor, PlatformPersistence } from '@atlas-vnext/persistence';
 import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import type { ProjectService } from '@atlas-vnext/projects';
+import type { AudioRenderPort } from './audio.ts';
 
 export const dungeonId: DungeonId = 'music';
 
 export const musicDungeon = {
   id: dungeonId,
   title: 'Music',
-  description: 'Composition briefs and release notes. GPU runtimes stay in Execution.',
+  description: 'Composition, audition, and audio artefacts. GPU runtimes stay in Execution.',
 } as const;
 
 export const MUSIC_DUNGEON: DungeonRegistration = {
@@ -18,7 +19,7 @@ export const MUSIC_DUNGEON: DungeonRegistration = {
   slug: 'music',
   title: 'Music',
   navLabel: 'Music',
-  description: 'Compose structure and lyrics through Nexus. Does not lease GPUs or name cloud GPU vendors.',
+  description: 'Compose then render playable audio into Files/CAS. Does not lease GPUs or name cloud GPU vendors.',
   surface: 'music-studio',
   routes: {
     list: '/api/projects/:projectId/compositions',
@@ -48,6 +49,8 @@ export interface MusicActor extends PersistenceActor {
   tenantId: string;
 }
 
+export type { AudioRenderPort } from './audio.ts';
+
 export class MusicService {
   constructor(
     private readonly deps: {
@@ -57,6 +60,7 @@ export class MusicService {
       runtime: ConversationRuntime;
       authority: AuthorityEngine;
       policy: EffectivePolicyEngine;
+      audio?: AudioRenderPort | null;
     },
   ) {}
 
@@ -65,7 +69,10 @@ export class MusicService {
     return this.store(actor).list(actor, { workspaceId: projectId, dungeon: 'music', kind: 'composition' });
   }
 
-  async create(actor: MusicActor, input: { projectId: string; title: string; brief: string }) {
+  async create(
+    actor: MusicActor,
+    input: { projectId: string; title: string; brief: string; conversationId?: string; parentId?: string },
+  ) {
     const project = await this.requireProject(actor, input.projectId, 'artifact.write');
     return this.store(actor).create(actor, {
       workspaceId: project.id,
@@ -73,7 +80,9 @@ export class MusicService {
       kind: 'composition',
       title: input.title.trim() || 'Untitled composition',
       status: 'idle',
-      payload: { brief: input.brief },
+      payload: { brief: input.brief, conversationId: input.conversationId ?? null },
+      conversationId: input.conversationId ?? null,
+      parentId: input.parentId ?? null,
     });
   }
 
@@ -84,16 +93,21 @@ export class MusicService {
     return row;
   }
 
-  async compose(actor: MusicActor, id: string) {
+  async compose(actor: MusicActor, id: string, input: { conversationId?: string; instruction?: string } = {}) {
     const record = await this.get(actor, id);
     this.authorize(actor, 'artifact.write', record.workspaceId ?? record.id, record.tenantId);
     const projectId = record.workspaceId;
     if (!projectId) throw new MusicError('malformed', 'Composition is missing a project.');
     const policy = await this.boundPolicy(actor);
     this.assertPolicy(actor, 'artifact.write', policy, projectId, record.tenantId);
+    const requestingConversationId =
+      input.conversationId ??
+      (typeof record.payload.conversationId === 'string' ? record.payload.conversationId : null) ??
+      record.conversationId;
     const conversation = await this.deps.runtime.createConversation({ title: record.title, projectId });
     let text = '';
     let executionId: string | null = null;
+    const parent = record.parentId ? await this.store(actor).get(actor, record.parentId) : null;
     for await (const event of this.deps.runtime.sendMessage(conversation.id, {
       content: [
         this.deps.policy.scopedModelInstructions(policy),
@@ -101,7 +115,11 @@ export class MusicService {
         'Do not mention GPU providers, RunPod, or infrastructure.',
         `Title: ${record.title}`,
         `Brief: ${String(record.payload.brief ?? '')}`,
-      ].join('\n'),
+        input.instruction ? `Follow-up instruction: ${input.instruction}` : '',
+        parent ? `Derive from previous composition ${parent.title}.` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
       capability: 'nexus/reason',
       privacy: this.deps.policy.runtimePrivacy(policy),
     })) {
@@ -109,32 +127,90 @@ export class MusicService {
       if (event.type === 'assistant.delta' && event.text) text += event.text;
       if (event.type === 'assistant.completed' && event.text) text = event.text;
     }
-    const artefact = await this.deps.files.createTextArtefact(actor, {
+    const packet = await this.deps.files.createTextArtefact(actor, {
       projectId,
       text: text.trim() || 'Empty composition packet.',
       type: 'music.composition',
     });
+    const render = this.deps.audio
+      ? await this.deps.audio.render({
+          title: record.title,
+          brief: String(record.payload.brief ?? ''),
+          compositionText: text.trim(),
+          instruction: input.instruction,
+          parentHash: parent?.contentHash ?? undefined,
+        })
+      : {
+          status: 'unavailable' as const,
+          bytes: null,
+          mimeType: null,
+          renderer: 'none',
+          durationMs: null,
+          detail: 'Audio renderer is not wired. A text packet is not a completed track.',
+        };
+    const hasAudio = render.status === 'rendered' && render.bytes && render.bytes.byteLength > 0 && render.mimeType;
+    let audioArtefactId: string | null = null;
+    let audioHash: string | null = null;
+    if (hasAudio) {
+      const audio = await this.deps.files.createBinaryArtefact(actor, {
+        projectId,
+        bytes: render.bytes!,
+        mimeType: render.mimeType!,
+        type: 'music.audio',
+        parentId: packet.id,
+      });
+      audioArtefactId = audio.id;
+      audioHash = audio.contentHash;
+    }
+    const status = hasAudio ? 'completed' : render.status === 'failed' ? 'failed' : 'waiting';
     const updated = await this.store(actor).update(actor, record.id, {
-      status: 'completed',
-      artefactId: artefact.id,
-      contentHash: artefact.contentHash,
+      status,
+      artefactId: audioArtefactId ?? packet.id,
+      contentHash: audioHash ?? packet.contentHash,
       conversationId: conversation.id,
-      payload: { ...record.payload, executionId },
+      payload: {
+        ...record.payload,
+        executionId,
+        packetArtefactId: packet.id,
+        audioArtefactId,
+        renderer: render.renderer,
+        renderDetail: render.detail,
+        durationMs: render.durationMs,
+        mimeType: render.mimeType,
+        instruction: input.instruction ?? null,
+      },
       expectedRevision: record.revision,
     });
     await this.deps.persistence.forActor(actor).provenance.record({
-      artefactId: artefact.id,
+      artefactId: audioArtefactId ?? packet.id,
       projectId,
-      sourceInputs: [record.id],
+      sourceInputs: [record.id, packet.id, ...(parent ? [parent.id] : [])],
       inputManifestHash: null,
       provider: 'atlas.music',
-      model: 'composition',
+      model: render.renderer,
       toolCalls: [],
       jobId: executionId,
       timestamp: new Date().toISOString(),
       traceId: `music:${record.id}`,
       capability: 'music',
     });
+    if (requestingConversationId) {
+      await this.deps.runtime.postNotice(
+        requestingConversationId,
+        hasAudio
+          ? [
+              `## Track ready: ${record.title}`,
+              render.detail,
+              `[[atlas:media artefactId="${audioArtefactId}" mime="${render.mimeType}" title="${record.title}"]]`,
+              'Ask me to make this slower, darker, or derived and I will create a new revision.',
+            ].join('\n')
+          : [
+              `## Music not completed: ${record.title}`,
+              render.detail,
+              'A text composition packet is stored, but there is no playable audio artefact yet, so this is not a finished track.',
+            ].join('\n'),
+      );
+    }
     return updated;
   }
 

@@ -27,7 +27,7 @@ export const PLATFORM_TOOL_CATALOGUE: ToolDefinition[] = [
   def({
     id: 'retrieval.search',
     title: 'Retrieval search',
-    description: 'Read-only lexical retrieval over mock knowledge.',
+    description: 'Read-only federated web search across configured engines.',
     category: 'retrieval_readonly' satisfies ToolCategory,
     adapter: 'retrieval.readonly',
     requiredCapabilities: ['tool.invoke.readonly'],
@@ -63,7 +63,7 @@ export const PLATFORM_TOOL_CATALOGUE: ToolDefinition[] = [
   def({
     id: 'browser.navigate',
     title: 'Browser navigate',
-    description: 'Navigate and read a mock page.',
+    description: 'Navigate and read a live public page.',
     category: 'browser_nav_read',
     adapter: 'browser.navigate',
     requiredCapabilities: ['browser.read'],
@@ -87,7 +87,7 @@ export const PLATFORM_TOOL_CATALOGUE: ToolDefinition[] = [
   def({
     id: 'api.read',
     title: 'HTTP GET',
-    description: 'Read-only mock HTTP GET.',
+    description: 'Read-only HTTP GET of a public URL.',
     category: 'external_api_read',
     adapter: 'api.read',
     requiredCapabilities: ['network.public', 'tool.invoke.readonly'],

@@ -88,7 +88,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState('Loading Workbench.');
+  const [status, setStatus] = useState('Loading Atlas.');
   const [surface, setSurface] = useState<Surface>('conversation');
   const [dungeons, setDungeons] = useState<DungeonRegistration[]>([]);
   const [navOpen, setNavOpen] = useState(false);
@@ -216,7 +216,7 @@ export function App() {
         await enterWorkbench(next);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
-        setStatus('Workbench failed to load.');
+        setStatus('Atlas failed to load.');
       } finally {
         setLoading(false);
       }
@@ -311,7 +311,7 @@ export function App() {
       setTools([]);
       setInspection(null);
       goToConversation();
-      setStatus('New conversation.');
+      setStatus('New chat.');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -550,7 +550,7 @@ export function App() {
             await enterWorkbench(next);
           } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
-            setStatus('Workbench failed to load.');
+            setStatus('Atlas failed to load.');
           } finally {
             setLoading(false);
           }
@@ -629,7 +629,7 @@ export function App() {
             aria-pressed={diagnosticsOpen}
             onClick={() => setDiagnosticsOpen((open) => !open)}
           >
-            {diagnosticsOpen ? 'Close details' : 'Run details'}
+            {diagnosticsOpen ? 'Close details' : 'Workbench'}
           </button>
           <button
             type="button"
@@ -656,7 +656,7 @@ export function App() {
       <div className={`layout ${navOpen ? 'nav-open' : ''} ${diagnosticsOpen ? 'diagnostics-open' : ''}`}>
         <nav className="nav" aria-label="Workspace">
           <button type="button" className="primary new-conversation" data-testid="new-conversation" onClick={() => void onCreateConversation()} disabled={projectsAvailable && !projectId}>
-            New conversation
+            New chat
           </button>
           <form className="stack compact-form" onSubmit={(event) => void onCreateProject(event)}>
             <label htmlFor="project-name">New project</label>
@@ -674,7 +674,7 @@ export function App() {
           </form>
           <div className="nav-section">
             <div className="row">
-              <h2>Conversations</h2>
+              <h2>Chats</h2>
             </div>
             <label className="sr-only" htmlFor="conversation-search">
               Search conversations
@@ -686,7 +686,7 @@ export function App() {
               placeholder="Search"
             />
             {filteredConversations.length === 0 ? (
-              <p className="muted">No conversations yet.</p>
+              <p className="muted">No chats yet.</p>
             ) : (
               <ul className="plain conversation-list">
                 {filteredConversations.map((conversation) => (
@@ -708,7 +708,7 @@ export function App() {
             )}
           </div>
           <div className="nav-section">
-            <h2>Project</h2>
+            <h2>Library</h2>
             <ul className="plain">
               <li>
                 <button type="button" className={surface === 'files' ? 'active' : ''} data-testid="surface-files" onClick={() => openSurface('files')} disabled={!projectId}>
@@ -717,19 +717,19 @@ export function App() {
               </li>
               <li>
                 <button type="button" className={surface === 'context' ? 'active' : ''} onClick={() => openSurface('context')} disabled={!projectId}>
-                  Context
-                </button>
-              </li>
-              <li>
-                <button type="button" className={surface === 'writing' ? 'active' : ''} data-testid="surface-writing" onClick={() => openSurface('writing')} disabled={!projectId}>
-                  Caspa
+                  Sources
                 </button>
               </li>
             </ul>
           </div>
           <div className="nav-section">
-            <h2>Tools</h2>
+            <h2>Dungeons</h2>
             <ul className="plain">
+              <li>
+                <button type="button" className={surface === 'writing' ? 'active' : ''} data-testid="surface-writing" onClick={() => openSurface('writing')} disabled={!projectId}>
+                  Caspa
+                </button>
+              </li>
               {dungeons
                 .filter((item) => item.featureAvailable && item.id !== 'writing')
                 .map((item) => (
@@ -744,6 +744,11 @@ export function App() {
                     </button>
                   </li>
                 ))}
+            </ul>
+          </div>
+          <div className="nav-section">
+            <h2>Workbench</h2>
+            <ul className="plain">
               <li>
                 <button type="button" className={surface === 'operations' ? 'active' : ''} onClick={() => openSurface('operations')}>
                   Help & Repair
@@ -773,12 +778,12 @@ export function App() {
         ) : surface === 'operations' ? (
           <section className="workspace-wrap">
             <SurfaceBack onBack={goToConversation} label="Help & Repair" />
-            <EstatePanel dungeonId="operations" projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={setStatus} onError={setError} />
+            <EstatePanel dungeonId="operations" projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={(value) => { setStatus(value); if (activeConversationId) void loadConversation(activeConversationId); }} onError={setError} conversationId={activeConversationId} />
           </section>
         ) : surface !== 'conversation' ? (
           <section className="workspace-wrap">
             <SurfaceBack onBack={goToConversation} label={dungeons.find((item) => item.id === surface)?.navLabel.replace(/Studio/i, '').trim() ?? 'Tool'} />
-            <EstatePanel dungeonId={surface} projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={setStatus} onError={setError} />
+            <EstatePanel dungeonId={surface} projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={(value) => { setStatus(value); if (activeConversationId) void loadConversation(activeConversationId); }} onError={setError} conversationId={activeConversationId} />
           </section>
         ) : (
           <main className="workspace" aria-label="Conversation">

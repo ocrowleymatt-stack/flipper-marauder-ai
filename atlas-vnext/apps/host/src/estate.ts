@@ -89,6 +89,7 @@ async function handleOsint(
         kind: body.kind === 'email' || body.kind === 'username' || body.kind === 'ip' || body.kind === 'person' || body.kind === 'organisation' ? body.kind : 'domain',
         value: typeof body.value === 'string' ? body.value : '',
         synthesize: body.synthesize !== false,
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined,
       }),
     );
     return true;
@@ -221,6 +222,7 @@ async function handleResearch(
         projectId: decodeURIComponent(list[1]!),
         question: typeof body.question === 'string' ? body.question : '',
         fileIds: Array.isArray(body.fileIds) ? body.fileIds.map(String) : [],
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined,
       }),
     );
     return true;
@@ -230,7 +232,14 @@ async function handleResearch(
     return true;
   }
   if (req.method === 'POST' && run) {
-    json(res, 200, await service.run(writingActor, decodeURIComponent(run[1]!)));
+    const body = await readJson(req, options.maxRequestBytes);
+    json(
+      res,
+      200,
+      await service.run(writingActor, decodeURIComponent(run[1]!), {
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined,
+      }),
+    );
     return true;
   }
   json(res, 404, { error: 'Not found.' });
@@ -320,6 +329,8 @@ async function handleMusic(
         projectId: decodeURIComponent(list[1]!),
         title: typeof body.title === 'string' ? body.title : 'Composition',
         brief: typeof body.brief === 'string' ? body.brief : '',
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined,
+        parentId: typeof body.parentId === 'string' ? body.parentId : undefined,
       }),
     );
     return true;
@@ -329,7 +340,15 @@ async function handleMusic(
     return true;
   }
   if (req.method === 'POST' && compose) {
-    json(res, 200, await service.compose(writingActor, decodeURIComponent(compose[1]!)));
+    const body = await readJson(req, options.maxRequestBytes);
+    json(
+      res,
+      200,
+      await service.compose(writingActor, decodeURIComponent(compose[1]!), {
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined,
+        instruction: typeof body.instruction === 'string' ? body.instruction : undefined,
+      }),
+    );
     return true;
   }
   json(res, 404, { error: 'Not found.' });

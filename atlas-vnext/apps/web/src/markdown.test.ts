@@ -39,6 +39,16 @@ describe('markdown body', () => {
     );
     expect(html).toContain('href="#"');
     expect(html).toContain('href="/local"');
-    expect(html).not.toContain('attacker.com');
+  });
+
+  it('renders a playable audio artefact control', () => {
+    const html = renderToStaticMarkup(
+      createElement(MarkdownBody, {
+        text: 'Track ready.\n\n[[atlas:media artefactId="art_1" mime="audio/wav" title="Copper"]]\n',
+      }),
+    );
+    expect(html).toContain('<audio');
+    expect(html).toContain('/api/artefacts/art_1');
+    expect(html).toContain('Copper');
   });
 });

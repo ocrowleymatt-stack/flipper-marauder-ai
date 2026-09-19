@@ -61,6 +61,9 @@ import { PlatformRateLimiter, ResourceGuard } from './limits.ts';
 import { readTimeoutContract, type TimeoutContract } from './production-config.ts';
 import { raceStartup, raceStartupCloseable, throwIfStartupAborted } from './startup-deadline.ts';
 import { NodePublicLookup } from './collectors.ts';
+import { NodeFederatedSearch } from './search.ts';
+import { NodeAudioRender } from './audio.ts';
+import { productionToolAdapters } from './web-tools.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
@@ -271,6 +274,15 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   });
 
   const jailRoot = env.ATLAS_TOOL_JAIL?.trim() || join(tmpdir(), 'atlas-tool-jail', tenantId);
+  const federatedSearch = new NodeFederatedSearch({
+    mode: mode === 'live' ? 'live' : 'mock',
+    env,
+  });
+  const audioRender = new NodeAudioRender(env);
+  const toolAdapters = productionToolAdapters({
+    search: federatedSearch,
+    liveNetwork: mode === 'live',
+  });
   let tools: ToolEngine;
 
   const makeOrchestrator = (engine: ToolEngine): ToolOrchestrator => ({
@@ -343,6 +355,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       jailRoot,
       env,
       pluginEnabled: (id) => plugins.enabled(id),
+      adapters: toolAdapters,
     });
     runtime = new ConversationRuntime({
       conversations: bound.conversations,
@@ -383,12 +396,29 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       runtime,
       authority,
       policy,
-      collector: new NodePublicLookup(),
+      collector: new NodePublicLookup(fetch, 4_000, mode === 'live' ? 'live' : 'mock'),
     });
     investigation = new InvestigationService({ persistence, projects, files, runtime, authority, policy, context });
-    research = new ResearchService({ persistence, projects, files, context, runtime, authority, policy });
+    research = new ResearchService({
+      persistence,
+      projects,
+      files,
+      context,
+      runtime,
+      authority,
+      policy,
+      search: federatedSearch,
+    });
     websiteStudio = new WebsiteStudioService({ persistence, projects, files, runtime, authority, policy });
-    music = new MusicService({ persistence, projects, files, runtime, authority, policy });
+    music = new MusicService({
+      persistence,
+      projects,
+      files,
+      runtime,
+      authority,
+      policy,
+      audio: audioRender,
+    });
     privacy = new PrivacyService({ persistence, authority, policy, ownerPrincipalId: principalId });
   } else {
     store = openDurableStore(options.dataPath);
@@ -401,6 +431,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       jailRoot,
       env,
       pluginEnabled: (id) => plugins.enabled(id),
+      adapters: toolAdapters,
     });
     runtime = new ConversationRuntime({
       conversations: store.conversations,

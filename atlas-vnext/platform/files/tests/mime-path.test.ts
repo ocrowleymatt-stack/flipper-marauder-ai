@@ -33,5 +33,9 @@ describe('path sanitisation and MIME', () => {
         declared: 'application/javascript',
       }),
     ).toThrow(/data/i);
+    const wav = new Uint8Array([
+      0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20,
+    ]);
+    expect(resolveMime({ bytes: wav, filename: 'theme.bin', declared: 'application/octet-stream' })).toBe('audio/wav');
   });
 });

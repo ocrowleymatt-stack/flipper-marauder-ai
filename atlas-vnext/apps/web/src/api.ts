@@ -327,7 +327,7 @@ export async function* sendMessage(
     method: 'POST',
     credentials: 'include',
     headers: mutatingHeaders(),
-    body: JSON.stringify({ content, capability }),
+    body: JSON.stringify({ content, capability, tools: true }),
     signal,
   });
   if (!response.ok || !response.body) {
@@ -668,7 +668,12 @@ export async function commissionDocument(
   );
 }
 
-export async function scanOsint(projectId: string, kind: string, value: string): Promise<{
+export async function scanOsint(
+  projectId: string,
+  kind: string,
+  value: string,
+  conversationId?: string | null,
+): Promise<{
   target: DungeonRecord;
   findings: DungeonRecord[];
   dossier?: DungeonRecord;
@@ -678,7 +683,7 @@ export async function scanOsint(projectId: string, kind: string, value: string):
       method: 'POST',
       credentials: 'include',
       headers: mutatingHeaders(),
-      body: JSON.stringify({ kind, value }),
+      body: JSON.stringify({ kind, value, conversationId: conversationId || undefined }),
     }),
   );
 }
@@ -778,24 +783,32 @@ export async function listResearch(projectId: string): Promise<DungeonRecord[]> 
   return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/research`, { credentials: 'include' }));
 }
 
-export async function createResearch(projectId: string, question: string, fileIds: string[]): Promise<DungeonRecord> {
+export async function createResearch(
+  projectId: string,
+  question: string,
+  fileIds: string[],
+  conversationId?: string | null,
+): Promise<DungeonRecord> {
   return parseJson(
     await fetch(`/api/projects/${encodeURIComponent(projectId)}/research`, {
       method: 'POST',
       credentials: 'include',
       headers: mutatingHeaders(),
-      body: JSON.stringify({ question, fileIds }),
+      body: JSON.stringify({ question, fileIds, conversationId: conversationId || undefined }),
     }),
   );
 }
 
-export async function runResearch(id: string): Promise<{ brief: DungeonRecord; synthesis: DungeonRecord }> {
+export async function runResearch(
+  id: string,
+  conversationId?: string | null,
+): Promise<{ brief: DungeonRecord; synthesis: DungeonRecord }> {
   return parseJson(
     await fetch(`/api/research/${encodeURIComponent(id)}/run`, {
       method: 'POST',
       credentials: 'include',
       headers: mutatingHeaders(),
-      body: '{}',
+      body: JSON.stringify({ conversationId: conversationId || undefined }),
     }),
   );
 }
@@ -853,24 +866,34 @@ export async function listCompositions(projectId: string): Promise<DungeonRecord
   );
 }
 
-export async function createComposition(projectId: string, title: string, brief: string): Promise<DungeonRecord> {
+export async function createComposition(
+  projectId: string,
+  title: string,
+  brief: string,
+  conversationId?: string | null,
+  parentId?: string | null,
+): Promise<DungeonRecord> {
   return parseJson(
     await fetch(`/api/projects/${encodeURIComponent(projectId)}/compositions`, {
       method: 'POST',
       credentials: 'include',
       headers: mutatingHeaders(),
-      body: JSON.stringify({ title, brief }),
+      body: JSON.stringify({ title, brief, conversationId: conversationId || undefined, parentId: parentId || undefined }),
     }),
   );
 }
 
-export async function composeMusic(id: string): Promise<DungeonRecord> {
+export async function composeMusic(
+  id: string,
+  conversationId?: string | null,
+  instruction?: string,
+): Promise<DungeonRecord> {
   return parseJson(
     await fetch(`/api/compositions/${encodeURIComponent(id)}/compose`, {
       method: 'POST',
       credentials: 'include',
       headers: mutatingHeaders(),
-      body: '{}',
+      body: JSON.stringify({ conversationId: conversationId || undefined, instruction }),
     }),
   );
 }

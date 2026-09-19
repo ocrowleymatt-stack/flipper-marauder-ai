@@ -42,7 +42,8 @@ type Block =
   | { kind: 'code'; lang: string; text: string }
   | { kind: 'quote'; text: string }
   | { kind: 'list'; ordered: boolean; items: string[] }
-  | { kind: 'paragraph'; text: string };
+  | { kind: 'paragraph'; text: string }
+  | { kind: 'media'; artefactId: string; mime: string; title: string };
 
 function splitBlocks(source: string): Block[] {
   const blocks: Block[] = [];
@@ -50,6 +51,12 @@ function splitBlocks(source: string): Block[] {
   let index = 0;
   while (index < lines.length) {
     const line = lines[index] ?? '';
+    const media = line.match(/^\[\[atlas:media\s+artefactId="([^"]+)"\s+mime="([^"]+)"\s+title="([^"]*)"\]\]$/);
+    if (media) {
+      blocks.push({ kind: 'media', artefactId: media[1] ?? '', mime: media[2] ?? '', title: media[3] ?? 'Audio' });
+      index += 1;
+      continue;
+    }
     if (line.startsWith('```')) {
       const lang = line.slice(3).trim();
       const body: string[] = [];
@@ -114,6 +121,23 @@ function Block({ block }: { block: Block }) {
           <li key={index}>{inline(item)}</li>
         ))}
       </List>
+    );
+  }
+  if (block.kind === 'media') {
+    if (block.mime.startsWith('audio/')) {
+      return (
+        <figure className="md-media">
+          <figcaption>{block.title}</figcaption>
+          <audio controls preload="metadata" src={`/api/artefacts/${encodeURIComponent(block.artefactId)}`}>
+            Play {block.title}
+          </audio>
+        </figure>
+      );
+    }
+    return (
+      <p>
+        <a href={`/api/artefacts/${encodeURIComponent(block.artefactId)}`}>{block.title}</a>
+      </p>
     );
   }
   return <p>{inline(block.text)}</p>;

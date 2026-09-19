@@ -37,6 +37,7 @@
       "@atlas-vnext/tools": ["./platform/tools/src/index.ts"],
       "@atlas-vnext/plugins": ["./platform/plugins/src/index.ts"],
       "@atlas-vnext/secrets": ["./platform/secrets/src/index.ts"],
+      "@atlas-vnext/search": ["./platform/search/src/index.ts"],
       "@atlas-vnext/dungeon-writing": ["./dungeons/writing/src/index.ts"],
       "@atlas-vnext/dungeon-osint": ["./dungeons/osint/src/index.ts"],
       "@atlas-vnext/dungeon-investigation": ["./dungeons/investigation/src/index.ts"],

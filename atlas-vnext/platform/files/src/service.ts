@@ -524,40 +524,37 @@ export class FilesService {
     const workspace = await this.requireProject(scoped, input.projectId);
     const bytes = new TextEncoder().encode(input.text);
     const put = await this.cas.put(bytes);
-    return this.persistence.run(async () => {
-      const bound = this.persistence.forActor(scoped);
-      await bound.casRefs.ensureObject(put.sha256, put.sizeBytes);
-      const artefact = await this.persistence.artefacts.record(scoped, {
-        id: input.id ?? `art_${randomUUID()}`,
-        workspaceId: workspace.id,
-        type: input.type ?? 'document',
-        version: 1,
-        parentId: null,
-        contentHash: put.sha256,
-        mimeType: 'text/plain',
-        sizeBytes: put.sizeBytes,
-      });
-      await bound.casRefs.addRef(scoped, {
-        sha256: put.sha256,
-        workspaceId: workspace.id,
-        kind: 'artefact',
-        ownerId: artefact.id,
-      });
-      await bound.provenance.record({
-        artefactId: artefact.id,
-        projectId: workspace.id,
-        sourceInputs: [put.sha256],
-        inputManifestHash: workspace.rootManifestHash,
-        provider: 'atlas.files',
-        model: 'artefact.v1',
-        toolCalls: [],
-        jobId: null,
-        timestamp: this.clock(),
-        traceId: artefact.id,
-        capability: 'files.artefact',
-      });
-      return artefact;
+    return this.persistArtefact(scoped, workspace, {
+      id: input.id,
+      type: input.type ?? 'document',
+      bytes: put,
+      mimeType: 'text/plain',
     });
+  }
+
+  async createBinaryArtefact(
+    actor: PersistenceActor,
+    input: { projectId: string; bytes: Uint8Array; mimeType: string; type?: string; id?: string; parentId?: string | null },
+  ): Promise<ArtefactMetadata> {
+    const scoped = this.scoped(actor, 'create artefact');
+    const workspace = await this.requireProject(scoped, input.projectId);
+    const put = await this.cas.put(input.bytes);
+    return this.persistArtefact(scoped, workspace, {
+      id: input.id,
+      type: input.type ?? 'binary',
+      bytes: put,
+      mimeType: input.mimeType,
+      parentId: input.parentId ?? null,
+    });
+  }
+
+  async readArtefactBytes(actor: PersistenceActor, artefactId: string): Promise<{ bytes: Uint8Array; mimeType: string; artefact: ArtefactMetadata }> {
+    const scoped = this.scoped(actor, 'read artefact');
+    const artefact = await this.persistence.artefacts.get(scoped, artefactId);
+    if (!artefact?.contentHash) throw new FilesAccessError(`Artefact ${artefactId} is not visible.`);
+    const allowed = await this.persistence.forActor(scoped).casRefs.hasTenantAccess(scoped, artefact.contentHash);
+    if (!allowed) throw new FilesAccessError('Fail-closed: hash does not grant artefact access.');
+    return { bytes: await this.cas.get(artefact.contentHash), mimeType: artefact.mimeType ?? 'application/octet-stream', artefact };
   }
 
   async versionTextArtefact(
@@ -595,6 +592,53 @@ export class FilesService {
     const allowed = await this.persistence.forActor(scoped).casRefs.hasTenantAccess(scoped, artefact.contentHash);
     if (!allowed) throw new FilesAccessError('Fail-closed: hash does not grant artefact access.');
     return new TextDecoder().decode(await this.cas.get(artefact.contentHash));
+  }
+
+  private async persistArtefact(
+    scoped: PersistenceActor,
+    workspace: { id: string; rootManifestHash?: string | null },
+    input: {
+      id?: string;
+      type: string;
+      mimeType: string;
+      parentId?: string | null;
+      bytes: { sha256: string; sizeBytes: number };
+    },
+  ): Promise<ArtefactMetadata> {
+    return this.persistence.run(async () => {
+      const bound = this.persistence.forActor(scoped);
+      await bound.casRefs.ensureObject(input.bytes.sha256, input.bytes.sizeBytes);
+      const artefact = await this.persistence.artefacts.record(scoped, {
+        id: input.id ?? `art_${randomUUID()}`,
+        workspaceId: workspace.id,
+        type: input.type,
+        version: 1,
+        parentId: input.parentId ?? null,
+        contentHash: input.bytes.sha256,
+        mimeType: input.mimeType,
+        sizeBytes: input.bytes.sizeBytes,
+      });
+      await bound.casRefs.addRef(scoped, {
+        sha256: input.bytes.sha256,
+        workspaceId: workspace.id,
+        kind: 'artefact',
+        ownerId: artefact.id,
+      });
+      await bound.provenance.record({
+        artefactId: artefact.id,
+        projectId: workspace.id,
+        sourceInputs: [input.bytes.sha256, ...(input.parentId ? [input.parentId] : [])],
+        inputManifestHash: workspace.rootManifestHash ?? null,
+        provider: 'atlas.files',
+        model: 'artefact.v1',
+        toolCalls: [],
+        jobId: null,
+        timestamp: this.clock(),
+        traceId: artefact.id,
+        capability: 'files.artefact',
+      });
+      return artefact;
+    });
   }
 
   private async requireProject(actor: PersistenceActor, projectId: string) {

@@ -9,7 +9,8 @@ export const osintDungeon = {
 } as const;
 
 export { OSINT_DUNGEON } from './registration.ts';
-export { OsintService } from './service.ts';
+export { OsintService, parseQuestionTarget } from './service.ts';
 export type { OsintActor } from './service.ts';
 export type { PublicLookupPort } from './collector.ts';
 export { DungeonError, GENERIC_DENY } from './errors.ts';
+export { looksLikeOsintRequest, looksLikeOsintFollowup, composeOsintReport, strongestHit } from './report.ts';

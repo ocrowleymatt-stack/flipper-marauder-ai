@@ -14,6 +14,7 @@ export const osintTargetKindSchema = z.enum([
   'email',
   'domain',
   'ip',
+  'url',
   'organisation',
   'other',
 ]);
@@ -21,6 +22,21 @@ export type OsintTargetKind = z.infer<typeof osintTargetKindSchema>;
 
 export const osintConfidenceSchema = z.enum(['confirmed', 'likely', 'possible']);
 export type OsintConfidence = z.infer<typeof osintConfidenceSchema>;
+
+export const osintObservationStatusSchema = z.enum([
+  'confirmed',
+  'likely',
+  'possible',
+  'negative',
+  'error',
+  'rate_limited',
+  'blocked',
+  'unknown',
+]);
+export type OsintObservationStatus = z.infer<typeof osintObservationStatusSchema>;
+
+export const osintEpistemicKindSchema = z.enum(['observation', 'correlation', 'inference', 'hypothesis']);
+export type OsintEpistemicKind = z.infer<typeof osintEpistemicKindSchema>;
 
 export const osintTargetSchema = z.object({
   id: z.string(),
@@ -86,6 +102,7 @@ export const osintScanRequestSchema = z.object({
   kind: osintTargetKindSchema,
   value: z.string().min(1),
   synthesize: z.boolean().optional(),
+  conversationId: z.string().nullable().optional(),
 });
 export type OsintScanRequest = z.infer<typeof osintScanRequestSchema>;
 
@@ -94,6 +111,14 @@ export const publicLookupResultSchema = z.object({
   summary: z.string().min(1),
   confidence: osintConfidenceSchema,
   evidence: z.string().min(1),
+  url: z.string().optional(),
+  canonicalUrl: z.string().optional(),
+  status: osintObservationStatusSchema.optional(),
+  probe: z.string().optional(),
+  observedAt: z.string().optional(),
+  contentHash: z.string().optional(),
+  httpStatus: z.number().int().optional(),
+  epistemicKind: osintEpistemicKindSchema.optional(),
 });
 export type PublicLookupResult = z.infer<typeof publicLookupResultSchema>;
 

@@ -449,6 +449,7 @@ export function rateClassForPath(pathname: string, method = 'GET'): RateClass | 
   }
   if (pathname.startsWith('/api/tools')) return 'tools';
   if (pathname.includes('/documents')) return 'documents';
+  if (method === 'POST' && /\/osint\/scans\/?$/.test(pathname)) return 'generation';
   if (pathname.startsWith('/api/executions') || pathname.startsWith('/api/conversations')) return 'runs';
   return null;
 }

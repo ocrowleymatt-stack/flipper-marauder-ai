@@ -115,7 +115,7 @@ describe('Dungeon estate host', () => {
     const scan = await fetch(`${url}/api/projects/${project.id}/osint/scans`, {
       method: 'POST',
       headers: auth(session),
-      body: JSON.stringify({ kind: 'username', value: 'atlas-owner', synthesize: false }),
+      body: JSON.stringify({ kind: 'domain', value: 'example.test', synthesize: false }),
     });
     expect(scan.status).toBe(201);
     const osint = (await scan.json()) as { target: { id: string }; findings: Array<{ id: string }> };

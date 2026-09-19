@@ -46,6 +46,8 @@ import {
   doctorTone,
   ellipsize,
   emptyView,
+  executionToStop,
+  liveExecution,
   runStatusLabel,
   viewFromSnapshot,
   type StreamView,
@@ -102,7 +104,8 @@ export function App() {
   const draftRef = useRef('');
 
   const snapshot = view?.snapshot ?? null;
-  const latestExecution = inspection?.execution ?? snapshot?.executions.at(-1) ?? null;
+  const snapshotExecution = snapshot?.executions.at(-1) ?? null;
+  const latestExecution = liveExecution(busy, snapshotExecution, inspection?.execution);
   const awaiting = tools.filter((item) => item.awaitingApproval);
   const runLabel = busy ? 'Generating…' : runStatusLabel(latestExecution?.status, awaiting.length > 0);
   const currentProject = projects.find((item) => item.id === projectId) ?? null;
@@ -347,14 +350,24 @@ export function App() {
         sealedResponse: false,
         classifiedFailure: null,
         waitLabel: 'Generating…',
+        lastStreamedText: null,
         snapshot: { ...base.snapshot, messages: [...base.snapshot.messages, optimistic] },
       };
     });
     try {
       for await (const event of sendMessage(conversationId, content, selected)) {
         setView((current) => {
-          if (!current) return current;
-          return applyStream(current, conversationId, event, runtimeWaitingLabel);
+          const base =
+            current ??
+            emptyView({
+              id: conversationId,
+              urn: '',
+              title: 'New conversation',
+              projectId,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+          return applyStream(base, conversationId, event, runtimeWaitingLabel);
         });
         if (event.type === 'tool.lifecycle') {
           await listConversationTools(conversationId)
@@ -396,10 +409,10 @@ export function App() {
   }
 
   async function onStop() {
-    const executionId = latestExecution?.id;
-    if (!executionId || !busy) return;
+    const live = executionToStop(busy, snapshot?.executions.at(-1));
+    if (!live) return;
     try {
-      await cancelExecution(executionId);
+      await cancelExecution(live.id);
       setStatus('Stopped.');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

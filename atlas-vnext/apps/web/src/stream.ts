@@ -5,6 +5,7 @@ export interface StreamView {
   waitLabel: string | null;
   sealedResponse: boolean;
   classifiedFailure: string | null;
+  lastStreamedText: string | null;
 }
 
 export function applyStream(
@@ -18,30 +19,38 @@ export function applyStream(
   let waitLabel = view.waitLabel;
   let sealedResponse = view.sealedResponse;
   let classifiedFailure = view.classifiedFailure;
+  let lastStreamedText = view.lastStreamedText;
 
   if (event.type === 'message' && event.message && typeof event.message === 'object' && 'id' in event.message) {
     const next = event.message as Message;
     const messages =
       next.role === 'user' ? snapshot.messages.filter((item) => !item.id.startsWith('local_user_')) : snapshot.messages;
-    snapshot = { ...snapshot, messages: upsert(messages, next) };
+    snapshot = { ...snapshot, messages: upsertMessage(messages, next) };
   }
 
-  if (event.type === 'message.delta' && typeof event.messageId === 'string' && typeof event.content === 'string') {
-    if (!sealedResponse) {
-      snapshot = appendAssistantText(snapshot, event.content, {
-        messageId: event.messageId,
-        executionId: field(event, 'executionId'),
-      });
+  const applyChunk = (chunk: string, ids: { messageId?: string | null; executionId?: string | null }) => {
+    if (!chunk || sealedResponse) return;
+    // Runtime emits paired assistant.delta + message.delta with the same chunk.
+    if (lastStreamedText === chunk) {
+      lastStreamedText = null;
+      return;
     }
+    snapshot = appendAssistantText(snapshot, chunk, ids);
+    lastStreamedText = chunk;
+  };
+
+  if (event.type === 'message.delta' && typeof event.messageId === 'string' && typeof event.content === 'string') {
+    applyChunk(event.content, {
+      messageId: event.messageId,
+      executionId: field(event, 'executionId'),
+    });
   }
 
   if (event.type === 'assistant.delta' && typeof event.text === 'string') {
-    if (!sealedResponse) {
-      snapshot = appendAssistantText(snapshot, event.text, {
-        messageId: field(event, 'messageId'),
-        executionId: field(event, 'executionId') ?? snapshot.executions.at(-1)?.id ?? null,
-      });
-    }
+    applyChunk(event.text, {
+      messageId: field(event, 'messageId'),
+      executionId: field(event, 'executionId') ?? snapshot.executions.at(-1)?.id ?? null,
+    });
     waitLabel = null;
   }
 
@@ -74,6 +83,7 @@ export function applyStream(
     if (!previousLatest || previousLatest.id !== next.id) {
       sealedResponse = false;
       classifiedFailure = null;
+      lastStreamedText = null;
       waitLabel = waitLabel ?? 'Generating…';
     }
     if (next.status === 'failed' && next.failureReason) {
@@ -91,6 +101,7 @@ export function applyStream(
     if (!latest || latest.id !== event.executionId) {
       sealedResponse = false;
       classifiedFailure = null;
+      lastStreamedText = null;
     }
     if (!waitLabel) waitLabel = 'Generating…';
   }
@@ -116,7 +127,7 @@ export function applyStream(
   if (event.type === 'execution.failed' && event.failure && typeof event.failure === 'object' && 'message' in event.failure) {
     classifiedFailure = String((event.failure as { message: string }).message);
   }
-  return { snapshot, waitLabel, sealedResponse, classifiedFailure };
+  return { snapshot, waitLabel, sealedResponse, classifiedFailure, lastStreamedText };
 }
 
 function field(event: StreamEvent, key: string): string | null {
@@ -166,12 +177,43 @@ function upsert<T extends { id: string }>(items: T[], next: T): T[] {
     : [...items, next];
 }
 
+function upsertMessage(items: Message[], next: Message): Message[] {
+  const existing = items.find((item) => item.id === next.id);
+  if (!existing) return [...items, next];
+  const content = next.content ? next.content : existing.content;
+  return items.map((item) => (item.id === next.id ? { ...next, content } : item));
+}
+
+export function liveExecution(
+  busy: boolean,
+  snapshotExecution: ExecutionRecord | null | undefined,
+  inspectedExecution: ExecutionRecord | null | undefined,
+): ExecutionRecord | null {
+  if (busy && snapshotExecution && snapshotExecution.status !== 'completed' && snapshotExecution.status !== 'failed' && snapshotExecution.status !== 'cancelled') {
+    return snapshotExecution;
+  }
+  if (busy && snapshotExecution && inspectedExecution && snapshotExecution.id !== inspectedExecution.id) {
+    return snapshotExecution;
+  }
+  return inspectedExecution ?? snapshotExecution ?? null;
+}
+
+export function executionToStop(
+  busy: boolean,
+  snapshotExecution: ExecutionRecord | null | undefined,
+): ExecutionRecord | null {
+  if (!busy || !snapshotExecution) return null;
+  if (snapshotExecution.status === 'running' || snapshotExecution.status === 'queued') return snapshotExecution;
+  return null;
+}
+
 export function emptyView(conversation: ConversationSnapshot['conversation']): StreamView {
   return {
     snapshot: { conversation, messages: [], executions: [] },
     waitLabel: null,
     sealedResponse: false,
     classifiedFailure: null,
+    lastStreamedText: null,
   };
 }
 
@@ -183,6 +225,7 @@ export function viewFromSnapshot(snapshot: ConversationSnapshot): StreamView {
     waitLabel: null,
     sealedResponse: Boolean(sealed),
     classifiedFailure: latest?.failureReason?.message ?? null,
+    lastStreamedText: null,
   };
 }
 

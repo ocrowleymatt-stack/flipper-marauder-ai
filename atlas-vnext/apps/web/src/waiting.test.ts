@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { citationsFromBackend, isProjectsUnavailable, mutatingHeaders, runtimeWaitingLabel, setCsrfToken } from './api';
-import { applyStream, conversationDisplayTitle, doctorTone, ellipsize, emptyView, runStatusLabel, viewFromSnapshot, visibleAssistantText } from './stream';
+import { applyStream, conversationDisplayTitle, doctorTone, ellipsize, emptyView, executionToStop, liveExecution, runStatusLabel, viewFromSnapshot, visibleAssistantText } from './stream';
 import type { ConversationSnapshot, ExecutionRecord } from './api';
 
 describe('runtime waiting label', () => {
@@ -231,6 +231,59 @@ describe('visible output recovery', () => {
       () => null,
     );
     expect(view.snapshot.messages.some((item) => item.id === 'msg_new' && item.content === 'hello from atlas')).toBe(true);
+  });
+
+  it('assembles paired assistant.delta and message.delta without doubling', () => {
+    let view = emptyView(conversation);
+    view = applyStream(view, 'con_1', { type: 'message', message: {
+      id: 'msg_a', urn: 'u', conversationId: 'con_1', role: 'assistant', content: '', sequence: 1, executionId: 'ex_1', createdAt: 't', updatedAt: 't',
+    } }, () => null);
+    view = applyStream(view, 'con_1', { type: 'assistant.delta', text: 'ATLAS ' }, () => null);
+    view = applyStream(view, 'con_1', { type: 'message.delta', messageId: 'msg_a', content: 'ATLAS ' }, () => null);
+    view = applyStream(view, 'con_1', { type: 'assistant.delta', text: 'OUTPUT VISIBLE' }, () => null);
+    view = applyStream(view, 'con_1', { type: 'message.delta', messageId: 'msg_a', content: 'OUTPUT VISIBLE' }, () => null);
+    expect(visibleAssistantText(view.snapshot.messages)).toBe('ATLAS OUTPUT VISIBLE');
+  });
+
+  it('keeps identical consecutive tokens when they are real model chunks', () => {
+    let view = emptyView(conversation);
+    view = applyStream(view, 'con_1', { type: 'message.delta', messageId: 'msg_a', content: 'la' }, () => null);
+    view = applyStream(view, 'con_1', { type: 'assistant.delta', text: 'la' }, () => null);
+    view = applyStream(view, 'con_1', { type: 'message.delta', messageId: 'msg_a', content: 'la' }, () => null);
+    view = applyStream(view, 'con_1', { type: 'assistant.delta', text: 'la' }, () => null);
+    expect(visibleAssistantText(view.snapshot.messages)).toBe('lala');
+  });
+
+  it('does not wipe streamed text when an empty placeholder message arrives later', () => {
+    let view = emptyView(conversation);
+    view = applyStream(view, 'con_1', { type: 'message.delta', messageId: 'msg_a', content: 'visible output' }, () => null);
+    view = applyStream(view, 'con_1', { type: 'message', message: {
+      id: 'msg_a', urn: 'u', conversationId: 'con_1', role: 'assistant', content: '', sequence: 1, executionId: 'ex_1', createdAt: 't', updatedAt: 't',
+    } }, () => null);
+    expect(visibleAssistantText(view.snapshot.messages)).toBe('visible output');
+  });
+
+  it('stops the live snapshot execution, not a completed inspection', () => {
+    const previous: ExecutionRecord = {
+      id: 'ex_old',
+      status: 'completed',
+      capability: 'nexus/fast',
+      selectedProvider: 'openai',
+      selectedModel: 'gpt-4o',
+      attempts: [],
+      usage: null,
+      failureReason: null,
+      route: null,
+    };
+    const current: ExecutionRecord = {
+      ...previous,
+      id: 'ex_live',
+      status: 'running',
+    };
+    expect(liveExecution(true, current, previous)?.id).toBe('ex_live');
+    expect(executionToStop(true, current)?.id).toBe('ex_live');
+    expect(executionToStop(true, previous)).toBeNull();
+    expect(executionToStop(false, current)).toBeNull();
   });
 
   it('replaces optimistic user turns when the server message arrives', () => {

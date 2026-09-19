@@ -61,6 +61,7 @@ describe('tool lifecycle and journeys', () => {
   it('read-only tool: validate → authorise → execute → provenance, no approval', async () => {
     const { engine: tools, actor, authority } = engine();
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
     const result = await tools.invoke(actor, { toolId: 'retrieval.search', arguments: { query: 'Alpha' } });
     expect(result.invocation.status).toBe('succeeded');
     expect(result.output?.hits).toEqual(expect.any(Array));
@@ -121,6 +122,7 @@ describe('tool lifecycle and journeys', () => {
   it('invalid arguments fail before adapter execution', async () => {
     const { engine: tools, actor, authority } = engine();
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
     const result = await tools.invoke(actor, { toolId: 'retrieval.search', arguments: { query: 1 as never } });
     expect(result.invocation.status).toBe('failed');
     expect(result.invocation.failureReason?.code).toBe('invalid_arguments');
@@ -145,6 +147,7 @@ describe('idempotency and cancellation', () => {
   it('cancels queued work and does not claim cancelled if stop is unconfirmed', async () => {
     const { engine: tools, actor, authority } = engine();
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
     const pending = await tools.invoke(actor, { toolId: 'retrieval.search', arguments: { query: 'Alpha' } });
     expect(pending.invocation.status).toBe('succeeded');
     const cancelled = await tools.cancel(actor, pending.invocation.id);
@@ -197,6 +200,7 @@ describe('tenant isolation', () => {
   it('tenant A cannot read tenant B invocations by guessing ids', async () => {
     const { engine: tools, actor, authority } = engine();
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
     const result = await tools.invoke(actor, { toolId: 'retrieval.search', arguments: { query: 'Alpha' } });
     const other = await tools.get({ tenantId: 'tenant_b', principalId: 'user_b' }, result.invocation.id);
     expect(other).toBeNull();

@@ -6,6 +6,7 @@ import {
   fetchPublicHttp,
   isPrivateIp,
   parsePublicHttpUrl,
+  pinnedLookup,
 } from '../src/public-http.ts';
 import { NodePublicLookup } from '../src/collectors.ts';
 import type { ToolAdapterContext } from '@atlas-vnext/tools';
@@ -27,6 +28,12 @@ describe('public HTTP destinations', () => {
     expect(isPrivateIp('169.254.169.254')).toBe(true);
     expect(isPrivateIp('::1')).toBe(true);
     expect(isPrivateIp('8.8.8.8')).toBe(false);
+    expect(isPrivateIp('64:ff9b::7f00:1')).toBe(true);
+    expect(isPrivateIp('64:ff9b::10.0.0.1')).toBe(true);
+    expect(isPrivateIp('2002:7f00:1::1')).toBe(true);
+    expect(isPrivateIp('2002:c0a8:1::')).toBe(true);
+    expect(isPrivateIp('64:ff9b::808:808')).toBe(false);
+    expect(isPrivateIp('2002:0808:0808::')).toBe(false);
     expect(() => parsePublicHttpUrl('http://localhost/admin')).toThrow(PrivateDestinationError);
     expect(() => parsePublicHttpUrl('http://127.0.0.1/')).toThrow(PrivateDestinationError);
   });
@@ -106,5 +113,42 @@ describe('public HTTP destinations', () => {
     const hits = await collector.lookup({ kind: 'ip', value: '127.0.0.1' });
     expect(hits.some((hit) => hit.source === 'http.document' && /did not fetch/.test(hit.summary))).toBe(true);
     expect(seen).toEqual([]);
+  });
+
+  it('pins DNS lookup to the already-validated addresses', () => {
+    const lookup = pinnedLookup([{ address: '93.184.216.34', family: 4 }]);
+    let address = '';
+    let family = 0;
+    lookup('example.com', { verbatim: true }, (err, result, fam) => {
+      expect(err).toBeNull();
+      address = typeof result === 'string' ? result : result[0]?.address ?? '';
+      family = fam ?? (typeof result === 'string' ? 0 : result[0]?.family ?? 0);
+    });
+    expect(address).toBe('93.184.216.34');
+    expect(family).toBe(4);
+  });
+
+  it('pins the connection to already-validated public addresses', async () => {
+    const seen: Array<{ url: string; addresses: string[] }> = [];
+    const page = await fetchPublicHttp({
+      url: 'https://example.com/page',
+      lookup: publicLookup,
+      transport: async ({ url, addresses }) => {
+        seen.push({ url, addresses: addresses.map((row) => row.address) });
+        return new Response('ok', { status: 200 });
+      },
+    });
+    expect(page.status).toBe(200);
+    expect(seen).toEqual([{ url: 'https://example.com/page', addresses: ['93.184.216.34'] }]);
+  });
+
+  it('refuses NAT64 encodings of private IPv4 before connect', async () => {
+    await expect(
+      fetchPublicHttp({
+        fetch: fetchThat(() => new Response('secret', { status: 200 })),
+        url: 'https://example.com/rebind',
+        lookup: async () => [{ address: '64:ff9b::7f00:1' }],
+      }),
+    ).rejects.toBeInstanceOf(PrivateDestinationError);
   });
 });

@@ -22,10 +22,10 @@ describe('host federated search', () => {
     expect(report.errors.some((row) => row.engine === 'boom')).toBe(true);
   });
 
-  it('keeps Wikipedia plus a second path in live when keys are absent', () => {
+  it('uses Wikipedia only in live when other engines are unconfigured', () => {
     const engines = searchEnginesFromEnv({}, 'live');
-    expect(engines.some((engine) => engine.id === 'wikipedia')).toBe(true);
-    expect(engines.length).toBeGreaterThanOrEqual(2);
+    expect(engines.map((engine) => engine.id)).toEqual(['wikipedia']);
+    expect(engines.some((engine) => engine.id === 'fixture')).toBe(false);
   });
 });
 
@@ -42,6 +42,28 @@ describe('source inspect SSRF', () => {
     await expect(inspect.inspect({ url: 'https://user:pass@example.com/' })).rejects.toThrow(/credentials/i);
     await expect(inspect.inspect({ url: 'http://metadata.google.internal/' })).rejects.toThrow();
     await expect(inspect.inspect({ url: 'http://evil.example/' })).rejects.toThrow(/private/i);
+  });
+
+  it('pins inspect to already-validated public addresses', async () => {
+    const seen: Array<{ url: string; addresses: string[] }> = [];
+    const inspect = new NodeSourceInspect({
+      lookupImpl: async () => [{ address: '8.8.8.8', family: 4 }],
+      transport: async ({ url, addresses }) => {
+        seen.push({ url, addresses: addresses.map((row) => row.address) });
+        return new Response('<title>ok</title>', { status: 200, headers: { 'content-type': 'text/html' } });
+      },
+    });
+    const page = await inspect.inspect({ url: 'https://public.test/page' });
+    expect(page.ok).toBe(true);
+    expect(seen).toEqual([{ url: 'https://public.test/page', addresses: ['8.8.8.8'] }]);
+  });
+
+  it('rejects NAT64 encodings of private IPv4 before connect', async () => {
+    const inspect = new NodeSourceInspect({
+      lookupImpl: async () => [{ address: '64:ff9b::7f00:1', family: 6 }],
+      fetchImpl: async () => new Response('secret', { status: 200, headers: { 'content-type': 'text/plain' } }),
+    });
+    await expect(inspect.inspect({ url: 'https://public.test/rebind' })).rejects.toThrow(/private/i);
   });
 
   it('rejects redirects onto the private network', async () => {

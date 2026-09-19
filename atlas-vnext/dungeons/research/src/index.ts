@@ -172,12 +172,14 @@ export class ResearchService {
 
     let web: WebResearch = emptyWeb();
     if (this.deps.search && this.deps.inspect) {
-      const net = this.deps.authority.decide({
+      const net = this.deps.policy.authorize({
         principal: { principalId: actor.principalId, kind: 'user', tenantId: actor.tenantId, workspaceId: projectId },
         capability: 'network.public',
+        dungeonId: 'research',
+        policy,
         resource: { type: 'artifact', id: projectId, tenantId: brief.tenantId, workspaceId: projectId },
       });
-      if (net.decision === 'ALLOW') {
+      if (net.allowed) {
         web = await this.conductWebResearch(question, options.signal);
       } else {
         web.errors.push({ engine: 'authority', message: 'Public network access denied.' });

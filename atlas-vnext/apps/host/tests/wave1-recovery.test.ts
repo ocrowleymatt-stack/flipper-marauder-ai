@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { Server } from 'node:http';
 import type { PersistenceConfig } from '@atlas-vnext/persistence';
 import { composeSpine, createHost, grantSideEffects, listen, type Spine } from '../src/index.ts';
-import { AuthorityEngine } from '@atlas-vnext/permissions';
+import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
 import { ResearchService } from '@atlas-vnext/dungeon-research';
-import { openDungeonStack, closePersistence } from '../../../tests/helpers/dungeon-stack.ts';
+import { openDungeonStack, closePersistence, storeTenantPolicy } from '../../../tests/helpers/dungeon-stack.ts';
 import { NodeSourceInspect } from '../src/inspect.ts';
 
 const servers: Server[] = [];
@@ -203,6 +203,7 @@ describe('Wave 1 security', () => {
       for (const cap of ['artifact.read', 'artifact.write', 'project.read', 'file.read'] as const) {
         authority.grantTo({ principalId: stack.actor.principalId, tenantId: stack.actor.tenantId, capability: cap });
       }
+      const policy = new EffectivePolicyEngine(authority);
       const research = new ResearchService({
         persistence: stack.persistence,
         projects: stack.projects,
@@ -210,6 +211,39 @@ describe('Wave 1 security', () => {
         context: stack.context,
         runtime: stack.runtime,
         authority,
+        policy,
+        search: {
+          async search() {
+            throw new Error('search must not run');
+          },
+        },
+        inspect: {
+          async inspect() {
+            throw new Error('inspect must not run');
+          },
+        },
+      });
+      const brief = await research.create(stack.actor, {
+        projectId: stack.project.id,
+        question: 'Research the history of the World Wide Web using multiple independent sources.',
+      });
+      await expect(research.run(stack.actor, brief.id)).rejects.toMatchObject({ code: 'insufficient_evidence' });
+    } finally {
+      await closePersistence(stack.persistence);
+    }
+  });
+
+  it('denies web research when stored networkAccess is none', async () => {
+    const stack = await openDungeonStack();
+    try {
+      await storeTenantPolicy(stack, { networkAccess: 'none' });
+      const research = new ResearchService({
+        persistence: stack.persistence,
+        projects: stack.projects,
+        files: stack.files,
+        context: stack.context,
+        runtime: stack.runtime,
+        authority: stack.authority,
         policy: stack.policy,
         search: {
           async search() {

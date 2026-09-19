@@ -217,6 +217,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   const principalId = env.ATLAS_PRINCIPAL_ID?.trim() || (tenantId ? `principal_${tenantId}` : 'principal_local');
 
   const authority = new AuthorityEngine();
+  const policy = new EffectivePolicyEngine(authority);
   authority.grantMembership(principalId, tenantId);
   for (const cap of [
     'conversation.read',
@@ -335,6 +336,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       ...authOptions,
     });
     credentials = bound.credentials;
+    privacy = new PrivacyService({ persistence, authority, policy, ownerPrincipalId: principalId });
     const searchPort = new NodeFederatedSearch(searchEnginesFromEnv(env, mode === 'live' ? 'live' : 'mock'));
     const inspectPort = mode === 'live' ? new NodeSourceInspect() : new FixtureInspect();
     tools = new ToolEngine({
@@ -342,6 +344,8 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       invocations: bound.toolInvocations,
       approvals: bound.toolApprovals,
       authority,
+      policy,
+      resolvePolicy: (actor) => privacy!.runtimeOverlay(actor),
       jobs: bound.jobs,
       events: bound.events,
       limits,
@@ -380,7 +384,6 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     files = new FilesService(persistence, cas);
     projects = new ProjectService(persistence);
     context = new ContextService(persistence);
-    const policy = new EffectivePolicyEngine(authority);
     writing = new WritingService({ persistence, projects, files, context, runtime, authority, policy });
     osint = new OsintService({
       persistence,
@@ -416,7 +419,6 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     );
     websiteStudio = new WebsiteStudioService({ persistence, projects, files, runtime, authority, policy });
     music = new MusicService({ persistence, projects, files, runtime, authority, policy });
-    privacy = new PrivacyService({ persistence, authority, policy, ownerPrincipalId: principalId });
   } else {
     store = openDurableStore(options.dataPath);
     tools = new ToolEngine({

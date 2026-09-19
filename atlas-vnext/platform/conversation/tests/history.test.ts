@@ -77,6 +77,27 @@ describe('conversation history', () => {
     expect(compiled.at(-1)?.content).toContain('turn 39');
   });
 
+  it('truncates a single oversized turn to the character budget', () => {
+    const compiled = compileConversationHistory(
+      [
+        {
+          id: 'm1',
+          urn: 'urn:atlas:message:m1',
+          conversationId: 'c1',
+          role: 'user',
+          content: 'x'.repeat(80),
+          sequence: 0,
+          executionId: null,
+          createdAt: '2026-09-19T00:00:00.000Z',
+          updatedAt: '2026-09-19T00:00:00.000Z',
+        },
+      ],
+      { charBudget: 24 },
+    );
+    expect(compiled).toHaveLength(1);
+    expect(compiled[0]?.content).toHaveLength(24);
+  });
+
   it('feeds prior turns to the executor so anaphora can resolve', async () => {
     const stores = memoryStores();
     const captured: Array<{ prompt: string; history?: Array<{ role: string; content: string }> }> = [];

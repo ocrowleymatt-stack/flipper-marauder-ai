@@ -21,7 +21,13 @@ export function compileConversationHistory(
     const row = eligible[i]!;
     const size = row.content.length;
     if (selected.length >= limit) break;
-    if (chars + size > budget && selected.length > 0) break;
+    if (chars + size > budget) {
+      const remaining = budget - chars;
+      if (selected.length === 0 && remaining > 0) {
+        selected.push({ ...row, content: row.content.slice(0, remaining) });
+      }
+      break;
+    }
     selected.push(row);
     chars += size;
   }

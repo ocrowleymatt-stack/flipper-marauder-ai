@@ -231,7 +231,6 @@ export function searchEnginesFromEnv(
   const searx = env.SEARXNG_BASE_URL?.trim();
   if (searx) engines.push(new SearxngSearchEngine(searx, env.SEARXNG_API_KEY?.trim(), fetchImpl));
   engines.push(new WikipediaSearchEngine(fetchImpl));
-  if (engines.length < 2) engines.push(new FixtureSearchEngine('fixture'));
   return engines;
 }
 

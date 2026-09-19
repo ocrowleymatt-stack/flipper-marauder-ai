@@ -85,9 +85,10 @@ function makeEngine(
 }
 
 describe('callable tool advertisement', () => {
-  it('lists only tools the current principal/tenant is authorised to invoke', () => {
+  it('lists only tools the current principal/tenant is authorised to invoke', async () => {
     const { engine, actor, other, authority } = makeEngine([]);
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
     authority.grantMembership(other.principalId, other.tenantId);
     authority.grantTo({
       principalId: other.principalId,
@@ -95,12 +96,12 @@ describe('callable tool advertisement', () => {
       capability: 'admin.configure',
     });
 
-    const callable = engine.listCallable(actor).map((tool) => tool.id);
+    const callable = (await engine.listCallable(actor)).map((tool) => tool.id);
     expect(callable).toContain('retrieval.search');
     expect(callable).not.toContain('fs.write');
     expect(callable).not.toContain('admin.configure');
 
-    const foreign = engine.listCallable(other).map((tool) => tool.id);
+    const foreign = (await engine.listCallable(other)).map((tool) => tool.id);
     expect(foreign).toContain('admin.configure');
     expect(foreign).not.toContain('retrieval.search');
   });
@@ -110,6 +111,7 @@ describe('cancellation into running tools', () => {
   it('cancels an active read-only invocation when the execution signal aborts', async () => {
     const { engine, actor, authority, invocations } = makeEngine([hangingReadAdapter()]);
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
     const controller = new AbortController();
     const pending = engine.invoke(
       actor,
@@ -180,6 +182,7 @@ describe('bounded adapter execution', () => {
     };
     const { engine, actor, authority, invocations } = makeEngine([ignoringHangAdapter('hang.ignore')], [def]);
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
     const started = Date.now();
     const result = await engine.invoke(actor, { toolId: 'retrieval.hang', arguments: { query: 'Alpha' } });
     expect(Date.now() - started).toBeLessThan(1_000);
@@ -198,6 +201,7 @@ describe('bounded adapter execution', () => {
     };
     const { engine, actor, authority, invocations } = makeEngine([ignoringHangAdapter('hang.ignore')], [def]);
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
     const controller = new AbortController();
     const pending = engine.invoke(
       actor,
@@ -247,6 +251,7 @@ describe('bounded adapter execution', () => {
     };
     const { engine, actor, authority } = makeEngine([hangingReadAdapter()], [def]);
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
     const result = await engine.invoke(actor, { toolId: 'retrieval.slow', arguments: { query: 'Alpha' } });
     expect(result.invocation.status).toBe('failed');
     expect(result.invocation.failureReason?.code).toBe('timeout');
@@ -291,6 +296,7 @@ describe('bounded adapter execution', () => {
       defaultToolTimeoutMs: 50,
     });
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
     const started = Date.now();
     const result = await engine.invoke(actor, { toolId: 'retrieval.hang.ceiling', arguments: { query: 'Alpha' } });
     expect(Date.now() - started).toBeLessThan(1_000);
@@ -329,6 +335,7 @@ describe('command runner occupancy and SIGKILL', () => {
     const { engine, actor, authority } = makeEngine([], [def], { maxToolConcurrency: 1 });
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'shell.execute' });
     authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'tool.invoke.readonly' });
+    authority.grantTo({ principalId: actor.principalId, tenantId: actor.tenantId, capability: 'network.public' });
 
     const first = engine.invoke(actor, {
       toolId: 'shell.hang',

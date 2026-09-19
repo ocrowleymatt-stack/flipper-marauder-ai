@@ -7,14 +7,16 @@ import { looksLikeOsintQuestion, parseOsintTarget, usernameVariants } from '../s
 import { USERNAME_SITES } from '../src/osint/catalog.ts';
 import { probeSpiderfoot } from '../src/osint/spiderfoot.ts';
 
-function inspectScript(script: (url: string) => { status: number; text: string } | 'private'): SourceInspectPort {
+function inspectScript(
+  script: (url: string) => { status: number; text: string; finalUrl?: string } | 'private',
+): SourceInspectPort {
   return {
     async inspect(input: { url: string }): Promise<InspectedSource> {
       const result = script(input.url);
       if (result === 'private') throw new Error('Private or reserved network addresses are not permitted.');
       return {
         requestedUrl: input.url,
-        finalUrl: input.url,
+        finalUrl: result.finalUrl ?? input.url,
         status: result.status,
         ok: result.status >= 200 && result.status < 300,
         contentType: 'text/html',
@@ -117,5 +119,84 @@ describe('Wave 2 OSINT engine', () => {
     const absent = await probeSpiderfoot(null, 'octocat');
     expect(absent?.epistemicKind).toBe('hypothesis');
     expect(absent?.summary).toMatch(/not configured/i);
+  });
+
+  it('does not treat login redirects or challenge interstitials as confirmed profiles', async () => {
+    const lookup = new NodePublicLookup({
+      inspect: inspectScript((url) => {
+        if (url.includes('github.com')) {
+          return {
+            status: 200,
+            text: 'Sign in to GitHub · Password · Forgot password?',
+            finalUrl: 'https://github.com/login?return_to=/octocat',
+          };
+        }
+        if (url.includes('gitlab.com')) {
+          return { status: 200, text: 'Just a moment... Checking your browser before continuing.' };
+        }
+        return { status: 404, text: 'page not found' };
+      }),
+      now: () => '2026-09-19T17:00:00.000Z',
+      sites: USERNAME_SITES.filter((site) => site.id === 'github' || site.id === 'gitlab'),
+      bounds: { maxSites: 2, maxVariants: 1, parallelism: 2, probeTimeoutMs: 500, overallTimeoutMs: 2000, maxSearchHits: 0 },
+    });
+    const hits = await lookup.lookup({ kind: 'username', value: 'octocat' });
+    const github = hits.find((hit) => hit.probe === 'username.github');
+    const gitlab = hits.find((hit) => hit.probe === 'username.gitlab');
+    expect(github?.status).toBe('unknown');
+    expect(github?.status).not.toBe('confirmed');
+    expect(JSON.parse(github?.evidence ?? '{}').retained).toBe(false);
+    expect(gitlab?.status).toBe('blocked');
+    expect(gitlab?.summary).toMatch(/challenge/i);
+    expect(hits.some((hit) => hit.epistemicKind === 'correlation')).toBe(false);
+  });
+
+  it('correlates a handle across distinct platforms, not duplicate hits on one site', () => {
+    const githubA = {
+      source: 'GitHub',
+      probe: 'username.github',
+      url: 'https://github.com/octocat',
+      summary: 'GitHub profile',
+      confidence: 'confirmed' as const,
+      status: 'confirmed' as const,
+      evidence: 'e',
+      epistemicKind: 'observation' as const,
+    };
+    const githubB = {
+      ...githubA,
+      url: 'https://github.com/Octocat',
+      summary: 'GitHub profile variant',
+    };
+    const gitlab = {
+      source: 'GitLab',
+      probe: 'username.gitlab',
+      url: 'https://gitlab.com/octocat',
+      summary: 'GitLab profile',
+      confidence: 'confirmed' as const,
+      status: 'confirmed' as const,
+      evidence: 'e',
+      epistemicKind: 'observation' as const,
+    };
+    const dupOnly = correlateObservations([githubA, githubB]);
+    expect(dupOnly.filter((hit) => hit.source === 'correlation.username')).toHaveLength(0);
+    const cross = correlateObservations([githubA, githubB, gitlab]);
+    const usernameCorr = cross.find((hit) => hit.source === 'correlation.username');
+    expect(usernameCorr?.summary).toMatch(/2 platforms/);
+    expect(usernameCorr?.summary).toMatch(/GitHub/);
+    expect(usernameCorr?.summary).toMatch(/GitLab/);
+    expect(usernameCorr?.summary).not.toMatch(/GitHub, GitHub/);
+  });
+
+  it('honours abort on DNS lookups instead of waiting out the resolver', async () => {
+    const lookup = new NodePublicLookup({
+      inspect: octocatInspect,
+      bounds: { maxSites: 1, maxVariants: 1, parallelism: 1, probeTimeoutMs: 8_000, overallTimeoutMs: 40_000, maxSearchHits: 0 },
+    });
+    const started = Date.now();
+    const hits = await lookup.lookup({ kind: 'ip', value: '8.8.8.8', signal: AbortSignal.abort() });
+    expect(Date.now() - started).toBeLessThan(2000);
+    const ptr = hits.find((hit) => hit.probe === 'ip.ptr');
+    expect(ptr?.status).toBe('error');
+    expect(ptr?.evidence).toMatch(/aborted/);
   });
 });

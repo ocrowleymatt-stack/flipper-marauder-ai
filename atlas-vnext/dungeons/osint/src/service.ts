@@ -141,11 +141,19 @@ export class OsintService {
         value: input.value.trim(),
         signal: input.signal,
       });
-      const blockedPrivate = lookups.some(
-        (hit) =>
-          hit.status === 'blocked' &&
-          (hit.probe === 'ip.validate' || hit.probe === 'url.validate' || hit.source === 'ssrf' || hit.source === 'ip.ssrf'),
-      );
+      const blockedPrivate = lookups.some((hit) => {
+        if (hit.status !== 'blocked') return false;
+        if (hit.probe === 'ip.validate' || hit.probe === 'url.validate' || hit.source === 'ssrf' || hit.source === 'ip.ssrf') {
+          return true;
+        }
+        if (hit.probe === 'dns.a' || hit.probe === 'dns.aaaa') {
+          const hasPublic = lookups.some(
+            (row) => (row.probe === 'dns.a' || row.probe === 'dns.aaaa') && row.status === 'confirmed',
+          );
+          return !hasPublic;
+        }
+        return false;
+      });
       if (blockedPrivate) {
         throw new DungeonError('permission_denied', GENERIC_DENY, 404);
       }
@@ -214,8 +222,17 @@ export class OsintService {
     question: string,
   ): Promise<string | null> {
     const targets = await this.records(actor).list(actor, { workspaceId: projectId, dungeon: 'osint', kind: 'target' });
-    const latest = targets.find((row) => row.conversationId === conversationId && row.status === 'completed');
+    const latest = [...targets]
+      .filter((row) => row.conversationId === conversationId && row.status === 'completed')
+      .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+      .at(-1);
     if (!latest) return null;
+    const research = await this.records(actor).list(actor, { workspaceId: projectId, dungeon: 'research', kind: 'brief' });
+    const latestResearch = [...research]
+      .filter((row) => row.conversationId === conversationId && row.status === 'completed')
+      .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+      .at(-1);
+    if (latestResearch && latestResearch.updatedAt > latest.updatedAt) return null;
     const children = await this.listFindings(actor, latest.id);
     const observations = children.filter((row) => row.kind === 'finding' && row.payload.epistemicKind !== 'hypothesis');
     const confirmed = observations.filter(
@@ -388,6 +405,10 @@ export function parseQuestionTarget(question: string): { kind: OsintTargetKind; 
   if (url) return { kind: 'url', value: url[0]! };
   const email = trimmed.match(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/);
   if (email) return { kind: 'email', value: email[0]! };
+  for (const token of trimmed.split(/\s+/)) {
+    const candidate = token.replace(/^\[/, '').replace(/\][,.]?$/, '').replace(/,$/, '');
+    if (looksLikeIpLiteral(candidate)) return { kind: 'ip', value: candidate };
+  }
   const ip = trimmed.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
   if (ip) return { kind: 'ip', value: ip[0]! };
   const domain = trimmed.match(/\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b/i);
@@ -397,6 +418,12 @@ export function parseQuestionTarget(question: string): { kind: OsintTargetKind; 
   const afterOn = trimmed.match(/\b(?:on|for|against)\s+([A-Za-z0-9._-]{2,64})\s*$/i);
   if (afterOn) return { kind: 'username', value: afterOn[1]!.replace(/^@/, '') };
   return { kind: 'username', value: trimmed.replace(/^.*\b(osint|scan|footprint)\s+(on\s+)?/i, '').trim() || trimmed };
+}
+
+function looksLikeIpLiteral(value: string): boolean {
+  if (!value) return false;
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)) return true;
+  return value.includes(':') && /^[0-9a-f:]+$/i.test(value);
 }
 
 function strongestObservation(hits: PublicLookupResult[]): { summary: string; url?: string; source: string } | null {

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { OsintService, composeOsintReport, looksLikeOsintFollowup, looksLikeOsintRequest } from '../src/index.ts';
+import {
+  OsintService,
+  composeOsintReport,
+  looksLikeOsintFollowup,
+  looksLikeOsintRequest,
+  parseQuestionTarget,
+} from '../src/index.ts';
 import type { PublicLookupPort } from '../src/collector.ts';
 import type { PublicLookupResult } from '@atlas-vnext/contracts';
 import { closePersistence, openDungeonStack, storeTenantPolicy } from '../../../tests/helpers/dungeon-stack.ts';
@@ -268,5 +274,139 @@ describe('OSINT dungeon', () => {
     expect(report).toMatch(/Negative presence checks: npm/);
     expect(report).toMatch(/rate_limited/);
     expect(report).toMatch(/not treated as not-found/);
+  });
+
+  it('parses IPv6 conversation targets as ip, not username', () => {
+    expect(parseQuestionTarget('Run OSINT on 2001:db8::1')).toEqual({ kind: 'ip', value: '2001:db8::1' });
+    expect(parseQuestionTarget('Run OSINT on [2001:db8::1]')).toEqual({ kind: 'ip', value: '2001:db8::1' });
+    expect(parseQuestionTarget('Scan 8.8.8.8')).toEqual({ kind: 'ip', value: '8.8.8.8' });
+  });
+
+  it('fail-closes domains that resolve only to private addresses', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const osint = new OsintService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      runtime: stack.runtime,
+      authority: stack.authority,
+      policy: stack.policy,
+      collector: collector([
+        {
+          source: 'dns.a',
+          probe: 'dns.a',
+          summary: 'intranet.test dns.a resolved only to private/reserved addresses',
+          confidence: 'possible',
+          status: 'blocked',
+          evidence: '{"host":"intranet.test","values":["10.0.0.8"],"blocked":["10.0.0.8"]}',
+          epistemicKind: 'observation',
+        },
+      ]),
+    });
+    await expect(
+      osint.scan(stack.actor, { projectId: stack.project.id, kind: 'domain', value: 'intranet.test', synthesize: false }),
+    ).rejects.toMatchObject({ httpStatus: 404 });
+  });
+
+  it('completes when a private A is accompanied by a public AAAA', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const osint = new OsintService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      runtime: stack.runtime,
+      authority: stack.authority,
+      policy: stack.policy,
+      collector: collector([
+        {
+          source: 'dns.a',
+          probe: 'dns.a',
+          summary: 'dual.test dns.a resolved only to private/reserved addresses',
+          confidence: 'possible',
+          status: 'blocked',
+          evidence: '{"host":"dual.test","values":["10.0.0.8"],"blocked":["10.0.0.8"]}',
+          epistemicKind: 'observation',
+        },
+        {
+          source: 'dns.aaaa',
+          probe: 'dns.aaaa',
+          summary: 'dual.test dns.aaaa 2001:db8::53',
+          confidence: 'confirmed',
+          status: 'confirmed',
+          evidence: '{"host":"dual.test","values":["2001:db8::53"]}',
+          epistemicKind: 'observation',
+        },
+      ]),
+    });
+    const result = await osint.scan(stack.actor, {
+      projectId: stack.project.id,
+      kind: 'domain',
+      value: 'dual.test',
+      synthesize: false,
+    });
+    expect(result.target.status).toBe('completed');
+    expect(result.findings.some((row) => row.payload.probe === 'dns.aaaa' && row.payload.status === 'confirmed')).toBe(true);
+  });
+
+  it('yields OSINT follow-ups when a later research brief owns the conversation', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const osint = new OsintService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      runtime: stack.runtime,
+      authority: stack.authority,
+      policy: stack.policy,
+      collector: collector([
+        {
+          source: 'GitHub',
+          probe: 'username.github',
+          url: 'https://github.com/octocat',
+          summary: 'GitHub profile observed at https://github.com/octocat',
+          confidence: 'confirmed',
+          status: 'confirmed',
+          evidence: '{"url":"https://github.com/octocat"}',
+          contentHash: 'a'.repeat(64),
+          epistemicKind: 'observation',
+        },
+        {
+          source: 'GitLab',
+          probe: 'username.gitlab',
+          url: 'https://gitlab.com/octocat',
+          summary: 'GitLab profile observed at https://gitlab.com/octocat',
+          confidence: 'confirmed',
+          status: 'confirmed',
+          evidence: '{"url":"https://gitlab.com/octocat"}',
+          contentHash: 'b'.repeat(64),
+          epistemicKind: 'observation',
+        },
+      ]),
+    });
+    const conversation = await stack.runtime.createConversation({ projectId: stack.project.id });
+    const handled = await osint.maybeRunFromConversation(stack.actor, {
+      conversationId: conversation.id,
+      projectId: stack.project.id,
+      question: 'Run OSINT on octocat',
+    });
+    expect(handled.handled).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await stack.persistence.forActor(stack.actor).dungeonRecords.create(stack.actor, {
+      workspaceId: stack.project.id,
+      dungeon: 'research',
+      kind: 'brief',
+      title: 'later research brief',
+      status: 'completed',
+      conversationId: conversation.id,
+      payload: { question: 'What is octocat?' },
+    });
+    const sources = await osint.maybeRunFromConversation(stack.actor, {
+      conversationId: conversation.id,
+      projectId: stack.project.id,
+      question: 'Which sources support it?',
+    });
+    expect(sources.handled).toBe(false);
   });
 });

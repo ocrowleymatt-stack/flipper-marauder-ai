@@ -37,6 +37,15 @@ const SOFT_404 = [
   /wikipedia does not have a user page/i,
 ];
 
+const CHALLENGE_PAGE = [
+  /just a moment/i,
+  /attention required/i,
+  /cf-browser-verification/i,
+  /enable javascript and cookies/i,
+  /checking your browser/i,
+  /verify you are human/i,
+];
+
 export class NodePublicLookup implements PublicLookupPort {
   private readonly bounds: typeof OSINT_BOUNDS;
   constructor(private readonly deps: OsintEngineDeps) {
@@ -60,11 +69,12 @@ export class NodePublicLookup implements PublicLookupPort {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.bounds.overallTimeoutMs);
     const onAbort = () => controller.abort();
+    if (input.signal?.aborted) controller.abort();
     input.signal?.addEventListener('abort', onAbort, { once: true });
     try {
       const hits: PublicLookupResult[] = [];
       if (parsed.kind === 'ip') {
-        hits.push(...(await this.lookupIp(parsed.value, now)));
+        hits.push(...(await this.lookupIp(parsed.value, now, controller.signal)));
       } else if (parsed.kind === 'url') {
         hits.push(await this.inspectUrl(parsed.value, 'url.inspect', now, controller.signal));
       } else if (parsed.kind === 'domain' || parsed.kind === 'organisation') {
@@ -101,14 +111,17 @@ export class NodePublicLookup implements PublicLookupPort {
     const sites = (this.deps.sites ?? USERNAME_SITES).slice(0, this.bounds.maxSites);
     return mapPool(sites, this.bounds.parallelism, async (site) => {
       const url = resolveSiteUrl(site, username);
-      return this.inspectPresence(url, `username.${site.id}`, site.site, now, signal, site.soft404);
+      return this.inspectPresence(url, `username.${site.id}`, site.site, now, signal, {
+        soft404: site.soft404,
+        subject: username,
+      });
     });
   }
 
   private async lookupDomain(domain: string, now: string, signal: AbortSignal): Promise<PublicLookupResult[]> {
     const host = domain.replace(/^https?:\/\//, '').split('/')[0]!.toLowerCase();
     const out: PublicLookupResult[] = [];
-    const records = await resolvePublicDns(host, now);
+    const records = await resolvePublicDns(host, now, signal);
     out.push(...records.hits);
     if (records.publicAddresses.length) {
       const cert = await readPublicCertificate(host, records.publicAddresses[0]!, now);
@@ -131,7 +144,7 @@ export class NodePublicLookup implements PublicLookupPort {
     const out: PublicLookupResult[] = [];
     if (domain) {
       try {
-        const mx = await dns.resolveMx(domain);
+        const mx = await withDeadline(dns.resolveMx(domain), signal);
         const hosts = mx
           .sort((a, b) => a.priority - b.priority)
           .slice(0, 6)
@@ -170,19 +183,20 @@ export class NodePublicLookup implements PublicLookupPort {
         'Gravatar',
         now,
         signal,
+        { subject: hash },
       ),
     );
     return out;
   }
 
-  private async lookupIp(value: string, now: string): Promise<PublicLookupResult[]> {
+  private async lookupIp(value: string, now: string, signal?: AbortSignal): Promise<PublicLookupResult[]> {
     if (isPrivateAddress(value) || isIP(value) === 0) {
       return [
         blockedTarget(value, now, 'ip.validate', JSON.stringify({ value, private: isPrivateAddress(value) })),
       ];
     }
     try {
-      const names = await dns.reverse(value);
+      const names = await withDeadline(dns.reverse(value), signal);
       return [
         observation({
           source: 'dns.ptr',
@@ -292,11 +306,13 @@ export class NodePublicLookup implements PublicLookupPort {
     site: string,
     now: string,
     signal: AbortSignal,
-    extraSoft?: string[],
+    options: { soft404?: string[]; subject?: string } = {},
   ): Promise<PublicLookupResult> {
     try {
       const page = await this.deps.inspect.inspect({ url, signal });
-      const text = page.text.replace(/\s+/g, ' ').toLowerCase();
+      const text = page.text.replace(/\s+/g, ' ');
+      const lowered = text.toLowerCase();
+      const finalUrl = page.finalUrl || url;
       if (page.status === 429) {
         return observation({
           source: site,
@@ -324,25 +340,42 @@ export class NodePublicLookup implements PublicLookupPort {
           observedAt: now,
         });
       }
-      const soft = extraSoft?.some((item) => text.includes(item.toLowerCase())) || SOFT_404.some((re) => re.test(text));
-      const present = page.ok && page.status === 200 && !soft && text.length > 0;
+      if (CHALLENGE_PAGE.some((re) => re.test(text))) {
+        return observation({
+          source: site,
+          probe,
+          url: finalUrl,
+          summary: `${site} returned a challenge or interstitial page`,
+          confidence: 'possible',
+          status: 'blocked',
+          httpStatus: page.status,
+          contentHash: page.contentHash,
+          evidence: JSON.stringify({ url, finalUrl, status: page.status, challenge: true }),
+          observedAt: now,
+        });
+      }
+      const retained = !options.subject || urlRetainsSubject(url, finalUrl, options.subject);
+      const soft =
+        options.soft404?.some((item) => lowered.includes(item.toLowerCase())) || SOFT_404.some((re) => re.test(text));
+      const present = page.ok && page.status === 200 && !soft && lowered.length > 0 && retained;
       return observation({
         source: site,
         probe,
-        url: page.finalUrl || url,
-        canonicalUrl: page.finalUrl || url,
-        summary: present ? `${site} profile observed at ${page.finalUrl || url}` : `${site} did not show a public profile`,
+        url: finalUrl,
+        canonicalUrl: finalUrl,
+        summary: present ? `${site} profile observed at ${finalUrl}` : `${site} did not show a public profile`,
         confidence: present ? 'confirmed' : 'possible',
-        status: present ? 'confirmed' : page.status === 404 || soft ? 'negative' : classifyHttp(page.status),
+        status: present ? 'confirmed' : page.status === 404 || soft ? 'negative' : retained ? classifyHttp(page.status) : 'unknown',
         httpStatus: page.status,
         contentHash: page.contentHash,
         evidence: JSON.stringify({
           url,
-          finalUrl: page.finalUrl,
+          finalUrl,
           status: page.status,
           hash: page.contentHash,
           soft404: soft,
-          snippet: page.text.replace(/\s+/g, ' ').trim().slice(0, 400),
+          retained,
+          snippet: text.trim().slice(0, 400),
         }),
         observedAt: now,
         epistemicKind: 'observation',
@@ -367,6 +400,7 @@ export class NodePublicLookup implements PublicLookupPort {
 async function resolvePublicDns(
   host: string,
   now: string,
+  signal?: AbortSignal,
 ): Promise<{ publicAddresses: string[]; hits: PublicLookupResult[] }> {
   const publicAddresses: string[] = [];
   const hits: PublicLookupResult[] = [];
@@ -378,7 +412,7 @@ async function resolvePublicDns(
   ];
   for (const [source, fn] of kinds) {
     try {
-      const values = await fn();
+      const values = await withDeadline(fn(), signal);
       const usable = values.filter((item) => (source === 'dns.a' || source === 'dns.aaaa' ? !isPrivateAddress(item) : true));
       const blocked = values.filter((item) => (source === 'dns.a' || source === 'dns.aaaa' ? isPrivateAddress(item) : false));
       if (source === 'dns.a' || source === 'dns.aaaa') publicAddresses.push(...usable);
@@ -512,4 +546,40 @@ async function mapPool<T, R>(items: T[], parallelism: number, fn: (item: T) => P
   });
   await Promise.all(workers);
   return out;
+}
+
+function urlRetainsSubject(requested: string, finalUrl: string, subject: string): boolean {
+  try {
+    const req = new URL(requested);
+    const fin = new URL(finalUrl);
+    const reqHost = req.hostname.replace(/^www\./, '').toLowerCase();
+    const finHost = fin.hostname.replace(/^www\./, '').toLowerCase();
+    if (reqHost !== finHost) return false;
+    if (/\/(login|log-in|signin|sign-in|signup|sign-up|register|join)(\/|$)/i.test(fin.pathname)) return false;
+    const token = subject.replace(/^@/, '').trim().toLowerCase();
+    if (!token) return false;
+    const hay = `${fin.pathname}${fin.search}`.toLowerCase();
+    return hay.includes(token) || hay.includes(encodeURIComponent(token).toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+async function withDeadline<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) throw new Error('aborted');
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error('aborted'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
 }

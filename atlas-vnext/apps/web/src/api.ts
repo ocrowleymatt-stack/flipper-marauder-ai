@@ -327,7 +327,7 @@ export async function* sendMessage(
     method: 'POST',
     credentials: 'include',
     headers: mutatingHeaders(),
-    body: JSON.stringify({ content, capability }),
+    body: JSON.stringify({ content, capability, tools: true }),
     signal,
   });
   if (!response.ok || !response.body) {

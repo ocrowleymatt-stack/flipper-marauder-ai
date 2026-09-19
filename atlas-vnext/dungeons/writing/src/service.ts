@@ -469,6 +469,8 @@ export class WritingService {
         contextTokens: requirements.contextTokens,
         requireTools: requirements.requireTools,
         allowTools: this.deps.policy.toolsAllowed(policy, Boolean(input.tools)),
+        principalId: actor.principalId,
+        tenantId: actor.tenantId,
         requireReasoning: requirements.requireReasoning,
         requireCode: requirements.requireCode,
         requireVision: requirements.requireVision,

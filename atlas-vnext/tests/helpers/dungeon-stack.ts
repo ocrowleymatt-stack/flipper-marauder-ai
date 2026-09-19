@@ -29,6 +29,25 @@ export function stubRuntime(text = 'Atlas dungeon output.'): ConversationRuntime
     async cancel() {
       return undefined;
     },
+    async postNotice(conversationId: string, content: string) {
+      return {
+        id: `msg_${Math.random().toString(16).slice(2)}`,
+        urn: 'urn:atlas:message:stub',
+        conversationId,
+        role: 'assistant' as const,
+        content,
+        sequence: 0,
+        executionId: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    },
+    async getSnapshot() {
+      return null;
+    },
+    setWorkHandler() {
+      return undefined;
+    },
   } as unknown as ConversationRuntime;
 }
 

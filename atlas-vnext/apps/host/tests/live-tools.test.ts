@@ -147,6 +147,8 @@ describe('live provider tool orchestration', () => {
       content: 'search twice',
       requireTools: true,
       allowTools: true,
+      principalId: spine.principalId,
+      tenantId: spine.tenantId,
     })) {
       events.push(event);
     }

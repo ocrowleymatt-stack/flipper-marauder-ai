@@ -359,6 +359,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
             capability,
             privacy,
             systemPrompt,
+            principalId: conversationActor?.principalId,
+            tenantId: conversationActor?.tenantId,
             requireTools: allowTools,
             allowTools,
           }),

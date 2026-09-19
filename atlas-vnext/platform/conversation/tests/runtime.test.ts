@@ -659,6 +659,99 @@ describe('true-delta streaming, bounded persistence, and abort teardown', () => 
   });
 });
 
+describe('conversation work handler identity', () => {
+  it('passes the requesting principal and never the host owner fallback', async () => {
+    const stores = memoryStores();
+    const events = new MemoryEventBus();
+    const seen: Array<{ principalId?: string; tenantId?: string }> = [];
+    const runtime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events,
+      principalId: 'principal_host_owner',
+      router: fakeRouter((target) => decision(target, ['openai/gpt-4o'])),
+      executor: fakeExecutor(async function* () {
+        yield { type: 'text', text: 'nexus fallback' };
+      }),
+      workHandler: async (input) => {
+        seen.push({ principalId: input.principalId, tenantId: input.tenantId });
+        return { handled: false };
+      },
+    });
+    const conversation = await runtime.createConversation();
+    for await (const _ of runtime.sendMessage(conversation.id, {
+      content: 'Research the history of the World Wide Web using multiple independent sources.',
+      principalId: 'principal_member',
+      tenantId: 'tenant_a',
+    })) {
+      // drain
+    }
+    expect(seen).toEqual([{ principalId: 'principal_member', tenantId: 'tenant_a' }]);
+
+    seen.length = 0;
+    for await (const _ of runtime.sendMessage(conversation.id, {
+      content: 'Research the history of the World Wide Web using multiple independent sources.',
+    })) {
+      // drain
+    }
+    expect(seen).toEqual([{ principalId: undefined, tenantId: conversation.tenantId }]);
+    expect(seen[0]?.principalId).not.toBe('principal_host_owner');
+  });
+
+  it('publishes terminal events when a work handler claims the turn', async () => {
+    const stores = memoryStores();
+    const events = new MemoryEventBus();
+    const runtime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events,
+      router: fakeRouter((target) => decision(target, ['openai/gpt-4o'])),
+      executor: fakeExecutor(async function* () {
+        yield { type: 'text', text: 'must not run' };
+      }),
+      workHandler: async () => ({ handled: true, text: 'Researching: the World Wide Web' }),
+    });
+    const conversation = await runtime.createConversation();
+    for await (const _ of runtime.sendMessage(conversation.id, {
+      content: 'Research the history of the World Wide Web using multiple independent sources.',
+      principalId: 'principal_member',
+      tenantId: 'tenant_a',
+    })) {
+      // drain
+    }
+    const log = await events.history(conversationChannel(conversation.id));
+    expect(log.map((item) => item.type)).toContain('execution.created');
+    expect(log.map((item) => item.type)).toContain('execution.completed');
+
+    const failedRuntime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events,
+      router: fakeRouter((target) => decision(target, ['openai/gpt-4o'])),
+      executor: fakeExecutor(async function* () {
+        yield { type: 'text', text: 'must not run' };
+      }),
+      workHandler: async () => ({ handled: true, failed: true, text: 'Web acquisition did not yield inspectable sources.' }),
+    });
+    const other = await failedRuntime.createConversation();
+    for await (const _ of failedRuntime.sendMessage(other.id, {
+      content: 'Research the history of the World Wide Web using multiple independent sources.',
+      principalId: 'principal_member',
+      tenantId: 'tenant_a',
+    })) {
+      // drain
+    }
+    const failedLog = await events.history(conversationChannel(other.id));
+    expect(failedLog.map((item) => item.type)).toContain('execution.failed');
+  });
+});
+
 async function collectEvents(runtime: ConversationRuntime, conversationId: string) {
   const events = [];
   for await (const event of runtime.sendMessage(conversationId, {

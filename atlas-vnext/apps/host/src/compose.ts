@@ -46,7 +46,7 @@ import {
 import { WritingService } from '@atlas-vnext/dungeon-writing';
 import { OsintService } from '@atlas-vnext/dungeon-osint';
 import { InvestigationService } from '@atlas-vnext/dungeon-investigation';
-import { ResearchService } from '@atlas-vnext/dungeon-research';
+import { ResearchError, ResearchService } from '@atlas-vnext/dungeon-research';
 import { WebsiteStudioService } from '@atlas-vnext/dungeon-website';
 import { MusicService } from '@atlas-vnext/dungeon-music';
 import { PrivacyService } from '@atlas-vnext/dungeon-privacy';
@@ -61,6 +61,9 @@ import { PlatformRateLimiter, ResourceGuard } from './limits.ts';
 import { readTimeoutContract, type TimeoutContract } from './production-config.ts';
 import { raceStartup, raceStartupCloseable, throwIfStartupAborted } from './startup-deadline.ts';
 import { NodePublicLookup } from './collectors.ts';
+import { NodeFederatedSearch, searchEnginesFromEnv } from './search.ts';
+import { FixtureInspect, NodeSourceInspect } from './inspect.ts';
+import { productionToolAdapters } from './web-tools.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
@@ -118,6 +121,8 @@ export interface ComposeOptions {
   openPersistence?: (config: PersistenceConfig) => Promise<PlatformPersistence>;
   casRoot?: string;
   signal?: AbortSignal;
+  /** Override search/inspect independently of the execution plane. Default follows `mode`. */
+  searchMode?: 'live' | 'mock';
 }
 
 /**
@@ -214,6 +219,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
   const principalId = env.ATLAS_PRINCIPAL_ID?.trim() || (tenantId ? `principal_${tenantId}` : 'principal_local');
 
   const authority = new AuthorityEngine();
+  const policy = new EffectivePolicyEngine(authority);
   authority.grantMembership(principalId, tenantId);
   for (const cap of [
     'conversation.read',
@@ -332,17 +338,24 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       ...authOptions,
     });
     credentials = bound.credentials;
+    privacy = new PrivacyService({ persistence, authority, policy, ownerPrincipalId: principalId });
+    const searchMode = options.searchMode ?? (mode === 'live' ? 'live' : 'mock');
+    const searchPort = new NodeFederatedSearch(searchEnginesFromEnv(env, searchMode));
+    const inspectPort = searchMode === 'live' ? new NodeSourceInspect() : new FixtureInspect();
     tools = new ToolEngine({
       registry: toolRegistry,
       invocations: bound.toolInvocations,
       approvals: bound.toolApprovals,
       authority,
+      policy,
+      resolvePolicy: (actor) => privacy!.runtimeOverlay(actor),
       jobs: bound.jobs,
       events: bound.events,
       limits,
       jailRoot,
       env,
       pluginEnabled: (id) => plugins.enabled(id),
+      adapters: productionToolAdapters({ search: searchPort, inspect: inspectPort }),
     });
     runtime = new ConversationRuntime({
       conversations: bound.conversations,
@@ -374,7 +387,6 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     files = new FilesService(persistence, cas);
     projects = new ProjectService(persistence);
     context = new ContextService(persistence);
-    const policy = new EffectivePolicyEngine(authority);
     writing = new WritingService({ persistence, projects, files, context, runtime, authority, policy });
     osint = new OsintService({
       persistence,
@@ -386,10 +398,45 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       collector: new NodePublicLookup(),
     });
     investigation = new InvestigationService({ persistence, projects, files, runtime, authority, policy, context });
-    research = new ResearchService({ persistence, projects, files, context, runtime, authority, policy });
+    research = new ResearchService({
+      persistence,
+      projects,
+      files,
+      context,
+      runtime,
+      authority,
+      policy,
+      search: searchPort,
+      inspect: inspectPort,
+    });
+    runtime.setWorkHandler(async (input) => {
+      const actorPrincipal = input.principalId?.trim();
+      if (!actorPrincipal) return { handled: false };
+      try {
+        return await research!.maybeRunFromConversation(
+          { tenantId: input.tenantId?.trim() || tenantId, principalId: actorPrincipal },
+          {
+            conversationId: input.conversationId,
+            projectId: input.projectId,
+            question: input.content,
+            signal: input.signal,
+          },
+        );
+      } catch (err) {
+        if (err instanceof ResearchError && err.code === 'insufficient_evidence') {
+          return { handled: true, failed: true, text: err.message };
+        }
+        if (err instanceof ResearchError && err.code === 'permission_denied') {
+          return { handled: true, failed: true, text: err.message };
+        }
+        if (err instanceof ResearchError && err.code === 'not_found') {
+          return { handled: false };
+        }
+        throw err;
+      }
+    });
     websiteStudio = new WebsiteStudioService({ persistence, projects, files, runtime, authority, policy });
     music = new MusicService({ persistence, projects, files, runtime, authority, policy });
-    privacy = new PrivacyService({ persistence, authority, policy, ownerPrincipalId: principalId });
   } else {
     store = openDurableStore(options.dataPath);
     tools = new ToolEngine({

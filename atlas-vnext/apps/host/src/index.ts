@@ -6,6 +6,16 @@ export type { HostOptions } from './server.ts';
 export { resolveActor } from './workbench.ts';
 export { handleEstate } from './estate.ts';
 export { NodePublicLookup } from './collectors.ts';
+export {
+  BraveSearchEngine,
+  FixtureSearchEngine,
+  NodeFederatedSearch,
+  SearxngSearchEngine,
+  WikipediaSearchEngine,
+  searchEnginesFromEnv,
+} from './search.ts';
+export { FixtureInspect, NodeSourceInspect } from './inspect.ts';
+export { productionToolAdapters } from './web-tools.ts';
 export { readOperationalLimits, readiness, ShutdownController, SECURITY_HEADERS, securityHeaders } from './ops.ts';
 export {
   readProductionHostConfig,

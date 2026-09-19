@@ -88,7 +88,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState('Loading Workbench.');
+  const [status, setStatus] = useState('Loading Atlas.');
   const [surface, setSurface] = useState<Surface>('conversation');
   const [dungeons, setDungeons] = useState<DungeonRegistration[]>([]);
   const [navOpen, setNavOpen] = useState(false);
@@ -216,7 +216,7 @@ export function App() {
         await enterWorkbench(next);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
-        setStatus('Workbench failed to load.');
+        setStatus('Atlas failed to load.');
       } finally {
         setLoading(false);
       }
@@ -550,7 +550,7 @@ export function App() {
             await enterWorkbench(next);
           } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
-            setStatus('Workbench failed to load.');
+            setStatus('Atlas failed to load.');
           } finally {
             setLoading(false);
           }
@@ -654,30 +654,16 @@ export function App() {
         </div>
       </header>
       <div className={`layout ${navOpen ? 'nav-open' : ''} ${diagnosticsOpen ? 'diagnostics-open' : ''}`}>
-        <nav className="nav" aria-label="Workspace">
+        <nav className="nav" aria-label="Atlas">
           <button type="button" className="primary new-conversation" data-testid="new-conversation" onClick={() => void onCreateConversation()} disabled={projectsAvailable && !projectId}>
-            New conversation
+            New Chat
           </button>
-          <form className="stack compact-form" onSubmit={(event) => void onCreateProject(event)}>
-            <label htmlFor="project-name">New project</label>
-            <input
-              id="project-name"
-              data-testid="new-project-name"
-              value={projectName}
-              onChange={(event) => setProjectName(event.target.value)}
-              placeholder="Named workspace"
-              autoComplete="off"
-            />
-            <button type="submit" className="ghost compact" data-testid="create-project" disabled={!projectName.trim()}>
-              Create project
-            </button>
-          </form>
-          <div className="nav-section">
+          <div className="nav-section" data-testid="nav-chats">
             <div className="row">
-              <h2>Conversations</h2>
+              <h2>Chats</h2>
             </div>
             <label className="sr-only" htmlFor="conversation-search">
-              Search conversations
+              Search chats
             </label>
             <input
               id="conversation-search"
@@ -686,7 +672,7 @@ export function App() {
               placeholder="Search"
             />
             {filteredConversations.length === 0 ? (
-              <p className="muted">No conversations yet.</p>
+              <p className="muted">No chats yet.</p>
             ) : (
               <ul className="plain conversation-list">
                 {filteredConversations.map((conversation) => (
@@ -707,8 +693,25 @@ export function App() {
               </ul>
             )}
           </div>
-          <div className="nav-section">
-            <h2>Project</h2>
+          <div className="nav-section" data-testid="nav-projects">
+            <h2>Projects</h2>
+            <form className="stack compact-form" onSubmit={(event) => void onCreateProject(event)}>
+              <label htmlFor="project-name">New project</label>
+              <input
+                id="project-name"
+                data-testid="new-project-name"
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
+                placeholder="Named workspace"
+                autoComplete="off"
+              />
+              <button type="submit" className="ghost compact" data-testid="create-project" disabled={!projectName.trim()}>
+                Create project
+              </button>
+            </form>
+          </div>
+          <div className="nav-section" data-testid="nav-library">
+            <h2>Library</h2>
             <ul className="plain">
               <li>
                 <button type="button" className={surface === 'files' ? 'active' : ''} data-testid="surface-files" onClick={() => openSurface('files')} disabled={!projectId}>
@@ -720,16 +723,16 @@ export function App() {
                   Context
                 </button>
               </li>
+            </ul>
+          </div>
+          <div className="nav-section" data-testid="nav-dungeons">
+            <h2>Dungeons</h2>
+            <ul className="plain">
               <li>
                 <button type="button" className={surface === 'writing' ? 'active' : ''} data-testid="surface-writing" onClick={() => openSurface('writing')} disabled={!projectId}>
                   Caspa
                 </button>
               </li>
-            </ul>
-          </div>
-          <div className="nav-section">
-            <h2>Tools</h2>
-            <ul className="plain">
               {dungeons
                 .filter((item) => item.featureAvailable && item.id !== 'writing')
                 .map((item) => (

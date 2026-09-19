@@ -4,6 +4,7 @@ import {
   effectivePolicySchema,
   toModelPolicyContext,
   type AutonomyCeiling,
+  type AuthorityResource,
   type DungeonId,
   type EffectivePolicy,
   type ModelPolicyContext,
@@ -128,12 +129,14 @@ export class EffectivePolicyEngine {
     capability: string;
     dungeonId?: DungeonId | null;
     policy: EffectivePolicy;
-    resource?: { type: 'tenant' | 'project' | 'artifact' | 'policy' | 'dungeon'; id?: string; tenantId: string; workspaceId?: string | null };
+    resource?: AuthorityResource;
+    fromPlugin?: boolean;
   }): PolicyDecision {
     const verdict = this.authority.decide({
       principal: input.principal,
       capability: input.capability,
       resource: input.resource ?? { type: 'tenant', tenantId: input.principal.tenantId ?? '' },
+      fromPlugin: input.fromPlugin,
     });
     if (verdict.decision !== 'ALLOW') {
       return {

@@ -189,6 +189,8 @@ export class OsintService {
       content: prompt,
       capability: 'nexus/reason',
       privacy: this.deps.policy.runtimePrivacy(policy),
+      principalId: actor.principalId,
+      tenantId: actor.tenantId,
     })) {
       if (event.type === 'execution') executionId = event.execution.id;
       if (event.type === 'assistant.delta' && event.text) text += event.text;

@@ -23,7 +23,8 @@ export {
   STREAM_PERSIST_CHECKPOINT_BYTES,
   DEFAULT_MAX_TOOL_ROUNDS,
 } from './runtime.ts';
-export type { ConversationRuntimeDeps } from './runtime.ts';
+export type { ConversationRuntimeDeps, ConversationWorkHandler } from './runtime.ts';
+export { compileConversationHistory, HISTORY_CHAR_BUDGET, HISTORY_MESSAGE_LIMIT } from './history.ts';
 export {
   closeAsyncIteratorBounded,
   delayUnref,

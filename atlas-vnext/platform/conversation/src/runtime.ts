@@ -1,6 +1,7 @@
 import {
   DEFAULT_OPERATIONAL_LIMITS,
   type Conversation,
+  type ConversationHistoryTurn,
   type ConversationSnapshot,
   type ConversationStreamEvent,
   type ExecutionAttempt,
@@ -29,6 +30,7 @@ import type {
 } from './ports.ts';
 import { iterateUntilAborted } from './async-iterator.ts';
 import { assertExecutionTransition } from './transitions.ts';
+import { compileConversationHistory } from './history.ts';
 
 /** Base UTF-8 size for the first stream persist checkpoint. Later checkpoints double. */
 export const STREAM_PERSIST_CHECKPOINT_BYTES = 8 * 1024;
@@ -81,6 +83,22 @@ export interface ConversationRuntimeDeps {
   maxToolRounds?: number;
   /** Overall execution deadline; abort is propagated to iterators and in-flight tool waits. */
   executionDeadlineMs?: number;
+  /**
+   * Optional product work (research, dungeons) that can claim a user turn and
+   * return durable assistant text to this conversation. Injected by the host.
+   */
+  workHandler?: ConversationWorkHandler;
+}
+
+export interface ConversationWorkHandler {
+  (input: {
+    conversationId: string;
+    content: string;
+    projectId: string | null;
+    tenantId?: string;
+    principalId?: string;
+    signal?: AbortSignal;
+  }): Promise<{ handled: boolean; text?: string; failed?: boolean } | void>;
 }
 
 export class GeneratedOutputLimitError extends Error {
@@ -99,10 +117,16 @@ export class ConversationRuntime {
   private readonly ids: IdFactory;
   private readonly clock: ConversationClock;
   private readonly inflight = new Map<string, AbortController>();
+  private workHandler: ConversationWorkHandler | undefined;
 
   constructor(private readonly deps: ConversationRuntimeDeps) {
     this.ids = deps.ids ?? new UuidIdFactory();
     this.clock = deps.clock ?? { now: () => new Date().toISOString() };
+    this.workHandler = deps.workHandler;
+  }
+
+  setWorkHandler(handler: ConversationWorkHandler | undefined): void {
+    this.workHandler = handler;
   }
 
   private generatedByteLimit(): number {
@@ -132,6 +156,21 @@ export class ConversationRuntime {
       this.deps.executions.listByConversation(conversationId),
     ]);
     return { conversation, messages, executions };
+  }
+
+  async postNotice(conversationId: string, content: string): Promise<Message> {
+    const conversation = await this.deps.conversations.get(conversationId);
+    if (!conversation) {
+      throw new Error(`Conversation ${conversationId} not found.`);
+    }
+    const message = await this.deps.messages.append({
+      conversationId,
+      role: 'assistant',
+      content,
+      executionId: null,
+    });
+    await this.publish(conversationId, 'message.appended', { messageId: message.id, role: 'assistant' });
+    return message;
   }
 
   async getExecution(executionId: string): Promise<ExecutionRecord | null> {
@@ -182,6 +221,10 @@ export class ConversationRuntime {
       privacy?: 'any' | 'local_only';
       systemPrompt?: string;
       contextTokens?: number;
+      /** Session actor for this turn. Never fall back to the host owner. */
+      principalId?: string;
+      /** Session tenant for this turn. */
+      tenantId?: string;
       requireTools?: boolean;
       /** Product opt-in to advertise and execute tools. Distinct from Nexus `requireTools`. */
       allowTools?: boolean;
@@ -297,10 +340,120 @@ export class ConversationRuntime {
       yield { type: 'execution', execution };
       yield { type: 'execution.started', executionId, capability };
 
+      const listed = await this.deps.messages.list(conversationId);
+      const history: ConversationHistoryTurn[] = compileConversationHistory(listed, {
+        excludeMessageId: userMessage.id,
+      });
+
+      if (this.workHandler) {
+        try {
+          const work = await this.workHandler({
+            conversationId,
+            content,
+            projectId: conversation.projectId ?? null,
+            tenantId: input.tenantId ?? conversation.tenantId,
+            principalId: input.principalId,
+            signal: controller.signal,
+          });
+          if (work && work.handled) {
+            const text =
+              (work.text ?? (work.failed ? 'Work did not complete.' : 'Work completed.')).trim() ||
+              (work.failed ? 'Work did not complete.' : 'Work completed.');
+            assistant = await this.deps.messages.append({
+              conversationId,
+              role: 'assistant',
+              content: text,
+              executionId,
+            });
+            assembled = text;
+            execution = await this.saveExecution({
+              ...execution,
+              assistantMessageId: assistant.id,
+            });
+            await this.publish(conversationId, 'message.appended', {
+              messageId: assistant.id,
+              role: 'assistant',
+            });
+            yield { type: 'message', message: assistant };
+            yield { type: 'execution', execution };
+            yield { type: 'assistant.delta', executionId, text };
+            yield { type: 'message.delta', messageId: assistant.id, content: text };
+            if (work.failed) {
+              const structured = failure('insufficient_evidence', text, false);
+              execution = await this.transition(
+                { ...execution, latencyMs: Date.now() - startedMs },
+                'failed',
+                { failureReason: structured },
+              );
+              settled = true;
+              await this.publish(
+                conversationId,
+                'execution.failed',
+                { executionId, code: structured.code },
+                `execution:${executionId}:failed`,
+              );
+              yield { type: 'execution', execution };
+              yield { type: 'execution.failed', executionId, failure: structured };
+              yield { type: 'error', failure: structured };
+              yield { type: 'done' };
+              return;
+            }
+            execution = await this.transition(
+              { ...execution, latencyMs: Date.now() - startedMs },
+              'completed',
+            );
+            settled = true;
+            await this.publish(
+              conversationId,
+              'execution.completed',
+              {
+                executionId,
+                provider: execution.selectedProvider,
+                model: execution.selectedModel,
+              },
+              `execution:${executionId}:completed`,
+            );
+            yield { type: 'assistant.completed', executionId, text };
+            yield {
+              type: 'execution.completed',
+              executionId,
+              provider: execution.selectedProvider,
+              model: execution.selectedModel,
+            };
+            yield { type: 'execution', execution };
+            yield { type: 'done' };
+            return;
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const structured = failure('provider_error', message, false);
+          execution = await this.transition(
+            { ...execution, latencyMs: Date.now() - startedMs },
+            'failed',
+            { failureReason: structured },
+          );
+          settled = true;
+          await this.publish(
+            conversationId,
+            'execution.failed',
+            { executionId, code: structured.code },
+            `execution:${executionId}:failed`,
+          );
+          yield { type: 'execution', execution };
+          yield { type: 'execution.failed', executionId, failure: structured };
+          yield { type: 'error', failure: structured };
+          yield { type: 'done' };
+          return;
+        }
+      }
+
       let decision: RouteDecision;
       try {
+        const historyText = history.map((turn) => turn.content).join('\n');
         decision = this.deps.router.resolve(capability, {
-          contextTokens: input.contextTokens ?? estimateTokens([input.systemPrompt, content].filter(Boolean).join('\n')),
+          contextTokens:
+            input.contextTokens ??
+            estimateTokens([input.systemPrompt, content, historyText].filter(Boolean).join('\n')),
           traceId: execution.id,
           availableRuntimes: this.deps.availableRuntimes,
           privacy: input.privacy ?? this.deps.privacy ?? 'any',
@@ -412,11 +565,13 @@ export class ConversationRuntime {
       const maxToolRounds = this.deps.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
       let toolRounds = 0;
       const toolsEnabled = input.allowTools === true;
+      const actorPrincipal = input.principalId?.trim() ?? '';
+      const actorTenant = (input.tenantId ?? conversation.tenantId)?.trim() ?? '';
       const callableTools =
-        toolsEnabled && this.deps.toolOrchestrator?.listCallable && conversation.tenantId
+        toolsEnabled && actorPrincipal && actorTenant && this.deps.toolOrchestrator?.listCallable
           ? await this.deps.toolOrchestrator.listCallable({
-              tenantId: conversation.tenantId,
-              principalId: this.deps.principalId ?? conversation.tenantId,
+              tenantId: actorTenant,
+              principalId: actorPrincipal,
               workspaceId: conversation.workspaceId ?? conversation.projectId ?? null,
             })
           : undefined;
@@ -607,6 +762,7 @@ export class ConversationRuntime {
               {
                 prompt: content,
                 systemPrompt: input.systemPrompt,
+                history,
                 signal: controller.signal,
                 traceId: decision.traceId,
                 priorToolResults: prior,
@@ -644,7 +800,7 @@ export class ConversationRuntime {
                 continue;
               }
               yield { type: 'tool.requested', executionId, call: chunk.call };
-              if (!this.deps.toolOrchestrator || !conversation.tenantId) {
+              if (!this.deps.toolOrchestrator || !actorPrincipal || !actorTenant) {
                 continue;
               }
               if (toolRounds >= maxToolRounds) {
@@ -652,8 +808,8 @@ export class ConversationRuntime {
                 continue;
               }
               const handled = await this.deps.toolOrchestrator.handleCall({
-                  tenantId: conversation.tenantId,
-                  principalId: this.deps.principalId ?? conversation.tenantId,
+                  tenantId: actorTenant,
+                  principalId: actorPrincipal,
                   workspaceId: conversation.workspaceId ?? conversation.projectId ?? null,
                   conversationId,
                   executionId,

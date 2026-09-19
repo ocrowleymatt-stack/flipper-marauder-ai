@@ -508,11 +508,13 @@ export class ConversationRuntime {
       const maxToolRounds = this.deps.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
       let toolRounds = 0;
       const toolsEnabled = input.allowTools === true;
+      const actorPrincipal = input.principalId?.trim() ?? '';
+      const actorTenant = (input.tenantId ?? conversation.tenantId)?.trim() ?? '';
       const callableTools =
-        toolsEnabled && this.deps.toolOrchestrator?.listCallable && conversation.tenantId
+        toolsEnabled && actorPrincipal && actorTenant && this.deps.toolOrchestrator?.listCallable
           ? await this.deps.toolOrchestrator.listCallable({
-              tenantId: conversation.tenantId,
-              principalId: this.deps.principalId ?? conversation.tenantId,
+              tenantId: actorTenant,
+              principalId: actorPrincipal,
               workspaceId: conversation.workspaceId ?? conversation.projectId ?? null,
             })
           : undefined;
@@ -741,7 +743,7 @@ export class ConversationRuntime {
                 continue;
               }
               yield { type: 'tool.requested', executionId, call: chunk.call };
-              if (!this.deps.toolOrchestrator || !conversation.tenantId) {
+              if (!this.deps.toolOrchestrator || !actorPrincipal || !actorTenant) {
                 continue;
               }
               if (toolRounds >= maxToolRounds) {
@@ -749,8 +751,8 @@ export class ConversationRuntime {
                 continue;
               }
               const handled = await this.deps.toolOrchestrator.handleCall({
-                  tenantId: conversation.tenantId,
-                  principalId: this.deps.principalId ?? conversation.tenantId,
+                  tenantId: actorTenant,
+                  principalId: actorPrincipal,
                   workspaceId: conversation.workspaceId ?? conversation.projectId ?? null,
                   conversationId,
                   executionId,

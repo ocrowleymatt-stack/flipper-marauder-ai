@@ -86,7 +86,7 @@ describe('model/tool loop', () => {
     Object.assign(conversation, { tenantId: 'tenant_a' });
     await stores.conversations.save(conversation);
     const events = [];
-    for await (const event of runtime.sendMessage(conversation.id, { content: 'search please', allowTools: true })) {
+    for await (const event of runtime.sendMessage(conversation.id, { content: 'search please', allowTools: true, principalId: 'user_a' })) {
       events.push(event);
     }
     expect(calls).toHaveLength(1);
@@ -206,7 +206,7 @@ describe('model/tool loop', () => {
     Object.assign(conversation, { tenantId: 'tenant_a' });
     await stores.conversations.save(conversation);
     const events = [];
-    for await (const event of runtime.sendMessage(conversation.id, { content: 'search twice', allowTools: true })) {
+    for await (const event of runtime.sendMessage(conversation.id, { content: 'search twice', allowTools: true, principalId: 'user_a' })) {
       events.push(event);
     }
     expect(calls.map((call) => call.id)).toEqual(['call_1', 'call_2']);
@@ -277,7 +277,7 @@ describe('model/tool loop', () => {
     const conversation = await runtime.createConversation();
     Object.assign(conversation, { tenantId: 'tenant_a' });
     await stores.conversations.save(conversation);
-    for await (const _event of runtime.sendMessage(conversation.id, { content: 'search then answer', allowTools: true })) {
+    for await (const _event of runtime.sendMessage(conversation.id, { content: 'search then answer', allowTools: true, principalId: 'user_a' })) {
       // drain
     }
     const snapshot = await runtime.getSnapshot(conversation.id);
@@ -345,7 +345,7 @@ describe('model/tool loop', () => {
     Object.assign(conversation, { tenantId: 'tenant_a' });
     await stores.conversations.save(conversation);
     const events = [];
-    for await (const event of runtime.sendMessage(conversation.id, { content: 'keep searching', allowTools: true })) {
+    for await (const event of runtime.sendMessage(conversation.id, { content: 'keep searching', allowTools: true, principalId: 'user_a' })) {
       events.push(event);
     }
     expect(calls).toEqual(['call_1']);
@@ -432,7 +432,7 @@ describe('model/tool loop', () => {
     const conversation = await runtime.createConversation();
     Object.assign(conversation, { tenantId: 'tenant_a' });
     await stores.conversations.save(conversation);
-    const gen = runtime.sendMessage(conversation.id, { content: 'cancel later', allowTools: true });
+    const gen = runtime.sendMessage(conversation.id, { content: 'cancel later', allowTools: true, principalId: 'user_a' });
     const started = Date.now();
     let executionId: string | undefined;
     for (;;) {
@@ -514,7 +514,7 @@ describe('model/tool loop', () => {
     Object.assign(conversation, { tenantId: 'tenant_a' });
     await stores.conversations.save(conversation);
     const events = [];
-    for await (const event of runtime.sendMessage(conversation.id, { content: 'second fails', allowTools: true })) {
+    for await (const event of runtime.sendMessage(conversation.id, { content: 'second fails', allowTools: true, principalId: 'user_a' })) {
       events.push(event);
     }
     expect(events.some((event) => event.type === 'tool.lifecycle' && event.status === 'failed')).toBe(true);
@@ -595,7 +595,7 @@ describe('model/tool loop', () => {
     await stores.conversations.save(conversation);
     const events = [];
     const started = Date.now();
-    for await (const event of runtime.sendMessage(conversation.id, { content: 'deadline later', allowTools: true })) {
+    for await (const event of runtime.sendMessage(conversation.id, { content: 'deadline later', allowTools: true, principalId: 'user_a' })) {
       events.push(event);
     }
     expect(Date.now() - started).toBeLessThan(1_500);
@@ -670,7 +670,7 @@ describe('model/tool loop', () => {
     const conversation = await runtime.createConversation();
     Object.assign(conversation, { tenantId: 'tenant_a' });
     await stores.conversations.save(conversation);
-    for await (const _event of runtime.sendMessage(conversation.id, { content: 'search', requireTools: true, allowTools: true })) {
+    for await (const _event of runtime.sendMessage(conversation.id, { content: 'search', requireTools: true, allowTools: true, principalId: 'user_a' })) {
       // drain
     }
     expect(seen).toHaveLength(2);
@@ -716,7 +716,7 @@ describe('model/tool loop', () => {
     const conversation = await runtime.createConversation();
     Object.assign(conversation, { tenantId: 'tenant_a' });
     await stores.conversations.save(conversation);
-    for await (const _event of runtime.sendMessage(conversation.id, { content: 'hi', requireTools: true, allowTools: true })) {
+    for await (const _event of runtime.sendMessage(conversation.id, { content: 'hi', requireTools: true, allowTools: true, principalId: 'user_a' })) {
       // drain
     }
     expect(seenTools).toEqual([['retrieval.search']]);
@@ -848,7 +848,7 @@ describe('model/tool loop', () => {
     const conversation = await runtime.createConversation();
     Object.assign(conversation, { tenantId: 'tenant_a' });
     await stores.conversations.save(conversation);
-    const gen = runtime.sendMessage(conversation.id, { content: 'hang', allowTools: true });
+    const gen = runtime.sendMessage(conversation.id, { content: 'hang', allowTools: true, principalId: 'user_a' });
     let executionId: string | undefined;
     const events = [];
     for (;;) {
@@ -912,7 +912,7 @@ describe('model/tool loop', () => {
     const conversation = await runtime.createConversation();
     Object.assign(conversation, { tenantId: 'tenant_a' });
     await stores.conversations.save(conversation);
-    const gen = runtime.sendMessage(conversation.id, { content: 'mutate', allowTools: true });
+    const gen = runtime.sendMessage(conversation.id, { content: 'mutate', allowTools: true, principalId: 'user_a' });
     let executionId: string | undefined;
     const events = [];
     for (;;) {
@@ -989,7 +989,7 @@ describe('model/tool loop', () => {
     const conversation = await runtime.createConversation();
     Object.assign(conversation, { tenantId: 'tenant_a' });
     await stores.conversations.save(conversation);
-    for await (const _event of runtime.sendMessage(conversation.id, { content: 'stay', allowTools: true })) {
+    for await (const _event of runtime.sendMessage(conversation.id, { content: 'stay', allowTools: true, principalId: 'user_a' })) {
       // drain
     }
     expect(routes).toEqual(['openai/gpt-4o', 'openai/gpt-4o']);
@@ -1056,7 +1056,7 @@ describe('model/tool loop', () => {
     Object.assign(conversation, { tenantId: 'tenant_a' });
     await stores.conversations.save(conversation);
     const events = [];
-    for await (const event of runtime.sendMessage(conversation.id, { content: 'stay after reasoning', allowTools: true })) {
+    for await (const event of runtime.sendMessage(conversation.id, { content: 'stay after reasoning', allowTools: true, principalId: 'user_a' })) {
       events.push(event);
     }
     expect(providers).toEqual(['openai', 'openai', 'openai']);
@@ -1071,5 +1071,134 @@ describe('model/tool loop', () => {
     expect(attemptRecords.some((attempt) => attempt.emittedVisibleOutput)).toBe(true);
     expect(snapshot?.executions[0]?.status).toBe('failed');
     expect(snapshot?.messages.at(-1)?.role).toBe('user');
+  });
+
+  it('authorises tools as the sendMessage principal and never the host owner', async () => {
+    const stores = memoryStores();
+    const seen: Array<{ principalId: string; tenantId: string; op: 'list' | 'call' }> = [];
+    const orchestrator: ToolOrchestrator = {
+      async listCallable(input) {
+        seen.push({ principalId: input.principalId, tenantId: input.tenantId, op: 'list' });
+        return [
+          {
+            id: 'retrieval.search',
+            description: 'search',
+            inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+          },
+        ];
+      },
+      async handleCall(input) {
+        seen.push({ principalId: input.principalId, tenantId: input.tenantId, op: 'call' });
+        return { invocationId: 'inv_1', toolId: input.call.toolId, status: 'succeeded', output: { ok: true } };
+      },
+    };
+    const executor: ModelExecutor = {
+      async *execute(_decision, context, observer) {
+        observer?.onAttempt({
+          index: 1,
+          provider: 'openai',
+          model: 'gpt-4o',
+          outcome: 'started',
+          error: null,
+          emittedVisibleOutput: false,
+        });
+        if (!context.priorToolResults?.length) {
+          yield {
+            type: 'tool_call',
+            call: { id: 'call_1', toolId: 'retrieval.search', arguments: { query: 'one' } },
+          } satisfies StreamChunk;
+        } else {
+          yield { type: 'text', text: 'done' };
+        }
+        observer?.onAttempt({
+          index: 1,
+          provider: 'openai',
+          model: 'gpt-4o',
+          outcome: 'succeeded',
+          error: null,
+          emittedVisibleOutput: Boolean(context.priorToolResults?.length),
+        });
+        observer?.onSelected?.({ provider: 'openai', model: 'gpt-4o' });
+      },
+    };
+    const runtime = new ConversationRuntime({
+      ...stores,
+      events: new MemoryEventBus(),
+      router: { resolve: () => decision() } satisfies CapabilityRouter,
+      executor,
+      toolOrchestrator: orchestrator,
+      principalId: 'principal_host_owner',
+    });
+    const conversation = await runtime.createConversation();
+    Object.assign(conversation, { tenantId: 'tenant_a' });
+    await stores.conversations.save(conversation);
+    for await (const _ of runtime.sendMessage(conversation.id, {
+      content: 'search please',
+      allowTools: true,
+      principalId: 'principal_member',
+      tenantId: 'tenant_a',
+    })) {
+      // drain
+    }
+    expect(seen).toEqual([
+      { principalId: 'principal_member', tenantId: 'tenant_a', op: 'list' },
+      { principalId: 'principal_member', tenantId: 'tenant_a', op: 'call' },
+    ]);
+  });
+
+  it('does not advertise or execute tools when sendMessage omits the session principal', async () => {
+    const stores = memoryStores();
+    const orchestrator: ToolOrchestrator = {
+      async listCallable() {
+        throw new Error('listCallable must not run without a session principal');
+      },
+      async handleCall() {
+        throw new Error('handleCall must not run without a session principal');
+      },
+    };
+    const executor: ModelExecutor = {
+      async *execute(_decision, context, observer) {
+        expect(context.tools).toBeUndefined();
+        observer?.onAttempt({
+          index: 1,
+          provider: 'openai',
+          model: 'gpt-4o',
+          outcome: 'started',
+          error: null,
+          emittedVisibleOutput: false,
+        });
+        yield {
+          type: 'tool_call',
+          call: { id: 'call_1', toolId: 'retrieval.search', arguments: { query: 'one' } },
+        } satisfies StreamChunk;
+        yield { type: 'text', text: 'no tools' };
+        observer?.onAttempt({
+          index: 1,
+          provider: 'openai',
+          model: 'gpt-4o',
+          outcome: 'succeeded',
+          error: null,
+          emittedVisibleOutput: true,
+        });
+        observer?.onSelected?.({ provider: 'openai', model: 'gpt-4o' });
+      },
+    };
+    const runtime = new ConversationRuntime({
+      ...stores,
+      events: new MemoryEventBus(),
+      router: { resolve: () => decision() } satisfies CapabilityRouter,
+      executor,
+      toolOrchestrator: orchestrator,
+      principalId: 'principal_host_owner',
+    });
+    const conversation = await runtime.createConversation();
+    Object.assign(conversation, { tenantId: 'tenant_a' });
+    await stores.conversations.save(conversation);
+    const events = [];
+    for await (const event of runtime.sendMessage(conversation.id, { content: 'search please', allowTools: true })) {
+      events.push(event);
+    }
+    expect(events.some((event) => event.type === 'tool.lifecycle')).toBe(false);
+    expect(events.some((event) => event.type === 'assistant.completed' && event.text.includes('no tools'))).toBe(true);
   });
 });

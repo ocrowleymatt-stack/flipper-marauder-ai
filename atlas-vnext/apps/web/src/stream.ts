@@ -364,3 +364,35 @@ export function visibleAssistantText(messages: Array<{ role: string; content: st
     .map((item) => item.content)
     .join('\n');
 }
+
+export function liveExecution(
+  busy: boolean,
+  snapshotExecution: ExecutionRecord | null | undefined,
+  inspectedExecution: ExecutionRecord | null | undefined,
+): ExecutionRecord | null {
+  if (busy && snapshotExecution && snapshotExecution.status !== 'completed' && snapshotExecution.status !== 'failed' && snapshotExecution.status !== 'cancelled') {
+    return snapshotExecution;
+  }
+  if (busy && snapshotExecution && inspectedExecution && snapshotExecution.id !== inspectedExecution.id) {
+    return snapshotExecution;
+  }
+  return inspectedExecution ?? snapshotExecution ?? null;
+}
+
+export function executionToStop(
+  busy: boolean,
+  snapshotExecution: ExecutionRecord | null | undefined,
+): ExecutionRecord | null {
+  if (!busy || !snapshotExecution) return null;
+  if (snapshotExecution.status === 'running' || snapshotExecution.status === 'queued') return snapshotExecution;
+  return null;
+}
+
+export function approvalAuthorityLine(tool: {
+  risk: string;
+  sideEffectClass: string;
+  requiredCapabilities: string[];
+}): string {
+  const caps = tool.requiredCapabilities.length > 0 ? tool.requiredCapabilities.join(', ') : 'none';
+  return `Risk ${tool.risk} · ${tool.sideEffectClass} · Authority ${caps}`;
+}

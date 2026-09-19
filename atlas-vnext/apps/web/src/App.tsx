@@ -42,11 +42,14 @@ import { MarkdownBody } from './markdown';
 import { playCue, prefersReducedMotion } from './experience';
 import {
   applyStream,
+  approvalAuthorityLine,
   conversationDisplayTitle,
   doctorTone,
   ellipsize,
   emptyView,
   ensureView,
+  executionToStop,
+  liveExecution,
   runStatusLabel,
   viewFromSnapshot,
   type StreamView,
@@ -106,7 +109,8 @@ export function App() {
   const draftRef = useRef('');
 
   const snapshot = view?.snapshot ?? null;
-  const latestExecution = inspection?.execution ?? snapshot?.executions.at(-1) ?? null;
+  const snapshotExecution = snapshot?.executions.at(-1) ?? null;
+  const latestExecution = liveExecution(busy, snapshotExecution, inspection?.execution);
   const awaiting = tools.filter((item) => item.awaitingApproval);
   const runLabel = busy ? 'Generating…' : runStatusLabel(latestExecution?.status, awaiting.length > 0);
   const currentProject = projects.find((item) => item.id === projectId) ?? null;
@@ -365,8 +369,17 @@ export function App() {
       for await (const event of sendMessage(conversationId, content, selected, abort.signal)) {
         if (abort.signal.aborted) break;
         setView((current) => {
-          if (!current) return current;
-          return applyStream(current, conversationId, event, runtimeWaitingLabel);
+          const base =
+            current ??
+            emptyView({
+              id: conversationId,
+              urn: '',
+              title: 'New conversation',
+              projectId,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+          return applyStream(base, conversationId, event, runtimeWaitingLabel);
         });
         if (event.type === 'tool.lifecycle') {
           await listConversationTools(conversationId)
@@ -420,9 +433,9 @@ export function App() {
 
   async function onStop() {
     abortRef.current?.abort();
-    const executionId = latestExecution?.id;
-    if (executionId && (latestExecution?.status === 'running' || latestExecution?.status === 'queued' || busy)) {
-      await cancelExecution(executionId).catch(() => undefined);
+    const live = executionToStop(busy, snapshot?.executions.at(-1));
+    if (live) {
+      await cancelExecution(live.id).catch(() => undefined);
     }
     setBusy(false);
     setStatus('Stopped.');
@@ -1143,15 +1156,18 @@ function ApprovalCard({
   tool: ToolPresentation;
   onDecide: (id: string, decision: 'approve' | 'deny') => Promise<void>;
 }) {
+  const desc = `${tool.title} ${tool.toolId} ${tool.argumentSummary} risk ${tool.risk}`;
   return (
-    <section className="approval" aria-label={`Approval required for ${tool.title}`}>
+    <section className="approval" aria-label={`Approval required for ${tool.toolId}`}>
       <h3>Approval required</h3>
       <p>
-        <strong>{tool.title}</strong> wants to run on {tool.resource ?? 'this project'}.
+        <strong>{tool.title}</strong> wants to run <code>{tool.toolId}</code> on {tool.resource ?? 'this project'}.
       </p>
       <p className="meta">{tool.argumentSummary}</p>
+      <p className="meta">{approvalAuthorityLine(tool)}</p>
+      <p className="muted">Buttons do not grant permission. The host checks the session principal and Authority.</p>
       <div className="row">
-        <button type="button" className="primary" onClick={() => void onDecide(tool.id, 'approve')}>
+        <button type="button" className="primary" title={desc} onClick={() => void onDecide(tool.id, 'approve')}>
           Approve
         </button>
         <button type="button" className="ghost" onClick={() => void onDecide(tool.id, 'deny')}>

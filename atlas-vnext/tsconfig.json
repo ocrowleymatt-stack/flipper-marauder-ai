@@ -53,5 +53,9 @@
     "apps/host/**/*.ts",
     "tests/**/*.ts",
     "vitest.config.ts"
+  ],
+  "exclude": [
+    "**/node_modules/**",
+    "apps/host/tests/**/*.browser.test.ts"
   ]
 }

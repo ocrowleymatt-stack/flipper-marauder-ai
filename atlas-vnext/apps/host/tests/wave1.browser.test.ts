@@ -115,27 +115,34 @@ describe.skipIf(!enabled)('Wave 1 Atlas-first UI', { timeout: 240_000 }, () => {
       await page.getByTestId('assistant-output').first().waitFor({ timeout: 45_000 });
       await page.getByTestId('composer-draft').fill("What did I say my dog's name was?");
       await page.getByTestId('composer-send').click();
-      await page.getByTestId('assistant-output').filter({ hasText: 'ORPHEUS-731' }).waitFor({ timeout: 45_000 });
+      const remembered = page.getByTestId('assistant-output').filter({ hasText: 'ORPHEUS-731' });
+      await remembered.last().waitFor({ timeout: 45_000 });
+      expect(await remembered.count()).toBeGreaterThanOrEqual(1);
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.getByTestId('workbench-shell').waitFor({ timeout: 30_000 });
-      await page.getByTestId('assistant-output').filter({ hasText: 'ORPHEUS-731' }).waitFor({ timeout: 20_000 });
+      await remembered.last().waitFor({ timeout: 20_000 });
+      expect(await remembered.count()).toBeGreaterThanOrEqual(1);
       await page.screenshot({ path: join(shotDir, '07-wave1-memory.png'), fullPage: true });
 
       await page.getByTestId('composer-draft').fill(
         'Research the early history of the World Wide Web using multiple independent sources. Identify the strongest established facts, any material disagreement between sources, and remaining uncertainty.',
       );
       await page.getByTestId('composer-send').click();
-      await page.getByTestId('assistant-output').filter({ hasText: /Researching:|Sources inspected/i }).waitFor({
-        timeout: 90_000,
-      });
+      await page
+        .getByTestId('assistant-output')
+        .filter({ hasText: /Researching:|Sources inspected/i })
+        .last()
+        .waitFor({
+          timeout: 90_000,
+        });
       await page.getByTestId('composer-draft').fill('Which of those findings has the strongest evidence?');
       await page.getByTestId('composer-send').click();
-      await page.getByTestId('assistant-output').filter({ hasText: /strongest/i }).waitFor({ timeout: 45_000 });
+      await page.getByTestId('assistant-output').filter({ hasText: /strongest/i }).last().waitFor({ timeout: 45_000 });
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.getByTestId('workbench-shell').waitFor({ timeout: 30_000 });
       await page.getByTestId('composer-draft').fill('What were we researching?');
       await page.getByTestId('composer-send').click();
-      await page.getByTestId('assistant-output').filter({ hasText: /World Wide Web/i }).waitFor({ timeout: 45_000 });
+      await page.getByTestId('assistant-output').filter({ hasText: /World Wide Web/i }).last().waitFor({ timeout: 45_000 });
       await page.getByTestId('diagnostics-toggle').click();
       await page.getByRole('heading', { name: 'Run details' }).waitFor();
       await page.screenshot({ path: join(shotDir, '08-wave1-run-details.png'), fullPage: true });

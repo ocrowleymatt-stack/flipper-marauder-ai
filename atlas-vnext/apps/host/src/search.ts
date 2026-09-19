@@ -188,7 +188,10 @@ export class WikipediaSearchEngine implements SearchEngine {
 }
 
 export class NodeFederatedSearch implements FederatedSearchPort {
-  constructor(private readonly engines: SearchEngine[]) {}
+  constructor(
+    private readonly engines: SearchEngine[],
+    private readonly timeoutMs: number = SEARCH_TIMEOUT_MS,
+  ) {}
 
   async search(input: { query: string; count?: number; signal?: AbortSignal }): Promise<SearchReport> {
     const query = input.query.trim();
@@ -201,11 +204,12 @@ export class NodeFederatedSearch implements FederatedSearchPort {
     const lists: SearchHit[][] = [];
     const errors: SearchReport['errors'] = [];
     const engines: string[] = [];
+    const signal = mergeAbort(input.signal, this.timeoutMs);
     await Promise.all(
       this.engines.map(async (engine) => {
         engines.push(engine.id);
         try {
-          const hits = await withTimeout(engine.search(query, count, input.signal), SEARCH_TIMEOUT_MS);
+          const hits = await withTimeout(engine.search(query, count, signal), this.timeoutMs);
           lists.push(hits);
         } catch (err) {
           errors.push({ engine: engine.id, message: err instanceof Error ? err.message : String(err) });
@@ -235,21 +239,10 @@ export function searchEnginesFromEnv(
 }
 
 function mergeAbort(signal: AbortSignal | undefined, ms: number): AbortSignal {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  const onAbort = () => {
-    clearTimeout(timer);
-    controller.abort();
-  };
-  if (signal) {
-    if (signal.aborted) {
-      clearTimeout(timer);
-      controller.abort();
-    } else {
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
-  }
-  return controller.signal;
+  const timeout = AbortSignal.timeout(ms);
+  if (!signal) return timeout;
+  if (signal.aborted) return signal;
+  return AbortSignal.any([signal, timeout]);
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

@@ -386,6 +386,12 @@ export class ConversationRuntime {
                 { failureReason: structured },
               );
               settled = true;
+              await this.publish(
+                conversationId,
+                'execution.failed',
+                { executionId, code: structured.code },
+                `execution:${executionId}:failed`,
+              );
               yield { type: 'execution', execution };
               yield { type: 'execution.failed', executionId, failure: structured };
               yield { type: 'error', failure: structured };
@@ -397,6 +403,16 @@ export class ConversationRuntime {
               'completed',
             );
             settled = true;
+            await this.publish(
+              conversationId,
+              'execution.completed',
+              {
+                executionId,
+                provider: execution.selectedProvider,
+                model: execution.selectedModel,
+              },
+              `execution:${executionId}:completed`,
+            );
             yield { type: 'assistant.completed', executionId, text };
             yield {
               type: 'execution.completed',
@@ -417,6 +433,12 @@ export class ConversationRuntime {
             { failureReason: structured },
           );
           settled = true;
+          await this.publish(
+            conversationId,
+            'execution.failed',
+            { executionId, code: structured.code },
+            `execution:${executionId}:failed`,
+          );
           yield { type: 'execution', execution };
           yield { type: 'execution.failed', executionId, failure: structured };
           yield { type: 'error', failure: structured };
@@ -427,8 +449,11 @@ export class ConversationRuntime {
 
       let decision: RouteDecision;
       try {
+        const historyText = history.map((turn) => turn.content).join('\n');
         decision = this.deps.router.resolve(capability, {
-          contextTokens: input.contextTokens ?? estimateTokens([input.systemPrompt, content].filter(Boolean).join('\n')),
+          contextTokens:
+            input.contextTokens ??
+            estimateTokens([input.systemPrompt, content, historyText].filter(Boolean).join('\n')),
           traceId: execution.id,
           availableRuntimes: this.deps.availableRuntimes,
           privacy: input.privacy ?? this.deps.privacy ?? 'any',

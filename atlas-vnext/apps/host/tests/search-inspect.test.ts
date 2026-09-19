@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { SearchHit } from '@atlas-vnext/contracts';
 import { FixtureInspect, NodeFederatedSearch, NodeSourceInspect, searchEnginesFromEnv } from '../src/index.ts';
 
 describe('host federated search', () => {
@@ -26,6 +27,39 @@ describe('host federated search', () => {
     const engines = searchEnginesFromEnv({}, 'live');
     expect(engines.map((engine) => engine.id)).toEqual(['wikipedia']);
     expect(engines.some((engine) => engine.id === 'fixture')).toBe(false);
+  });
+
+  it('aborts hanging engine fetches when the federation timeout expires', async () => {
+    const seen: AbortSignal[] = [];
+    const search = new NodeFederatedSearch(
+      [
+        {
+          id: 'hang',
+          async search(_query, _count, signal): Promise<SearchHit[]> {
+            if (!signal) throw new Error('federation timeout signal is required');
+            seen.push(signal);
+            await new Promise<never>((_, reject) => {
+              if (signal.aborted) {
+                reject(new Error('aborted'));
+                return;
+              }
+              signal.addEventListener(
+                'abort',
+                () => reject(new Error('aborted')),
+                { once: true },
+              );
+            });
+            return [];
+          },
+        },
+      ],
+      40,
+    );
+    const report = await search.search({ query: 'history of the World Wide Web', count: 3 });
+    expect(seen).toHaveLength(1);
+    await expect.poll(() => seen[0]?.aborted === true).toBe(true);
+    expect(report.hits).toEqual([]);
+    expect(report.errors.some((row) => row.engine === 'hang' && /aborted|timed out/i.test(row.message))).toBe(true);
   });
 });
 

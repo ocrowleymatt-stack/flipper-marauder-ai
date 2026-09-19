@@ -304,7 +304,15 @@ export class ResearchService {
         seen.add(hit.canonicalUrl);
         try {
           const page = await inspect.inspect({ url: hit.url, signal });
-          findings.push(toFinding(hit, page, wave));
+          const text = stripHtml(page.text);
+          if (!page.ok || !text) {
+            errors.push({
+              engine: hit.engine,
+              message: `inspect ${hit.url}: ${page.ok ? 'empty body' : `HTTP ${page.status}`}`,
+            });
+            continue;
+          }
+          findings.push(toFinding(hit, page, wave, text));
         } catch (err) {
           errors.push({
             engine: hit.engine,
@@ -415,18 +423,18 @@ function emptyWeb(): WebResearch {
   };
 }
 
-function toFinding(hit: SearchHit, page: InspectedSource, wave: number): ResearchFinding {
-  const text = stripHtml(page.text);
+const TRUSTED_RESEARCH_HOSTS = ['wikipedia.org', 'w3.org', 'cern.ch'] as const;
+
+function isTrustedResearchHost(host: string): boolean {
+  return TRUSTED_RESEARCH_HOSTS.some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
+function toFinding(hit: SearchHit, page: InspectedSource, wave: number, text: string): ResearchFinding {
   const title = page.text.match(/<title[^>]*>([^<]+)/i)?.[1]?.trim() || hit.title;
-  const quote = firstSentence(text) || hit.snippet;
-  const summary = (hit.snippet || quote).slice(0, 600);
+  const quote = firstSentence(text);
+  const summary = (quote || text).slice(0, 600);
   const host = hostOf(page.finalUrl || hit.url);
-  const confidence =
-    host.endsWith('wikipedia.org') || host.endsWith('w3.org') || host.endsWith('cern.ch')
-      ? 'confirmed'
-      : page.ok
-        ? 'likely'
-        : 'possible';
+  const confidence = isTrustedResearchHost(host) ? 'confirmed' : 'likely';
   return {
     id: `finding_${wave}_${hit.rank}_${host.replace(/[^a-z0-9]+/g, '_')}`.slice(0, 80),
     title,

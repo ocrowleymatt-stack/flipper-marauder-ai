@@ -156,6 +156,38 @@ describe('conversation history', () => {
     expect(snap?.messages.some((row) => row.content.includes('ORPHEUS-731'))).toBe(true);
   });
 
+  it('includes compiled history in the routing token estimate', async () => {
+    const stores = memoryStores();
+    const seen: number[] = [];
+    const runtime = new ConversationRuntime({
+      conversations: stores.conversations,
+      messages: stores.messages,
+      executions: stores.executions,
+      provenance: stores.provenance,
+      events: new MemoryEventBus(),
+      router: {
+        resolve: (target, request) => {
+          seen.push(request?.contextTokens ?? 0);
+          return decision(target, ['mock/atlas']);
+        },
+      } satisfies CapabilityRouter,
+      executor: capturingExecutor([]),
+    });
+    const conversation = await runtime.createConversation({ title: 'Tokens' });
+    const prior = 'ORPHEUS-731 '.repeat(400);
+    for await (const _ of runtime.sendMessage(conversation.id, { content: prior })) {
+      void _;
+    }
+    for await (const _ of runtime.sendMessage(conversation.id, { content: "What did I say my dog's name was?" })) {
+      void _;
+    }
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    const first = seen[0] ?? 0;
+    const second = seen[1] ?? 0;
+    expect(second).toBeGreaterThan(first);
+    expect(second).toBeGreaterThan(prior.length / 4);
+  });
+
   it('posts notices as durable assistant messages', async () => {
     const stores = memoryStores();
     const runtime = new ConversationRuntime({

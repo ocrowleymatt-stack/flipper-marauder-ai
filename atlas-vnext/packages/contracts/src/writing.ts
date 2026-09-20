@@ -14,6 +14,7 @@ export const writingOperationSchema = z.enum([
   'restore',
   'edit',
   'outline',
+  'refine',
 ]);
 export type WritingOperation = z.infer<typeof writingOperationSchema>;
 

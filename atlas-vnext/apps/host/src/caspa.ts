@@ -48,6 +48,9 @@ export async function handleCaspa(
   const editMatch = pathname.match(/^\/api\/documents\/([^/]+)\/edit$/);
   const companionsMatch = pathname.match(/^\/api\/documents\/([^/]+)\/companions$/);
   const commissionMatch = pathname.match(/^\/api\/documents\/([^/]+)\/commission$/);
+  const storyBibleMatch = pathname.match(/^\/api\/projects\/([^/]+)\/story-bible$/);
+  const structureMatch = pathname.match(/^\/api\/documents\/([^/]+)\/structure$/);
+  const qualityMatch = pathname.match(/^\/api\/documents\/([^/]+)\/quality$/);
 
   if (
     !projectDocs &&
@@ -59,7 +62,10 @@ export async function handleCaspa(
     !cancelMatch &&
     !editMatch &&
     !companionsMatch &&
-    !commissionMatch
+    !commissionMatch &&
+    !storyBibleMatch &&
+    !structureMatch &&
+    !qualityMatch
   ) {
     return false;
   }
@@ -189,6 +195,43 @@ export async function handleCaspa(
           tools: body.tools === true,
         }),
       );
+      return true;
+    }
+    if (req.method === 'GET' && storyBibleMatch) {
+      json(res, 200, await writing.getStoryBible(writingActor, decodeURIComponent(storyBibleMatch[1]!)));
+      return true;
+    }
+    if ((req.method === 'PUT' || req.method === 'POST') && storyBibleMatch) {
+      const body = await readJson(req, options.maxRequestBytes);
+      json(res, 200, await writing.upsertStoryBible(writingActor, decodeURIComponent(storyBibleMatch[1]!), {
+        premise: typeof body.premise === 'string' ? body.premise : undefined,
+        world: typeof body.world === 'string' ? body.world : undefined,
+        voice: typeof body.voice === 'string' ? body.voice : undefined,
+        facts: Array.isArray(body.facts) ? body.facts.filter((item: unknown) => typeof item === 'string') : undefined,
+        continuity: Array.isArray(body.continuity)
+          ? body.continuity.filter((item: unknown) => typeof item === 'string')
+          : undefined,
+        relationships: Array.isArray(body.relationships)
+          ? body.relationships.filter((item: unknown) => typeof item === 'string')
+          : undefined,
+        characters: Array.isArray(body.characters)
+          ? (body.characters as unknown[])
+              .flatMap((item) => {
+                if (!item || typeof item !== 'object') return [];
+                const row = item as { name?: unknown; facts?: unknown };
+                if (typeof row.name !== 'string') return [];
+                return [{ name: row.name, facts: typeof row.facts === 'string' ? row.facts : '' }];
+              })
+          : undefined,
+      }, { replace: true }));
+      return true;
+    }
+    if (req.method === 'GET' && structureMatch) {
+      json(res, 200, await writing.getStructure(writingActor, decodeURIComponent(structureMatch[1]!)));
+      return true;
+    }
+    if (req.method === 'GET' && qualityMatch) {
+      json(res, 200, await writing.getQuality(writingActor, decodeURIComponent(qualityMatch[1]!)));
       return true;
     }
     if (req.method === 'POST' && generateMatch) {

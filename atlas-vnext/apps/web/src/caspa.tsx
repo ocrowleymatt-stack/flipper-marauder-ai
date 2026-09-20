@@ -7,11 +7,15 @@ import {
   generateDocument,
   getDocument,
   getDocumentProvenance,
+  getDocumentQuality,
+  getDocumentStructure,
+  getStoryBible,
   listCompanions,
   listDocuments,
   listDocumentVersions,
   restoreDocument,
   saveCompanion,
+  saveStoryBible,
   type DungeonRecord,
   type ProjectFile,
   type WritingDocument,
@@ -31,6 +35,7 @@ const OPERATIONS = [
   'continue',
   'transform',
   'outline',
+  'refine',
 ] as const;
 
 export function CaspaPanel({
@@ -40,6 +45,7 @@ export function CaspaPanel({
   setBusy,
   onStatus,
   onError,
+  documentId,
 }: {
   projectId: string;
   files: ProjectFile[];
@@ -47,6 +53,7 @@ export function CaspaPanel({
   setBusy: (value: boolean) => void;
   onStatus: (value: string) => void;
   onError: (value: string | null) => void;
+  documentId?: string | null;
 }) {
   const [documents, setDocuments] = useState<WritingDocument[]>([]);
   const [active, setActive] = useState<WritingDocument | null>(null);
@@ -59,6 +66,12 @@ export function CaspaPanel({
   const [editor, setEditor] = useState('');
   const [companions, setCompanions] = useState<DungeonRecord[]>([]);
   const [companionText, setCompanionText] = useState('');
+  const [bibleText, setBibleText] = useState('');
+  const [structure, setStructure] = useState<Array<{ title: string; order: number; wordCount: number }>>([]);
+  const [quality, setQuality] = useState<{
+    state: string;
+    findings: Array<{ id: string; gate: string; severity: string; message: string }>;
+  } | null>(null);
 
   const loadList = useCallback(async () => {
     const items = await listDocuments(projectId);
@@ -69,6 +82,7 @@ export function CaspaPanel({
   const openDocument = useCallback(async (id: string) => {
     const document = await getDocument(id);
     setActive(document);
+    setEditor(document.content || document.draft || '');
     const [nextVersions, nextProvenance, nextCompanions] = await Promise.all([
       listDocumentVersions(id).catch(() => []),
       getDocumentProvenance(id).catch(() => []),
@@ -77,24 +91,36 @@ export function CaspaPanel({
     setVersions(nextVersions);
     setProvenance(nextProvenance);
     setCompanions(nextCompanions);
-    setEditor(document.content || document.draft || '');
+    const [nextStructure, nextQuality] = await Promise.all([
+      getDocumentStructure(id).catch(() => []),
+      getDocumentQuality(id).catch(() => null),
+    ]);
+    setStructure(nextStructure);
+    setQuality(nextQuality);
   }, []);
 
   useEffect(() => {
     void (async () => {
       try {
         const items = await loadList();
-        if (items[0]) await openDocument(items[0].id);
+        if (documentId && items.some((item) => item.id === documentId)) await openDocument(documentId);
+        else if (items[0]) await openDocument(items[0].id);
         else {
           setActive(null);
           setVersions([]);
           setProvenance([]);
         }
+        const bible = await getStoryBible(projectId).catch(() => null);
+        if (bible) {
+          const facts = [...(bible.facts ?? []), ...(bible.continuity ?? [])];
+          const characters = (bible.characters ?? []).map((item) => `${item.name}: ${item.facts}`).join('\n');
+          setBibleText([bible.premise, characters, bible.world, facts.join('\n')].filter(Boolean).join('\n'));
+        }
       } catch (err) {
         onError(err instanceof Error ? err.message : String(err));
       }
     })();
-  }, [loadList, openDocument, onError]);
+  }, [loadList, openDocument, onError, documentId, projectId]);
 
   async function onCreate(event: FormEvent) {
     event.preventDefault();
@@ -228,15 +254,62 @@ export function CaspaPanel({
     }
   }
 
+  async function onSaveBible(event: FormEvent) {
+    event.preventDefault();
+    try {
+      const facts = bibleText
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+      await saveStoryBible(projectId, { facts, continuity: facts });
+      onStatus('Story bible saved for this project.');
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function onGoldRefine() {
+    if (!active || busy) return;
+    setInstruction('Refine this with Caspa Gold.');
+    setOperation('refine');
+    setBusy(true);
+    onError(null);
+    onStatus('Gold refine requested.');
+    playCue('activate');
+    try {
+      let latest = active;
+      for await (const event of generateDocument(active.id, {
+        operation: 'refine',
+        instruction: 'Refine this with Caspa Gold. Give this chapter the full editorial pass.',
+        fileIds: selectedFiles,
+        expectedRevision: active.revision,
+      })) {
+        if (event.type === 'document' && event.document) {
+          latest = event.document as WritingDocument;
+          setActive((current) => mergeStreamingDocument(current, latest));
+        }
+      }
+      await loadList();
+      await openDocument(latest.id);
+      playCue(latest.status === 'committed' ? 'complete' : 'warn');
+      onStatus(latest.status === 'committed' ? 'Gold refine committed.' : 'Gold refine finished.');
+    } catch (err) {
+      playCue('warn');
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const streaming = active?.status === 'streaming' || active?.status === 'candidate';
-  const body = streaming ? (active?.draft ?? active?.content ?? '') : editor;
+  const body = streaming ? (active?.draft ?? active?.content ?? '') : editor || active?.content || '';
 
   return (
     <main className="workspace caspa" aria-label="Caspa writing" data-testid="caspa-panel">
       <header className="thread-header">
         <div>
           <h2>{active?.title ?? 'Caspa'}</h2>
-          <p className="hint">Write in this project. Generate, edit, and restore from here. Provenance is available when you ask for it.</p>
+          <p className="hint">Inspector for this project’s manuscripts, story bible, structure, and quality. Ask Atlas in conversation to write; results return there.</p>
         </div>
         <p className={`pill ${active?.status ?? 'idle'}`}>{active?.status ?? 'idle'}</p>
       </header>
@@ -278,6 +351,7 @@ export function CaspaPanel({
               <label htmlFor="doc-body">Current revision</label>
               <textarea
                 id="doc-body"
+                data-testid="doc-body"
                 value={body}
                 readOnly={streaming || busy}
                 onChange={(event) => setEditor(event.target.value)}
@@ -335,11 +409,55 @@ export function CaspaPanel({
                 <button type="button" className="ghost" disabled={busy || !instruction.trim()} onClick={() => void onCommission()}>
                   Commission job
                 </button>
+                <button type="button" className="ghost" data-testid="gold-refine" disabled={busy || !active} onClick={() => void onGoldRefine()}>
+                  Gold refine
+                </button>
               </form>
             </>
           )}
         </section>
         <aside className="caspa-meta">
+          <h3>Story bible</h3>
+          <form className="stack" onSubmit={(event) => void onSaveBible(event)}>
+            <label htmlFor="story-bible">Project canon</label>
+            <textarea
+              id="story-bible"
+              data-testid="story-bible"
+              value={bibleText}
+              onChange={(event) => setBibleText(event.target.value)}
+              rows={5}
+              placeholder="Mara has a scar over her left eye and refuses to enter churches."
+            />
+            <button type="submit" className="ghost" data-testid="save-story-bible">
+              Save story bible
+            </button>
+          </form>
+          <h3>Structure</h3>
+          {structure.length === 0 ? (
+            <p className="muted">No detected chapters yet.</p>
+          ) : (
+            <ul className="plain" data-testid="chapter-structure">
+              {structure.map((chapter) => (
+                <li key={`${chapter.title}-${chapter.order}`}>
+                  <strong>{chapter.title}</strong>
+                  <span className="meta">{chapter.wordCount} words</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <h3>Quality</h3>
+          {!quality || quality.findings.length === 0 ? (
+            <p className="muted">No quality findings yet.</p>
+          ) : (
+            <ul className="plain" data-testid="quality-findings">
+              {quality.findings.map((finding) => (
+                <li key={finding.id}>
+                  <strong>{finding.gate}</strong>
+                  <span className="meta">{finding.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           <h3>Companions</h3>
           {companions.length === 0 ? (
             <p className="muted">No outline, canon, claims, or quality artefacts yet.</p>
@@ -371,9 +489,7 @@ export function CaspaPanel({
                 <li key={version.id} className="file-row">
                   <div>
                     <strong>v{version.version}</strong>
-                    <span className="meta">
-                      {version.operation} · {version.contentHash.slice(0, 12)}
-                    </span>
+                    <span className="meta">{version.operation}</span>
                   </div>
                   <button type="button" className="ghost compact" onClick={() => void onRestore(version.version)} disabled={busy || !active}>
                     Restore

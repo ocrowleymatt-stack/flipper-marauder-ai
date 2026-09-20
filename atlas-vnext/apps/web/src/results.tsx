@@ -1,6 +1,6 @@
 import type { DungeonRecord } from './api';
 
-export type ResultKind = 'osint' | 'research';
+export type ResultKind = 'osint' | 'research' | 'writing';
 
 export interface ParsedFinding {
   id: string;
@@ -30,6 +30,9 @@ export interface ParsedResult {
   sources: ParsedSource[];
   errors: string[];
   scanId?: string;
+  documentId?: string;
+  revision?: number;
+  qualityState?: string;
 }
 
 const HASH_TAIL = /\s+hash=[a-f0-9]{8,}\b/gi;
@@ -47,7 +50,41 @@ export function classifyAssistantResult(text: string): ParsedResult | null {
   if (/^Researching:/i.test(trimmed) || /^## Sources inspected/m.test(trimmed)) {
     return parseResearchReport(trimmed);
   }
+  if (/^Writing:\s+/i.test(trimmed) || /^Manuscript:\s+/im.test(trimmed)) {
+    return parseWritingReport(trimmed);
+  }
   return null;
+}
+
+export function parseWritingReport(text: string): ParsedResult {
+  const title = matchLine(text, /^Manuscript:\s*(.+)$/im) ?? matchLine(text, /^Writing:\s*(.+)$/im) ?? 'Manuscript';
+  const revision = Number(matchLine(text, /^Revision:\s*(\d+)/im) ?? '0');
+  const status = matchLine(text, /^Status:\s*(.+)$/im) ?? 'committed';
+  const qualityState = (matchLine(text, /^Quality:\s*(\w+)/im) ?? 'pass').toLowerCase();
+  const documentId = matchLine(text, /^Document-id:\s*(.+)$/im) ?? undefined;
+  const findings: ParsedFinding[] = [];
+  for (const line of section(text, /^Quality findings:/im, /^(Excerpt:|Document-id:|Operation:)/im)) {
+    const item = parseBullet(line);
+    if (!item) continue;
+    findings.push({
+      id: slugId('quality', item.title, findings.length),
+      title: item.title,
+      summary: item.title,
+      status: qualityState,
+    });
+  }
+  return {
+    kind: 'writing',
+    headline: title,
+    state: `Revision ${Number.isFinite(revision) ? revision : 0} · ${status}`,
+    strongest: qualityState === 'pass' ? undefined : matchLine(text, /^Quality:\s*(.+)$/im) ?? undefined,
+    findings,
+    sources: [],
+    errors: [],
+    documentId,
+    revision: Number.isFinite(revision) ? revision : undefined,
+    qualityState,
+  };
 }
 
 export function parseOsintReport(text: string): ParsedResult {

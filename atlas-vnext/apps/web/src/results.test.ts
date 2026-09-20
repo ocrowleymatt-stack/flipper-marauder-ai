@@ -53,6 +53,22 @@ describe('Wave 3 conversation result presentation', () => {
     expect(classifyAssistantResult('Hello. The kettle is copper.')).toBeNull();
   });
 
+  it('parses writing reports into a manuscript card without hashes as the name', () => {
+    const writing = `Writing: Lighthouse scene
+Manuscript: Lighthouse scene
+Revision: 1
+Status: committed
+Quality: pass
+Operation: create
+Document-id: doc_abc`;
+    const result = classifyAssistantResult(writing);
+    expect(result?.kind).toBe('writing');
+    expect(result?.headline).toBe('Lighthouse scene');
+    expect(result?.documentId).toBe('doc_abc');
+    expect(result?.qualityState).toBe('pass');
+    expect(result?.headline).not.toMatch(/cas:|sha256/i);
+  });
+
   it('binds durable findings to the matching OSINT scan, not the whole conversation', () => {
     const octocat = classifyAssistantResult(osint)!;
     const hubotReport = osint.replaceAll('octocat', 'hubot').replace('The Octocat GitHub profile repositories', 'Hubot automation GitHub profile');
@@ -127,5 +143,22 @@ describe('Wave 3 conversation result presentation', () => {
     expect(second.findings.map((item) => item.id)).toEqual(['find_hubot']);
     expect(first.findings[0]?.summary).not.toMatch(/Hubot/);
     expect(second.findings[0]?.summary).not.toMatch(/Octocat/);
+  });
+});
+
+describe('Wave 4 writing result presentation', () => {
+  it('does not treat a story-bible report as an openable manuscript', () => {
+    const report = `Writing: Story bible
+Manuscript: Story bible
+Revision: 1
+Status: committed
+Quality: pass
+Operation: canon
+
+Excerpt:
+Mara will not enter churches.`;
+    const result = classifyAssistantResult(report);
+    expect(result?.kind).toBe('writing');
+    expect(result?.documentId).toBeUndefined();
   });
 });

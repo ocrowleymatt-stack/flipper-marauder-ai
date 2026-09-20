@@ -10,6 +10,7 @@ import type { PlatformPersistence } from '@atlas-vnext/persistence';
 import type { ProjectService } from '@atlas-vnext/projects';
 import { ToolError, type ToolEngine } from '@atlas-vnext/tools';
 import { DEFAULT_OPERATIONAL_LIMITS } from '@atlas-vnext/contracts';
+import { isWritingRunConversation } from '@atlas-vnext/dungeon-writing';
 import { header, isMutating, json, publicFile, readJson, readRaw, urlPath, urlQuery } from './http.ts';
 import { loginClientAddress } from './limits.ts';
 
@@ -86,6 +87,10 @@ export function isForeignHostSession(actor: WorkbenchActor | null, options: Work
   return Boolean(actor && !sessionOwnsHostConversations(actor, options));
 }
 
+export function visibleHostConversations<T extends { title?: string | null }>(items: T[]): T[] {
+  return items.filter((item) => !isWritingRunConversation(item.title));
+}
+
 export function expireSessionCookie(res: ServerResponse, options: WorkbenchHostOptions): void {
   if (!options.auth) return;
   const parts = [`${options.auth.cookieName}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
@@ -119,7 +124,7 @@ export async function handleWorkbench(
   }
 
   if (pathname === '/api/projects' || pathname.startsWith('/api/projects/') || pathname.startsWith('/api/files/') || pathname.startsWith('/api/context/') || pathname === '/api/approvals') {
-    if (/\/(documents|osint|cases|research|sites|compositions)(?:\/|$)/.test(pathname)) return false;
+    if (/\/(documents|osint|cases|research|sites|compositions|story-bible)(?:\/|$)/.test(pathname)) return false;
     const actor = await resolveActor(req, options);
     if (!actor) {
       json(res, 401, { error: 'Authentication required.' });
@@ -209,8 +214,10 @@ export async function handleWorkbench(
           json(res, 200, []);
           return true;
         }
-        const conversations = (await options.runtime.listConversations()).filter(
-          (item) => item.projectId === projectId || item.workspaceId === projectId,
+        const conversations = visibleHostConversations(
+          (await options.runtime.listConversations()).filter(
+            (item) => item.projectId === projectId || item.workspaceId === projectId,
+          ),
         );
         json(res, 200, conversations);
         return true;

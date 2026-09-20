@@ -607,6 +607,72 @@ export class FilesService {
     return new TextDecoder().decode(await this.cas.get(artefact.contentHash));
   }
 
+  async publishArtefactFile(
+    actor: PersistenceActor,
+    input: {
+      projectId: string;
+      path: string;
+      displayName: string;
+      artefactId: string;
+      contentHash: string;
+      mimeType?: string;
+      sizeBytes?: number;
+    },
+  ): Promise<FileRecord> {
+    const scoped = this.scoped(actor, 'publish artefact file');
+    const workspace = await this.requireProject(scoped, input.projectId);
+    const path = sanitiseRelPath(input.path);
+    const mime = input.mimeType ?? 'text/plain';
+    const sizeBytes = input.sizeBytes ?? 0;
+    return this.persistence.run(async () => {
+      const bound = this.persistence.forActor(scoped);
+      const existing = await bound.files.getByPath(scoped, workspace.id, path);
+      let file: FileRecord;
+      if (existing) {
+        if (existing.contentHash && existing.contentHash !== input.contentHash) {
+          await bound.casRefs.removeRef(scoped, 'file', existing.id, existing.contentHash);
+        }
+        file = await bound.files.update(scoped, existing.id, {
+          expectedRevision: existing.revision,
+          displayName: input.displayName,
+          mimeType: mime,
+          sizeBytes,
+          contentHash: input.contentHash,
+          artefactId: input.artefactId,
+          version: existing.version + 1,
+        });
+      } else {
+        file = await bound.files.create(scoped, {
+          id: `fil_${randomUUID()}`,
+          workspaceId: workspace.id,
+          path,
+          displayName: input.displayName,
+          mimeType: mime,
+          sizeBytes,
+          contentHash: input.contentHash,
+          artefactId: input.artefactId,
+          createdBy: scoped.principalId ?? null,
+        });
+      }
+      await bound.fileVersions.append(scoped, {
+        id: `fver_${randomUUID()}`,
+        fileId: file.id,
+        workspaceId: workspace.id,
+        version: file.version,
+        contentHash: input.contentHash,
+        mimeType: mime,
+        sizeBytes,
+      });
+      await bound.casRefs.addRef(scoped, {
+        sha256: input.contentHash,
+        workspaceId: workspace.id,
+        kind: 'file',
+        ownerId: file.id,
+      });
+      return file;
+    });
+  }
+
   private async requireProject(actor: PersistenceActor, projectId: string) {
     const workspace = await this.persistence.forActor(actor).workspaces.get(actor, projectId);
     if (!workspace) {

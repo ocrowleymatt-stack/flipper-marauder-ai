@@ -74,6 +74,18 @@ export function mergeStoryBible(base: StoryBiblePayload, patch: StoryBiblePayloa
   };
 }
 
+export function replaceStoryBible(base: StoryBiblePayload, patch: StoryBiblePayload): StoryBiblePayload {
+  return {
+    premise: patch.premise !== undefined ? patch.premise.trim() : base.premise || '',
+    world: patch.world !== undefined ? patch.world.trim() : base.world || '',
+    voice: patch.voice !== undefined ? patch.voice.trim() : base.voice || '',
+    facts: patch.facts !== undefined ? uniqueStrings(patch.facts) : [...(base.facts ?? [])],
+    continuity: patch.continuity !== undefined ? uniqueStrings(patch.continuity) : [...(base.continuity ?? [])],
+    relationships: patch.relationships !== undefined ? uniqueStrings(patch.relationships) : [...(base.relationships ?? [])],
+    characters: patch.characters !== undefined ? patch.characters : [...(base.characters ?? [])],
+  };
+}
+
 export function assembleStoryBible(input: {
   bible: StoryBiblePayload;
   instruction?: string;

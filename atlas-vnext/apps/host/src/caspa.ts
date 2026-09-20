@@ -223,7 +223,7 @@ export async function handleCaspa(
                 return [{ name: row.name, facts: typeof row.facts === 'string' ? row.facts : '' }];
               })
           : undefined,
-      }));
+      }, { replace: true }));
       return true;
     }
     if (req.method === 'GET' && structureMatch) {

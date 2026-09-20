@@ -26,7 +26,7 @@ import {
   looksLikeWritingRequest,
   titleFromWritingAsk,
 } from './intent.ts';
-import { assembleStoryBible, mergeStoryBible, parseStoryBiblePayload, type StoryBiblePayload } from './bible.ts';
+import { assembleStoryBible, mergeStoryBible, parseStoryBiblePayload, replaceStoryBible, type StoryBiblePayload } from './bible.ts';
 import { bindStructureByTitle, detectChapters, formatStructureForPrompt, type BoundChapter } from './chapters.ts';
 import { assessWritingQuality, formatQualityForPrompt, type QualityAssessment } from './quality.ts';
 import { composeWritingReport, manuscriptLibraryPath, isWritingRunConversation, writingRunConversationTitle } from './report.ts';
@@ -44,6 +44,7 @@ export interface WritingGenerateInput {
   privacy?: 'any' | 'local_only';
   tools?: boolean;
   commit?: boolean;
+  signal?: AbortSignal;
 }
 
 export type WritingStreamEvent =
@@ -303,6 +304,9 @@ export class WritingService {
     },
   ): Promise<{ handled: boolean; text?: string; failed?: boolean }> {
     if (!input.projectId) return { handled: false };
+    if (input.signal?.aborted) {
+      return { handled: true, failed: true, text: 'The writing run was cancelled.' };
+    }
     const isRequest = looksLikeWritingRequest(input.question);
     const isFollowup = looksLikeWritingFollowup(input.question);
     if (!isRequest && !isFollowup) return { handled: false };
@@ -318,7 +322,7 @@ export class WritingService {
         handled: true,
         text: composeWritingReport({
           title: 'Story bible',
-          documentId: bible.id,
+          documentId: '',
           revision: bible.revision,
           version: bible.revision,
           status: 'committed',
@@ -349,12 +353,17 @@ export class WritingService {
       instruction: input.question,
       expectedRevision: document.revision,
       fileIds: [],
+      signal: input.signal,
     })) {
       if (event.type === 'document') latest = event.document;
       if (event.type === 'error') {
         failed = true;
         failureMessage = event.failure.message;
       }
+    }
+    if (input.signal?.aborted) {
+      failed = true;
+      failureMessage = failureMessage || 'The writing run was cancelled.';
     }
     const quality = await this.getQuality(actor, latest.id);
     return {
@@ -378,10 +387,16 @@ export class WritingService {
     return row ? parseStoryBiblePayload(row.payload) : parseStoryBiblePayload({});
   }
 
-  async upsertStoryBible(actor: WritingActor, projectId: string, patch: StoryBiblePayload) {
+  async upsertStoryBible(
+    actor: WritingActor,
+    projectId: string,
+    patch: StoryBiblePayload,
+    options?: { replace?: boolean },
+  ) {
     const project = await this.requireProject(actor, projectId, 'artifact.write');
     const existing = await this.storyBibleRow(actor, projectId, 'artifact.write');
-    const merged = mergeStoryBible(existing ? parseStoryBiblePayload(existing.payload) : parseStoryBiblePayload({}), patch);
+    const base = existing ? parseStoryBiblePayload(existing.payload) : parseStoryBiblePayload({});
+    const merged = options?.replace ? replaceStoryBible(base, patch) : mergeStoryBible(base, patch);
     const bound = this.deps.persistence.forActor(actor);
     if (existing) {
       return bound.dungeonRecords.update(actor, existing.id, {
@@ -457,6 +472,11 @@ export class WritingService {
   }
 
   async *generate(actor: WritingActor, id: string, input: WritingGenerateInput): AsyncGenerator<WritingStreamEvent> {
+    if (input.signal?.aborted) {
+      yield { type: 'error', failure: failure('cancelled', 'The writing run was cancelled.', false) };
+      yield { type: 'done' };
+      return;
+    }
     const operation = writingOperationSchema.parse(input.operation);
     const instruction = input.instruction.trim();
     if (!instruction) {
@@ -643,6 +663,11 @@ export class WritingService {
       return record;
     };
     try {
+      const abortNested = () => {
+        if (executionId) void this.deps.runtime.cancel(executionId);
+      };
+      input.signal?.addEventListener('abort', abortNested, { once: true });
+      try {
       for await (const event of this.deps.runtime.sendMessage(conversationId, {
         content: composed.layers.requestInstructions,
         systemPrompt: [
@@ -666,7 +691,10 @@ export class WritingService {
         requireVision: requirements.requireVision,
       })) {
         yield { type: 'execution', event };
-        if (event.type === 'execution') executionId = event.execution.id;
+        if (event.type === 'execution') {
+          executionId = event.execution.id;
+          if (input.signal?.aborted) abortNested();
+        }
         if (event.type === 'assistant.delta') {
           if (event.text) draft += event.text;
           const firstVisible = !visible && Boolean(draft.trim());
@@ -767,6 +795,9 @@ export class WritingService {
       committed = true;
       yield { type: 'document', document: presented };
       yield { type: 'done' };
+      } finally {
+        input.signal?.removeEventListener('abort', abortNested);
+      }
     } catch (err) {
       if (!committed) {
         const classified = this.failureFrom(err, visible);
@@ -1038,8 +1069,12 @@ export class WritingService {
       return versioned;
     });
     const presented = await this.present(actor, committed.document, { content: input.text });
-    await this.persistStructure(actor, presented.id, presented.projectId, presented.content);
-    await this.publishLibraryFile(actor, presented);
+    try {
+      await this.persistStructure(actor, presented.id, presented.projectId, presented.content);
+      await this.publishLibraryFile(actor, presented);
+    } catch {
+      // Canonical version already advanced. Derived structure/library retry on the next commit.
+    }
     return presented;
   }
 

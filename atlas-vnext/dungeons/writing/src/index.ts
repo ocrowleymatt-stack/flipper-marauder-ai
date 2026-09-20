@@ -22,6 +22,6 @@ export { detectChapters, bindStructureByTitle, normaliseChapterTitle, chapterIde
 export type { DetectedChapter, BoundChapter } from './chapters.ts';
 export { assessWritingQuality, formatQualityForPrompt } from './quality.ts';
 export type { QualityAssessment, QualityFinding } from './quality.ts';
-export { assembleStoryBible, parseStoryBiblePayload, mergeStoryBible, STORY_BIBLE_BUDGET } from './bible.ts';
+export { assembleStoryBible, parseStoryBiblePayload, mergeStoryBible, replaceStoryBible, STORY_BIBLE_BUDGET } from './bible.ts';
 export type { StoryBiblePayload } from './bible.ts';
 export { composeWritingReport, manuscriptLibraryPath, isWritingRunConversation, writingRunConversationTitle } from './report.ts';

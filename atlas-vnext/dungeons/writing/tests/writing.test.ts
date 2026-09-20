@@ -900,4 +900,85 @@ describe('Caspa writing service', () => {
       }),
     ).toEqual({ handled: false });
   });
+
+  it('cancels the nested writing run when the conversation signal aborts', async () => {
+    const { writing, actor, project } = await makeWriting(async function* (_prompt, signal) {
+      yield { type: 'text', text: 'Visible draft that must not become a version. ' };
+      await new Promise<never>((_resolve, reject) => {
+        if (signal?.aborted) {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          return;
+        }
+        signal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        });
+      });
+    });
+    const controller = new AbortController();
+    const pending = writing.maybeRunFromConversation(actor, {
+      conversationId: 'con_ask',
+      projectId: project.id,
+      question: 'Write a 500-word scene about a lighthouse keeper hearing a voice from the fog.',
+      signal: controller.signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    controller.abort();
+    const result = await pending;
+    expect(result.handled).toBe(true);
+    expect(result.failed).toBe(true);
+    expect(result.text).toMatch(/cancelled/i);
+    const docs = await writing.list(actor, project.id);
+    expect(docs.some((item) => item.status === 'committed')).toBe(false);
+  });
+
+  it('keeps a committed revision if library publish fails', async () => {
+    const { writing, actor, project, files } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'The harbour lamp stayed lit through the storm.' };
+    });
+    const original = files.publishArtefactFile.bind(files);
+    files.publishArtefactFile = async () => {
+      throw new Error('library index unavailable');
+    };
+    try {
+      const created = await writing.create(actor, { projectId: project.id, title: 'Harbour' });
+      await collect(
+        writing.generate(actor, created.id, {
+          operation: 'create',
+          instruction: 'Write the harbour scene.',
+          expectedRevision: created.revision,
+        }),
+      );
+      const after = await writing.get(actor, created.id);
+      expect(after.status).toBe('committed');
+      expect(after.currentVersion).toBe(1);
+      expect(after.content).toMatch(/harbour lamp/);
+    } finally {
+      files.publishArtefactFile = original;
+    }
+  });
+
+  it('stores conversation canon without a manuscript document id', async () => {
+    const { writing, actor, project } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'unused' };
+    });
+    const result = await writing.maybeRunFromConversation(actor, {
+      conversationId: 'con_ask',
+      projectId: project.id,
+      question: 'Remember for this story that Mara will not enter churches.',
+    });
+    expect(result.handled).toBe(true);
+    expect(result.text).toMatch(/Story bible/);
+    expect(result.text).not.toMatch(/Document-id:/);
+  });
+
+  it('replaces editor-saved canon lines instead of appending them', async () => {
+    const { writing, actor, project } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'unused' };
+    });
+    await writing.upsertStoryBible(actor, project.id, { facts: ['Mara hates churches.', 'Wrong fact.'] });
+    await writing.upsertStoryBible(actor, project.id, { facts: ['Mara will not enter churches.'] }, { replace: true });
+    const bible = await writing.getStoryBible(actor, project.id);
+    expect(bible.facts).toEqual(['Mara will not enter churches.']);
+    expect(bible.facts).not.toContain('Wrong fact.');
+  });
 });

@@ -23,8 +23,10 @@ export function composeWritingReport(input: {
     `Status: ${input.status}`,
     qualityLine,
     `Operation: ${input.operation}`,
-    `Document-id: ${input.documentId}`,
   ];
+  if (input.operation !== 'canon' && input.documentId) {
+    lines.push(`Document-id: ${input.documentId}`);
+  }
   if (input.quality.findings.length && input.quality.state !== 'pass') {
     lines.push('Quality findings:');
     for (const finding of input.quality.findings.slice(0, 6)) {

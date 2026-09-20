@@ -145,3 +145,20 @@ Document-id: doc_abc`;
     expect(second.findings[0]?.summary).not.toMatch(/Octocat/);
   });
 });
+
+describe('Wave 4 writing result presentation', () => {
+  it('does not treat a story-bible report as an openable manuscript', () => {
+    const report = `Writing: Story bible
+Manuscript: Story bible
+Revision: 1
+Status: committed
+Quality: pass
+Operation: canon
+
+Excerpt:
+Mara will not enter churches.`;
+    const result = classifyAssistantResult(report);
+    expect(result?.kind).toBe('writing');
+    expect(result?.documentId).toBeUndefined();
+  });
+});

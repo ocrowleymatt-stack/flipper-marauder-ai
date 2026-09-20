@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assessWritingQuality } from '../src/quality.ts';
-import { assembleStoryBible } from '../src/bible.ts';
+import { assembleStoryBible, mergeStoryBible, replaceStoryBible } from '../src/bible.ts';
 
 describe('writing quality heuristics', () => {
   it('hard-blocks empty and placeholder output', () => {
@@ -41,5 +41,13 @@ describe('story bible assembly', () => {
     });
     expect(tiny.truncated).toBe(true);
     expect(tiny.usedChars).toBeLessThanOrEqual(200);
+  });
+
+  it('replaces editor lists instead of unioning them', () => {
+    const base = mergeStoryBible({}, { facts: ['old line', 'keep me'] });
+    const replaced = replaceStoryBible(base, { facts: ['keep me'] });
+    expect(replaced.facts).toEqual(['keep me']);
+    const appended = mergeStoryBible(base, { facts: ['new line'] });
+    expect(appended.facts).toEqual(['old line', 'keep me', 'new line']);
   });
 });

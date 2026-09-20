@@ -11,6 +11,8 @@ Captured by `apps/host/tests/workbench.browser.test.ts` against a local mock hos
 | `04-second-conversation.png` | New conversation without the previous thread leaking |
 | `05-mobile.png` | Narrow viewport: thread still the primary surface |
 | `06-run-details.png` | Optional diagnostics drawer |
+| `12-wave5-desktop.png` | Wave 5 Ask Atlas website result, preview, Library reopen |
+| `13-wave5-mobile.png` | Wave 5 390px website card, preview, composer still usable |
 
 Run:
 

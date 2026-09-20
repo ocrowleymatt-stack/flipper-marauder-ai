@@ -1,7 +1,7 @@
 # Website Studio dungeon
 
-Domain: site generation, deterministic audits, sandboxed preview.
+Domain: site generation, deterministic audits, sandboxed preview, conversation result-return.
 
-Nexus must never mount preview file servers. Preview and Playwright QA belong here and in execution/browser, not in the router.
+Nexus never mounts preview file servers. HTML generation is a host `SiteGeneratePort`. This dungeon interprets briefs, audits HTML, and stores CAS revisions.
 
-Product code is not in this PR.
+Wave 5 restores conversation-first Website Studio inside Atlas. Public `/dev/<slug>/` URLs, Playwright visual QA, and custom domains remain out of scope.

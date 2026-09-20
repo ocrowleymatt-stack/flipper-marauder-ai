@@ -24,6 +24,8 @@ describe('writing conversation classifier', () => {
     expect(looksLikeWritingRequest('Open the manuscript')).toBe(false);
     expect(looksLikeWritingRequest('What is a lighthouse keeper?')).toBe(false);
     expect(looksLikeWritingRequest('Capability policy: Nexus decides WHERE\nCurrent document:\nWrite a scene')).toBe(false);
+    expect(looksLikeWritingRequest('Build a website about a neighbourhood circus.')).toBe(false);
+    expect(looksLikeWritingRequest('Write a website about cocoa tents.')).toBe(false);
   });
 
   it('treats restrained-paragraph edits as follow-ups, not new manuscripts', () => {

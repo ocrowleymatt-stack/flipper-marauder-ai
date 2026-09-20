@@ -9,6 +9,7 @@ import { WebsiteError, WebsiteStudioService } from '@atlas-vnext/dungeon-website
 import { MusicError, MusicService } from '@atlas-vnext/dungeon-music';
 import { PrivacyError, PrivacyService } from '@atlas-vnext/dungeon-privacy';
 import { json, readJson, urlPath } from './http.ts';
+import { PlatformHttpError } from './errors.ts';
 import { resolveActor, type WorkbenchHostOptions } from './workbench.ts';
 
 export interface EstateHostOptions extends WorkbenchHostOptions {
@@ -287,12 +288,25 @@ async function handleWebsite(
   }
   if (req.method === 'POST' && generate) {
     const body = await readJson(req, options.maxRequestBytes);
-    json(res, 200, await service.generate(writingActor, decodeURIComponent(generate[1]!), typeof body.brief === 'string' ? body.brief : ''));
+    json(
+      res,
+      200,
+      await service.generate(writingActor, decodeURIComponent(generate[1]!), typeof body.brief === 'string' ? body.brief : '', {
+        conversationId: typeof body.conversationId === 'string' ? body.conversationId : null,
+        admitRun: true,
+      }),
+    );
     return true;
   }
   if (req.method === 'GET' && preview) {
     const previewBody = await service.preview(writingActor, decodeURIComponent(preview[1]!));
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-Atlas-Concern': 'preview_deployment' });
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; sandbox",
+      'Cache-Control': 'no-store',
+      'X-Atlas-Concern': 'preview_deployment',
+    });
     res.end(previewBody.html);
     return true;
   }
@@ -450,6 +464,10 @@ function writeEstateError(res: ServerResponse, err: unknown): true {
   }
   if (err instanceof AuthenticationError) {
     json(res, err.code === 'unauthenticated' ? 401 : 403, { error: err.message });
+    return true;
+  }
+  if (err instanceof PlatformHttpError) {
+    json(res, err.httpStatus, { error: err.message, code: err.code });
     return true;
   }
   throw err;

@@ -1,6 +1,6 @@
 import type { DungeonRecord } from './api';
 
-export type ResultKind = 'osint' | 'research' | 'writing';
+export type ResultKind = 'osint' | 'research' | 'writing' | 'website';
 
 export interface ParsedFinding {
   id: string;
@@ -31,6 +31,7 @@ export interface ParsedResult {
   errors: string[];
   scanId?: string;
   documentId?: string;
+  siteId?: string;
   revision?: number;
   qualityState?: string;
 }
@@ -52,6 +53,9 @@ export function classifyAssistantResult(text: string): ParsedResult | null {
   }
   if (/^Writing:\s+/i.test(trimmed) || /^Manuscript:\s+/im.test(trimmed)) {
     return parseWritingReport(trimmed);
+  }
+  if (/^Website:\s+/i.test(trimmed) || /^Site:\s+site_/im.test(trimmed)) {
+    return parseWebsiteReport(trimmed);
   }
   return null;
 }
@@ -84,6 +88,26 @@ export function parseWritingReport(text: string): ParsedResult {
     documentId,
     revision: Number.isFinite(revision) ? revision : undefined,
     qualityState,
+  };
+}
+
+export function parseWebsiteReport(text: string): ParsedResult {
+  const title = matchLine(text, /^Website:\s*(.+)$/im) ?? 'Website';
+  const siteId = matchLine(text, /^Site:\s*(.+)$/im) ?? undefined;
+  const revision = Number(matchLine(text, /^Revision:\s*(\d+)/im) ?? '0');
+  const status = matchLine(text, /^Status:\s*(.+)$/im) ?? 'preview ready';
+  const source = matchLine(text, /^Source:\s*(.+)$/im);
+  const audit = matchLine(text, /^Audit:\s*(.+)$/im);
+  return {
+    kind: 'website',
+    headline: title,
+    state: `Revision ${Number.isFinite(revision) ? revision : 0} · ${status}`,
+    strongest: source ? `${source}${audit ? ` · ${audit}` : ''}` : audit ?? undefined,
+    findings: [],
+    sources: [],
+    errors: [],
+    siteId,
+    revision: Number.isFinite(revision) ? revision : undefined,
   };
 }
 

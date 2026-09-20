@@ -51,5 +51,8 @@ describe('Website Studio architecture boundaries', () => {
     expect(generatePort).toMatch(/beginRun/);
     expect(generatePort).toMatch(/assertGeneratedOutput/);
     expect(generatePort).not.toMatch(/failover after visible|visibleOutputAlready:\s*true/);
+    const estate = readFileSync(join(root, 'apps/host/src/estate.ts'), 'utf8');
+    expect(estate).toMatch(/admitRun:\s*true/);
+    expect(blobs).toMatch(/admitRun \? actor\.tenantId : undefined/);
   });
 });

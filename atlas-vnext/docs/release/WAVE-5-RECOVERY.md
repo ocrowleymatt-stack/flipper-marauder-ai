@@ -13,7 +13,7 @@ PR #41 is forensic evidence only. It was not merged, rebased, or cherry-picked.
 - Sandboxed preview from the committed artefact (source of truth).
 - Follow-up edits and regenerate target the conversation-bound site.
 - Server-side Authority, tenant isolation, privacy overlay, autonomyCeiling.
-- Cancel before commit does not fabricate success. Library failure after commit does not erase the site.
+- Direct `POST /api/sites/:id/generate` admits a ResourceGuard run via `admitRun` / `tenantId`. Conversation intercept omits that extra slot — `sendMessage` already holds the permit.
 
 Browser evidence: `docs/release/workbench-ux/12-wave5-desktop.png`, `13-wave5-mobile.png`.
 

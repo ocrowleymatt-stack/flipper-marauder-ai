@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { DungeonId, DungeonRegistration, SiteGeneratePort } from '@atlas-vnext/contracts';
+import { DEFAULT_OPERATIONAL_LIMITS } from '@atlas-vnext/contracts';
 import type { FilesService } from '@atlas-vnext/files';
 import type { PersistenceActor, PlatformPersistence, SiteRecord, SiteRevisionRecord } from '@atlas-vnext/persistence';
 import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
@@ -156,7 +157,13 @@ export class WebsiteStudioService {
     actor: WebsiteActor,
     id: string,
     brief: string,
-    options: { conversationId?: string | null; signal?: AbortSignal; previousHtml?: string | null } = {},
+    options: {
+      conversationId?: string | null;
+      signal?: AbortSignal;
+      previousHtml?: string | null;
+      /** Direct HTTP generate must admit a ResourceGuard run. Conversation intercept already holds one. */
+      admitRun?: boolean;
+    } = {},
   ): Promise<SiteGenerateResult> {
     if (options.signal?.aborted) throw abortError();
     const site = await this.get(actor, id);
@@ -173,7 +180,7 @@ export class WebsiteStudioService {
 
     const priorHtml = options.previousHtml ?? (await this.currentHtml(actor, site));
     const produced = await this.produceHtml(
-      actor.tenantId,
+      options.admitRun ? actor.tenantId : undefined,
       brief,
       options.signal,
       this.deps.policy.runtimePrivacy(policy),
@@ -390,7 +397,7 @@ export class WebsiteStudioService {
   }
 
   private async produceHtml(
-    tenantId: string,
+    tenantId: string | undefined,
     brief: string,
     signal: AbortSignal | undefined,
     privacy: 'any' | 'local_only',
@@ -407,13 +414,16 @@ export class WebsiteStudioService {
           previousHtml,
           signal,
           privacy,
-          tenantId,
+          ...(tenantId ? { tenantId } : {}),
         });
         if (signal?.aborted) throw abortError();
         html = sanitizeSiteHtml(generated.html);
         source = 'model';
       } catch (err) {
         if (isAbortError(err) || signal?.aborted) throw isAbortError(err) ? err : abortError();
+        if (isPayloadTooLarge(err)) {
+          throw new WebsiteError('payload_too_large', 'Generated site exceeds the configured size limit.', 413);
+        }
         if (isContentFilterError(err) || isEmptyHtmlError(err)) {
           source = 'assembler';
           note = isContentFilterError(err)
@@ -432,6 +442,9 @@ export class WebsiteStudioService {
       note ??= 'Atlas assembled a first-draft page from the brief.';
     }
     if (!audit.ok) throw new WebsiteError('malformed', 'Website HTML failed audit.');
+    if (Buffer.byteLength(html, 'utf8') > DEFAULT_OPERATIONAL_LIMITS.maxGeneratedBytes) {
+      throw new WebsiteError('payload_too_large', 'Generated site exceeds the configured size limit.', 413);
+    }
     return { html, source, audit, note };
   }
 
@@ -497,4 +510,9 @@ function isEmptyHtmlError(err: unknown): boolean {
   const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: string }).code) : '';
   const message = err instanceof Error ? err.message : String(err);
   return code === 'empty_html' || /no html|empty html/i.test(message);
+}
+
+function isPayloadTooLarge(err: unknown): boolean {
+  const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: string }).code) : '';
+  return code === 'payload_too_large';
 }

@@ -293,6 +293,7 @@ async function handleWebsite(
       200,
       await service.generate(writingActor, decodeURIComponent(generate[1]!), typeof body.brief === 'string' ? body.brief : '', {
         conversationId: typeof body.conversationId === 'string' ? body.conversationId : null,
+        admitRun: true,
       }),
     );
     return true;

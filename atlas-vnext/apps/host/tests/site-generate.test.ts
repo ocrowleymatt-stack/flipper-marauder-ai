@@ -64,4 +64,19 @@ describe('NodeSiteGenerate resource guards', () => {
     await expect(first).resolves.toEqual({ html: '<p>ok</p>' });
     expect(resources.occupancy('tenant_a').runs).toBe(0);
   });
+
+  it('does not consume a second run slot when conversation admission already holds the permit', async () => {
+    const resources = new ResourceGuard({ ...DEFAULT_OPERATIONAL_LIMITS, maxConcurrentRuns: 1 });
+    const releaseOuter = resources.beginRun('tenant_a');
+    const port = new NodeSiteGenerate(router(), textExecutor(['<p>ok</p>']), resources);
+    await expect(port.generateHtml({ brief: 'Build a website about cocoa tents.' })).resolves.toEqual({ html: '<p>ok</p>' });
+    expect(resources.occupancy('tenant_a').runs).toBe(1);
+    await expect(port.generateHtml({ brief: 'Build a website about cocoa tents.', tenantId: 'tenant_a' })).rejects.toMatchObject({
+      name: 'PlatformHttpError',
+      code: 'rate_limit',
+      httpStatus: 429,
+    });
+    releaseOuter();
+    expect(resources.occupancy('tenant_a').runs).toBe(0);
+  });
 });

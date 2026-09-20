@@ -54,5 +54,6 @@ Owner Delegate is the decision authority for this programme. Entries are develop
 | D58 | Content-filter / empty HTML may assemble a first draft; abort and provider errors must not | Swallow every generate failure into assembler | Terminal classification in `produceHtml` | #41 cancelled-by-fallback | website cancel tests | Reversible | website |
 | D59 | Library `sites/<id>/index.html` is derived; commit survives publish failure | Library is the only store; rollback on publish fail | `publishArtefactFile` after `setCurrentRevision` | Failure-after-commit | website library test | Reversible | website, files |
 | D60 | Preview CSP sandbox on host GET; srcDoc remains the UI renderer | Nexus `/dev/` file server; framed API URL | nosniff + sandbox CSP + no-store | Frozen split; AM public URL stays FAIL | estate.ts preview headers | Reversible | website, host |
+| D61 | Conversation website generate does not take a second ResourceGuard run slot | Nested `beginRun(tenantId)` on every `generateHtml`; ALS reentry | `admitRun` only on direct HTTP generate; conversation intercept already holds `sendMessage` admission | `maxConcurrentRuns: 1` must not 429 Ask Atlas website builds | site-generate nested occupancy test | Reversible | website, host |
 
 

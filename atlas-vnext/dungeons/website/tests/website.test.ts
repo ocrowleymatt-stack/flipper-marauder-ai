@@ -319,4 +319,30 @@ describe('Website Studio dungeon', () => {
     expect(published.handled).toBe(true);
     expect(published.text).toMatch(/Publishing is an owner action/i);
   });
+
+  it('refuses oversized generated HTML without committing a site', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const generate: SiteGeneratePort = {
+      async generateHtml() {
+        return {
+          html: `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Huge</title></head><body><p>${'x'.repeat(2_100_000)}</p></body></html>`,
+        };
+      },
+    };
+    const website = new WebsiteStudioService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      authority: stack.authority,
+      policy: stack.policy,
+      generate,
+    });
+    const site = await website.create(stack.actor, { projectId: stack.project.id, name: 'Huge', brief: 'huge' });
+    await expect(website.generate(stack.actor, site.id, 'Build a website about oversized output.')).rejects.toMatchObject({
+      code: 'payload_too_large',
+      httpStatus: 413,
+    });
+    expect((await website.get(stack.actor, site.id)).currentRevisionId).toBeNull();
+  });
 });

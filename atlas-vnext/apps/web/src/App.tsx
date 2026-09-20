@@ -119,6 +119,7 @@ export function App() {
   const [selectedFile, setSelectedFile] = useState<ProjectFile | null>(null);
   const [selectedResult, setSelectedResult] = useState<ParsedResult | null>(null);
   const [caspaDocumentId, setCaspaDocumentId] = useState<string | null>(null);
+  const [websiteSiteId, setWebsiteSiteId] = useState<string | null>(null);
   const [osintFindings, setOsintFindings] = useState<DungeonRecord[]>([]);
   const [osintTargets, setOsintTargets] = useState<DungeonRecord[]>([]);
   const [researchBriefs, setResearchBriefs] = useState<DungeonRecord[]>([]);
@@ -589,9 +590,22 @@ export function App() {
     playCue('activate');
   }
 
+  function openWebsite(siteId: string) {
+    setWebsiteSiteId(siteId);
+    closePanel();
+    setSurface('website');
+    setNavOpen(false);
+    playCue('activate');
+  }
+
   function openFileDetails(file: ProjectFile) {
     if (file.documentId) {
       openManuscript(file.documentId);
+      return;
+    }
+    const siteMatch = file.path.match(/^sites\/(site_[^/]+)\/index\.html$/);
+    if (siteMatch?.[1]) {
+      openWebsite(siteMatch[1]);
       return;
     }
     setSelectedFile(file);
@@ -937,7 +951,7 @@ export function App() {
         ) : surface !== 'conversation' ? (
           <section className="workspace-wrap">
             <SurfaceBack onBack={goToConversation} label={dungeons.find((item) => item.id === surface)?.navLabel.replace(/Studio/i, '').trim() ?? 'Skill'} />
-            <EstatePanel dungeonId={surface} projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={setStatus} onError={setError} />
+            <EstatePanel dungeonId={surface} projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={setStatus} onError={setError} selectedSiteId={websiteSiteId} />
           </section>
         ) : (
           <main className="workspace" aria-label="Conversation">
@@ -999,6 +1013,7 @@ export function App() {
                           onOpenFinding={(finding) => openFinding(finding, card)}
                           onOpenSources={() => openSources(card)}
                           onOpenManuscript={card.documentId ? () => openManuscript(card.documentId!) : undefined}
+                          onOpenWebsite={card.siteId ? () => openWebsite(card.siteId!) : undefined}
                         />
                       ) : null}
                       {message.role === 'assistant' && message.content ? (
@@ -1162,24 +1177,32 @@ function ResultCard({
   onOpenFinding,
   onOpenSources,
   onOpenManuscript,
+  onOpenWebsite,
 }: {
   result: ParsedResult;
   onOpenFinding: (finding: ParsedFinding) => void;
   onOpenSources: () => void;
   onOpenManuscript?: () => void;
+  onOpenWebsite?: () => void;
 }) {
-  const eyebrow = result.kind === 'osint' ? 'OSINT' : result.kind === 'writing' ? 'Writing' : 'Research';
+  const eyebrow =
+    result.kind === 'osint' ? 'OSINT' : result.kind === 'writing' ? 'Writing' : result.kind === 'website' ? 'Website' : 'Research';
   return (
-    <section className="result-card" data-testid={`result-card-${result.kind}`} data-scan-id={result.scanId ?? ''} data-document-id={result.documentId ?? ''} aria-label={`${result.kind} result`}>
+    <section className="result-card" data-testid={`result-card-${result.kind}`} data-scan-id={result.scanId ?? ''} data-document-id={result.documentId ?? ''} data-site-id={result.siteId ?? ''} aria-label={`${result.kind} result`}>
       <div className="result-card-head">
         <p className="eyebrow">{eyebrow}</p>
         <p className="meta">{result.state}</p>
       </div>
-      {result.kind === 'writing' ? <p className="result-strongest">{result.headline}</p> : null}
-      {result.kind !== 'writing' && result.strongest ? <p className="result-strongest">{result.strongest}</p> : null}
+      {result.kind === 'writing' || result.kind === 'website' ? <p className="result-strongest">{result.headline}</p> : null}
+      {result.kind !== 'writing' && result.kind !== 'website' && result.strongest ? <p className="result-strongest">{result.strongest}</p> : null}
       {result.kind === 'writing' && result.qualityState ? (
         <p className="meta" data-testid="writing-quality">
           Quality {result.qualityState}
+        </p>
+      ) : null}
+      {result.kind === 'website' && result.strongest ? (
+        <p className="meta" data-testid="website-source">
+          {result.strongest}
         </p>
       ) : null}
       {result.findings.length > 0 && result.kind !== 'writing' ? (
@@ -1212,6 +1235,11 @@ function ResultCard({
         {onOpenManuscript ? (
           <button type="button" className="ghost compact" data-testid="open-manuscript" onClick={onOpenManuscript}>
             Open manuscript
+          </button>
+        ) : null}
+        {onOpenWebsite ? (
+          <button type="button" className="ghost compact" data-testid="open-website-preview" onClick={onOpenWebsite}>
+            Open preview
           </button>
         ) : null}
       </div>

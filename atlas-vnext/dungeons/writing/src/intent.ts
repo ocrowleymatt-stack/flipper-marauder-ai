@@ -8,6 +8,8 @@ const OSINT_FOLLOWUP =
   /\b(strongest (finding|evidence|observation)|which of those findings|which sources|those findings)\b/i;
 const RESEARCH_COLLISION =
   /\busing multiple independent\b|^research(ing)?\b|\bresearch (the )?(history|sources|web)\b/i;
+const WEBSITE_COLLISION =
+  /\bwrite a (web\s*)?site\b|\bwrite a landing page\b|\b(build|make|create|generate|design)\b.{0,40}\b((web\s*)?site|webpage|landing\s*page|homepage|microsite)\b|\b(website|web site|landing page)\s+(about|for|on)\b/i;
 const ARTIFACT_OPEN =
   /\bopen (the |that )?(manuscript|document|file|second|first|third|last|finding|source)/i;
 const MEMORY_QUESTION = /\bwhat did i say\b|\bdog['’]?s name\b/i;
@@ -18,6 +20,7 @@ export function looksLikeWritingRequest(text: string): boolean {
   if (INTERNAL_PROMPT.test(q)) return false;
   if (OSINT_COLLISION.test(q) || OSINT_FOLLOWUP.test(q)) return false;
   if (RESEARCH_COLLISION.test(q)) return false;
+  if (WEBSITE_COLLISION.test(q)) return false;
   if (ARTIFACT_OPEN.test(q)) return false;
   if (MEMORY_QUESTION.test(q)) return false;
 
@@ -39,6 +42,7 @@ export function looksLikeWritingFollowup(text: string): boolean {
   if (INTERNAL_PROMPT.test(q)) return false;
   if (OSINT_COLLISION.test(q) || OSINT_FOLLOWUP.test(q)) return false;
   if (RESEARCH_COLLISION.test(q)) return false;
+  if (WEBSITE_COLLISION.test(q)) return false;
   if (ARTIFACT_OPEN.test(q)) return false;
   if (MEMORY_QUESTION.test(q)) return false;
   if (looksLikeWritingRequest(q)) return false;

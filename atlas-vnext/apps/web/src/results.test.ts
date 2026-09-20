@@ -69,6 +69,21 @@ Document-id: doc_abc`;
     expect(result?.headline).not.toMatch(/cas:|sha256/i);
   });
 
+  it('parses website reports into a preview card', () => {
+    const website = `Website: Neighbourhood circus
+Site: site_abc
+Revision: 2
+Status: preview ready
+Source: assembled
+Audit: pass
+Excerpt: tents tickets cocoa`;
+    const result = classifyAssistantResult(website);
+    expect(result?.kind).toBe('website');
+    expect(result?.headline).toBe('Neighbourhood circus');
+    expect(result?.siteId).toBe('site_abc');
+    expect(result?.revision).toBe(2);
+  });
+
   it('binds durable findings to the matching OSINT scan, not the whole conversation', () => {
     const octocat = classifyAssistantResult(osint)!;
     const hubotReport = osint.replaceAll('octocat', 'hubot').replace('The Octocat GitHub profile repositories', 'Hubot automation GitHub profile');

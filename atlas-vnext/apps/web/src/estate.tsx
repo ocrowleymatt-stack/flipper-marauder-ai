@@ -42,6 +42,7 @@ export function EstatePanel({
   setBusy,
   onStatus,
   onError,
+  selectedSiteId,
 }: {
   dungeonId: string;
   projectId: string | null;
@@ -50,6 +51,7 @@ export function EstatePanel({
   setBusy: (value: boolean) => void;
   onStatus: (value: string) => void;
   onError: (value: string | null) => void;
+  selectedSiteId?: string | null;
 }) {
   if (dungeonId === 'privacy') {
     return <PrivacyPanel busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
@@ -75,7 +77,16 @@ export function EstatePanel({
     return <ResearchPanel projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
   }
   if (dungeonId === 'website') {
-    return <WebsitePanel projectId={projectId} busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
+    return (
+      <WebsitePanel
+        projectId={projectId}
+        busy={busy}
+        setBusy={setBusy}
+        onStatus={onStatus}
+        onError={onError}
+        selectedSiteId={selectedSiteId ?? null}
+      />
+    );
   }
   if (dungeonId === 'music') return <MusicPanel projectId={projectId} busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
   return (
@@ -569,12 +580,14 @@ function WebsitePanel({
   setBusy,
   onStatus,
   onError,
+  selectedSiteId,
 }: {
   projectId: string;
   busy: boolean;
   setBusy: (value: boolean) => void;
   onStatus: (value: string) => void;
   onError: (value: string | null) => void;
+  selectedSiteId: string | null;
 }) {
   const [name, setName] = useState('Site');
   const [brief, setBrief] = useState('');
@@ -594,6 +607,10 @@ function WebsitePanel({
   useEffect(() => {
     void reload().catch((err) => onError(err instanceof Error ? err.message : String(err)));
   }, [reload, onError]);
+
+  useEffect(() => {
+    if (selectedSiteId) setActiveId(selectedSiteId);
+  }, [selectedSiteId]);
 
   useEffect(() => {
     if (!activeId) {
@@ -658,12 +675,11 @@ function WebsitePanel({
   }
 
   return (
-    <main className="workspace estate" aria-label="Website">
+    <main className="workspace estate" aria-label="Website" data-testid="website-panel">
       <header className="thread-header">
         <div>
           <h2>Website</h2>
-          <p className="hint">Working surface only. Website Studio product recovery is a later tranche. Preview is not production.</p>
-          <p className="hint">Create a site for this project. Preview is temporary. Publishing is an owner action.</p>
+          <p className="hint">Ask Atlas in chat to build a site, or create one here. Preview is sandboxed and not production. Publishing is an owner action.</p>
         </div>
       </header>
       <section className="estate-body">
@@ -700,7 +716,7 @@ function WebsitePanel({
             : 'Publishing is off until an owner enables it in Privacy & Safety.'}
         </p>
         {previewHtml ? (
-          <iframe className="site-preview" title="Site preview" sandbox="" srcDoc={previewHtml} />
+          <iframe className="site-preview" title="Site preview" sandbox="" srcDoc={previewHtml} data-testid="site-preview" />
         ) : null}
       </section>
     </main>

@@ -9,9 +9,9 @@ import type { ExecutionContext, ExecutionObserver, HealthObserver, ProviderAdapt
  * Owns retries, circuit breakers, streaming, and transactional tool buffering.
  * Does not choose routes (that's Nexus).
  *
- * Circuit-open is Execution HOW. It must not be copied into Nexus routing
- * eligibility: that made every model on the provider unroutable, so execute()
- * never ran to observe the cooldown and only a process restart recovered.
+ * Circuit-open is reported to the health observer as Execution HOW. Host
+ * compose must not copy it into NexusRegistry: that made every model on the
+ * provider unroutable, so execute() never ran to observe the cooldown.
  */
 export class ExecutionBroker {
   private readonly adapters = new Map<string, ProviderAdapter>();
@@ -117,6 +117,7 @@ export class ExecutionBroker {
           error: failure('circuit_open', `Circuit open for ${provider}.`, true),
           emittedVisibleOutput: false,
         });
+        this.options.health?.onProviderHealth(provider, 'unhealthy', 'circuit_open');
         continue;
       }
 
@@ -191,6 +192,8 @@ export class ExecutionBroker {
           if (code === 'authentication_failure') {
             authFailedProviders.add(provider);
             this.options.health?.onProviderHealth(provider, 'authentication_failure');
+          } else if (breaker.isOpen()) {
+            this.options.health?.onProviderHealth(provider, 'unhealthy', 'circuit_open');
           }
 
           if (visibleOutput || aborted) {

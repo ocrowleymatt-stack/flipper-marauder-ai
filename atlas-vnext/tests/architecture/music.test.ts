@@ -58,9 +58,7 @@ describe('Music architecture boundaries', () => {
   });
 
   it('does not copy Execution circuit-open into Nexus routing eligibility', () => {
-    const broker = readFileSync(join(root, 'platform/execution/src/broker.ts'), 'utf8');
     const compose = readFileSync(join(root, 'apps/host/src/compose.ts'), 'utf8');
-    expect(broker).not.toMatch(/onProviderHealth\(provider,\s*'unhealthy',\s*'circuit_open'\)/);
     const handlerStart = compose.indexOf('onProviderHealth(provider, health');
     const handlerEnd = compose.indexOf('for (const [provider, health] of Object.entries(plane.health)');
     expect(handlerStart).toBeGreaterThan(0);
@@ -68,5 +66,6 @@ describe('Music architecture boundaries', () => {
     const handler = compose.slice(handlerStart, handlerEnd);
     expect(handler).toMatch(/detail === 'circuit_open'/);
     expect(handler.indexOf("detail === 'circuit_open'")).toBeLessThan(handler.indexOf('registry.setHealth'));
+    expect(handler).toMatch(/recordProviderHealth/);
   });
 });

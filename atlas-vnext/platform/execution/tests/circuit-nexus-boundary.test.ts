@@ -103,8 +103,7 @@ describe('Execution circuit vs Nexus routing eligibility', () => {
     }
     expect(streamCalls - callsBeforeTimeouts).toBe(3);
     expect(broker.breaker('xai').isOpen()).toBe(true);
-    expect(health.observed.some((entry) => entry.health === 'unhealthy')).toBe(false);
-    expect(health.observed.some((entry) => entry.detail === 'circuit_open')).toBe(false);
+    expect(health.observed.some((entry) => entry.detail === 'circuit_open')).toBe(true);
 
     // D. Nexus still admits nexus/fast while the Execution circuit is open
     expect(registry.get('xai', 'grok-4.20-fast')?.health).toBe('healthy');

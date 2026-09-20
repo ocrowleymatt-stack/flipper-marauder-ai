@@ -754,4 +754,150 @@ describe('Caspa writing service', () => {
     expect(after.content).toBe('');
     expect(after.currentVersion).toBe(0);
   });
+
+  it('returns a writing result into the requesting conversation and revises the same document', async () => {
+    const { writing, actor, project, runtime } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'The lighthouse keeper heard a voice from the fog.' };
+    });
+    const first = await writing.maybeRunFromConversation(actor, {
+      conversationId: 'con_ask',
+      projectId: project.id,
+      question: 'Write a 500-word scene about a lighthouse keeper hearing a voice from the fog.',
+    });
+    expect(first.handled).toBe(true);
+    expect(first.text).toMatch(/^Writing:/);
+    expect(first.text).toMatch(/Manuscript:/);
+    expect(first.text).not.toMatch(/cas:/);
+    const documentId = first.text?.match(/^Document-id:\s*(.+)$/m)?.[1];
+    expect(documentId).toBeTruthy();
+    const v1 = await writing.get(actor, documentId!);
+    expect(v1.currentVersion).toBe(1);
+    const second = await writing.maybeRunFromConversation(actor, {
+      conversationId: 'con_ask',
+      projectId: project.id,
+      question: 'Make the final paragraph more restrained.',
+    });
+    expect(second.handled).toBe(true);
+    const v2 = await writing.get(actor, documentId!);
+    expect(v2.currentVersion).toBe(2);
+    const versions = await writing.listVersions(actor, documentId!);
+    expect(versions).toHaveLength(2);
+    const runs = await runtime.listConversations();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.title).toBe(`__writing_run__:${documentId}`);
+    expect(runs.some((item) => item.id === 'con_ask')).toBe(false);
+  });
+
+  it('injects durable story bible facts into later generation', async () => {
+    const capture: { systemPrompt?: string } = {};
+    const { writing, actor, project } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'Chapter two climbed the stair.' };
+    }, capture);
+    await writing.upsertStoryBible(actor, project.id, {
+      characters: [{ name: 'Mara', facts: 'Mara has a scar over her left eye and refuses to enter churches.' }],
+      facts: ['Mara has a scar over her left eye and refuses to enter churches.'],
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'Chapter two' });
+    for await (const _event of writing.generate(actor, created.id, {
+      operation: 'create',
+      instruction: 'Write chapter two.',
+      expectedRevision: created.revision,
+    })) {
+      // drain
+    }
+    expect(capture.systemPrompt).toMatch(/scar over her left eye/);
+    expect(capture.systemPrompt).toMatch(/refuses to enter churches/);
+  });
+
+  it('blocks unusable output and does not silently veto advisory fog', async () => {
+    const blocked = await makeWriting(async function* () {
+      yield { type: 'text', text: 'TODO INSERT SOURCE' };
+    });
+    const created = await blocked.writing.create(blocked.actor, { projectId: blocked.project.id, title: 'Invalid' });
+    const events = await collect(
+      blocked.writing.generate(blocked.actor, created.id, {
+        operation: 'create',
+        instruction: 'Write a chapter.',
+        expectedRevision: created.revision,
+      }),
+    );
+    expect(events.some((event) => event.type === 'error' && event.failure.code === 'invalid_output')).toBe(true);
+    const after = await blocked.writing.get(blocked.actor, created.id);
+    expect(after.currentVersion).toBe(0);
+    expect(after.status).toBe('failed');
+    const quality = await blocked.writing.getQuality(blocked.actor, created.id);
+    expect(quality.blocking).toBe(true);
+
+    const capture: { systemPrompt?: string } = {};
+    let pass = 0;
+    const advisory = await makeWriting(async function* () {
+      pass += 1;
+      if (pass === 1) yield { type: 'text', text: "In today's fast-paced world the keeper climbed." };
+      else yield { type: 'text', text: 'The keeper climbed the cold stair and trimmed the wick.' };
+    }, capture);
+    const fog = await advisory.writing.create(advisory.actor, { projectId: advisory.project.id, title: 'Fog' });
+    for await (const _event of advisory.writing.generate(advisory.actor, fog.id, {
+      operation: 'create',
+      instruction: 'Write a scene.',
+      expectedRevision: fog.revision,
+    })) {
+      // drain
+    }
+    const fogged = await advisory.writing.get(advisory.actor, fog.id);
+    expect(fogged.currentVersion).toBe(1);
+    const fogQuality = await advisory.writing.getQuality(advisory.actor, fog.id);
+    expect(fogQuality.state).toBe('advisory');
+    for await (const _event of advisory.writing.generate(advisory.actor, fog.id, {
+      operation: 'refine',
+      instruction: 'Refine this with Caspa Gold.',
+      expectedRevision: fogged.revision,
+    })) {
+      // drain
+    }
+    expect(capture.systemPrompt).toMatch(/Quality findings to address|AI-fog|fast-paced world/i);
+    const refined = await advisory.writing.get(advisory.actor, fog.id);
+    expect(refined.currentVersion).toBe(2);
+    expect(refined.content).toMatch(/cold stair/);
+    expect(refined.content).not.toMatch(/fast-paced world/);
+  });
+
+  it('publishes the manuscript to the library with Generated provenance origin', async () => {
+    const { writing, actor, project, files } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'Harbour lamp against the fog.' };
+    });
+    const created = await writing.create(actor, { projectId: project.id, title: 'Lighthouse scene' });
+    for await (const _event of writing.generate(actor, created.id, {
+      operation: 'create',
+      instruction: 'Write a short scene.',
+      expectedRevision: created.revision,
+    })) {
+      // drain
+    }
+    const listed = await files.list(actor, project.id);
+    const manuscript = listed.find((file) => file.displayName === 'Lighthouse scene');
+    expect(manuscript).toBeTruthy();
+    expect(manuscript?.path).toMatch(/^manuscripts\/doc_/);
+    const origin = await files.originFor(actor, manuscript!);
+    expect(origin).toBe('generated');
+  });
+
+  it('does not treat ordinary questions as writing', async () => {
+    const { writing, actor, project } = await makeWriting(async function* () {
+      yield { type: 'text', text: 'should not run' };
+    });
+    expect(
+      await writing.maybeRunFromConversation(actor, {
+        conversationId: 'con_ask',
+        projectId: project.id,
+        question: 'What is a lighthouse keeper?',
+      }),
+    ).toEqual({ handled: false });
+    expect(
+      await writing.maybeRunFromConversation(actor, {
+        conversationId: 'con_ask',
+        projectId: project.id,
+        question: 'Which of those findings is strongest?',
+      }),
+    ).toEqual({ handled: false });
+  });
 });

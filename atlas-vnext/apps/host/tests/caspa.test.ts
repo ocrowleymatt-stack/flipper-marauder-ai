@@ -671,4 +671,122 @@ describe('Caspa writing dungeon host', () => {
     });
     expect(cancelled.status).toBe(200);
   });
+
+  it('returns writing into the requesting conversation and lists the manuscript as Generated', async () => {
+    const { url } = await startCaspa();
+    const session = await bootstrap(url);
+    const project = (await (
+      await fetch(`${url}/api/projects`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({ name: 'Chat writing' }),
+      })
+    ).json()) as { id: string };
+    const conversation = (await (
+      await fetch(`${url}/api/projects/${project.id}/conversations`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({}),
+      })
+    ).json()) as { id: string };
+    const stream = await fetch(`${url}/api/conversations/${conversation.id}/messages`, {
+      method: 'POST',
+      headers: auth(session),
+      body: JSON.stringify({
+        content: 'Write a 500-word scene about a lighthouse keeper hearing a voice from the fog.',
+        capability: 'nexus/fast',
+      }),
+    });
+    expect(stream.ok).toBe(true);
+    const frames = await readSse(stream);
+    const text = frames
+      .map((frame) => {
+        const data = frame.data as { type?: string; text?: string; message?: { content?: string } };
+        return data.text ?? data.message?.content ?? '';
+      })
+      .join('\n');
+    expect(text).toMatch(/Writing:/);
+    expect(text).toMatch(/Manuscript:/);
+    const documentId = text.match(/Document-id:\s*(doc_[^\s]+)/)?.[1];
+    expect(documentId).toBeTruthy();
+    const document = (await (await fetch(`${url}/api/documents/${documentId}`, { headers: { cookie: session.cookie } })).json()) as {
+      currentVersion: number;
+      title: string;
+    };
+    expect(document.currentVersion).toBe(1);
+    const files = (await (await fetch(`${url}/api/projects/${project.id}/files`, { headers: { cookie: session.cookie } })).json()) as Array<{
+      displayName: string;
+      origin: string;
+      documentId?: string;
+    }>;
+    const manuscript = files.find((file) => file.documentId === documentId);
+    expect(manuscript?.origin).toBe('generated');
+    expect(manuscript?.displayName).toBe(document.title);
+    const chats = (await (
+      await fetch(`${url}/api/projects/${project.id}/conversations`, { headers: { cookie: session.cookie } })
+    ).json()) as Array<{ id: string; title: string }>;
+    expect(chats.some((item) => item.id === conversation.id)).toBe(true);
+    expect(chats.every((item) => !item.title.startsWith('__writing_run__:'))).toBe(true);
+    const allChats = (await (await fetch(`${url}/api/conversations`, { headers: { cookie: session.cookie } })).json()) as Array<{
+      title: string;
+    }>;
+    expect(allChats.every((item) => !item.title.startsWith('__writing_run__:'))).toBe(true);
+  });
+
+  it('stores story bible and fail-closes new writing routes', async () => {
+    const { url, spine } = await startCaspa();
+    const unauth = await fetch(`${url}/api/projects/proj_guess/story-bible`);
+    expect(unauth.status).toBe(401);
+    const session = await bootstrap(url);
+    const project = (await (
+      await fetch(`${url}/api/projects`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({ name: 'Bible' }),
+      })
+    ).json()) as { id: string };
+    const saved = await fetch(`${url}/api/projects/${project.id}/story-bible`, {
+      method: 'PUT',
+      headers: auth(session),
+      body: JSON.stringify({
+        characters: [{ name: 'Mara', facts: 'Mara has a scar over her left eye and refuses to enter churches.' }],
+        facts: ['Mara has a scar over her left eye and refuses to enter churches.'],
+      }),
+    });
+    expect(saved.status).toBe(200);
+    const bible = (await (await fetch(`${url}/api/projects/${project.id}/story-bible`, { headers: { cookie: session.cookie } })).json()) as {
+      facts: string[];
+    };
+    expect(bible.facts.join(' ')).toMatch(/scar over her left eye/);
+
+    await spine.persistence!.ensureTenant({ id: 'tenant_b', name: 'B' });
+    await spine.persistence!.ensurePrincipal({ id: 'principal_b', displayName: 'B' });
+    await spine.persistence!.forActor({ tenantId: 'tenant_b', principalId: 'principal_b' }).directory.putTenantMembership({
+      principalId: 'principal_b',
+      tenantId: 'tenant_b',
+      role: 'member',
+      capabilities: [],
+      createdAt: new Date().toISOString(),
+    });
+    spine.authority.grantMembership('principal_b', 'tenant_b');
+    for (const cap of ['artifact.read', 'artifact.write', 'project.read', 'file.read'] as const) {
+      spine.authority.grantTo({ principalId: 'principal_b', tenantId: 'tenant_b', capability: cap });
+    }
+    const issuedB = await spine.auth.issueSession({ principalId: 'principal_b', tenantId: 'tenant_b' });
+    const headersB = {
+      cookie: spine.auth.cookieHeader(issuedB.session.id),
+      'x-atlas-csrf': issuedB.csrfToken,
+      'content-type': 'application/json',
+    };
+    expect((await fetch(`${url}/api/projects/${project.id}/story-bible`, { headers: headersB })).status).toBe(404);
+    const document = (await (
+      await fetch(`${url}/api/projects/${project.id}/documents`, {
+        method: 'POST',
+        headers: auth(session),
+        body: JSON.stringify({ title: 'Secret' }),
+      })
+    ).json()) as { id: string };
+    expect((await fetch(`${url}/api/documents/${document.id}/structure`, { headers: headersB })).status).toBe(404);
+    expect((await fetch(`${url}/api/documents/${document.id}/quality`, { headers: headersB })).status).toBe(404);
+  });
 });

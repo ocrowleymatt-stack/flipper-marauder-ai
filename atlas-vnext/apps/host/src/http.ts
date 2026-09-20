@@ -130,5 +130,11 @@ export function publicFile(
     updatedAt: file.updatedAt,
     projectId: file.workspaceId,
     origin,
+    documentId: manuscriptDocumentId(file.path),
   };
+}
+
+function manuscriptDocumentId(path: string): string | undefined {
+  const match = path.match(/^manuscripts\/([^/]+)\.md$/);
+  return match?.[1];
 }

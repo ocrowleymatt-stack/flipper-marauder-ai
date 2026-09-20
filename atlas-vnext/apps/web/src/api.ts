@@ -101,6 +101,7 @@ export interface ProjectFile {
   updatedAt: string;
   projectId: string;
   origin?: 'uploaded' | 'generated' | 'result' | 'unknown';
+  documentId?: string;
 }
 
 export interface Citation {
@@ -670,6 +671,50 @@ export async function commissionDocument(
       body: JSON.stringify(input),
     }),
   );
+}
+
+export async function getStoryBible(projectId: string): Promise<{
+  premise?: string;
+  world?: string;
+  voice?: string;
+  facts?: string[];
+  continuity?: string[];
+  characters?: Array<{ name: string; facts: string }>;
+}> {
+  return parseJson(await fetch(`/api/projects/${encodeURIComponent(projectId)}/story-bible`, { credentials: 'include' }));
+}
+
+export async function saveStoryBible(
+  projectId: string,
+  payload: {
+    premise?: string;
+    world?: string;
+    voice?: string;
+    facts?: string[];
+    continuity?: string[];
+    characters?: Array<{ name: string; facts: string }>;
+  },
+) {
+  return parseJson(
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/story-bible`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: mutatingHeaders(),
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function getDocumentStructure(id: string): Promise<Array<{ title: string; order: number; wordCount: number }>> {
+  return parseJson(await fetch(`/api/documents/${encodeURIComponent(id)}/structure`, { credentials: 'include' }));
+}
+
+export async function getDocumentQuality(id: string): Promise<{
+  blocking: boolean;
+  state: string;
+  findings: Array<{ id: string; gate: string; severity: string; message: string }>;
+}> {
+  return parseJson(await fetch(`/api/documents/${encodeURIComponent(id)}/quality`, { credentials: 'include' }));
 }
 
 export async function scanOsint(projectId: string, kind: string, value: string): Promise<{

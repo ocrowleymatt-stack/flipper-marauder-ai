@@ -13,7 +13,7 @@ export const WRITING_RUNTIME_POLICY =
   'Runtime policy: Execution owns transport, retries, and failover. Failover is allowed only before visible output. After visible output, do not silently switch providers. Continuation after a visible failure is a new run.';
 
 export const DUNGEON_WRITING_BEHAVIOUR =
-  'Caspa writing behaviour: produce durable document text for the requested operation. Prefer continuity with the current revision. Do not chat around the task. Do not invent file sources. Do not mention infrastructure, runtimes, or vendor lists.';
+  'Caspa writing behaviour: produce durable document text for the requested operation. Prefer continuity with the current revision, story bible, and named characters. Do not chat around the task. Do not invent file sources. Do not mention infrastructure, runtimes, vendor lists, or numeric quality scores.';
 
 export function writingOperationInstruction(operation: WritingOperation, instruction: string): string {
   const verbs: Record<WritingOperation, string> = {
@@ -29,6 +29,7 @@ export function writingOperationInstruction(operation: WritingOperation, instruc
     restore: 'Restore the selected prior revision as a new version.',
     edit: 'Commit the supplied editor text as a new user-authored revision.',
     outline: 'Produce a structured outline for the current document or instruction.',
+    refine: 'Apply one bounded editorial pass. Address listed quality findings. Preserve plot, names, and established story-bible facts. Return the revised manuscript only.',
   };
   return `${verbs[operation]}\n\nUser instruction:\n${instruction.trim()}`;
 }
@@ -79,6 +80,7 @@ export function writingRouteRequirements(input: {
     input.operation === 'transform' ||
     input.operation === 'create' ||
     input.operation === 'outline' ||
+    input.operation === 'refine' ||
     longContext;
   const privacy = input.privacy ?? 'any';
   const latency = input.operation === 'shorten' || input.operation === 'tone' ? 'fast' : 'medium';

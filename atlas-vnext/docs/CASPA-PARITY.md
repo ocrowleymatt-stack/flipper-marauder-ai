@@ -16,11 +16,18 @@ Caspa is the reference Atlas dungeon. Useful previous capability is restored thr
 | Cancellation | MIGRATED | `POST /documents/:id/cancel` + runtime.cancel |
 | Resumability after reload | MIGRATED | GET document/versions/provenance; browser is not source of truth |
 | Long-form commission jobs | RESTORED | `writing.commission` via jobs `waitForRuntime` / `resumeFromRuntime` |
-| Outline / StoryBible / claims / quality companions | RESTORED | `dungeon_records` kinds `outline`, `canon`, `claims`, `quality` |
-| Multi-round operations | MIGRATED | generate operations including `outline`, `continue`, `edit` |
+| Outline / StoryBible / claims / quality companions | RESTORED | document-scoped `dungeon_records` kinds `outline`, `canon`, `claims`, `quality` |
+| Project StoryBible live canon | RESTORED | project `dungeon_records` kind `story_bible`; assembled into later generate with caps |
+| Deterministic chapter structure | RESTORED | pure `detectChapters`; persisted by title, not index |
+| Conversation result-return | RESTORED | `WritingService.maybeRunFromConversation` on the requesting Atlas conversation |
+| Writing result cards | RESTORED | `ResultKind` `writing`; Open manuscript |
+| Library manuscript | RESTORED | Files row bound to the writing artefact; origin Generated from provenance |
+| Quality heuristics | RESTORED | hard-block unusable output; advisory/corrective otherwise; findings visible |
+| User-requested Gold refine | RESTORED | single Execution pass (`refine`); not an autonomous five-call pipeline |
+| Multi-round operations | MIGRATED | generate operations including `outline`, `continue`, `edit`, `refine` |
 | Failure recovery | MIGRATED | classified failure on document; draft not promoted |
 | Caspa routers / llmRouter / failover | DROPPED | Nexus WHERE + Execution HOW |
-| GoldPipeline / PlotArchitect copied services | DROPPED | behavioural lessons only |
+| GoldPipeline / PlotArchitect copied services | DROPPED | behavioural lessons only; optional user-requested `refine` uses Execution |
 | Parallel Caspa/Shakespeare DBs | DROPPED | one documents table + CAS |
 | Firebase / Authentik / nginx identity | SUPERSEDED | platform auth + Authority |
 | Research / OSINT / music / website inside Caspa | MOVED | specialist dungeons |

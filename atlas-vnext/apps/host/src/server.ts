@@ -48,6 +48,7 @@ import {
   handleWorkbench,
   isForeignHostSession,
   resolveActor,
+  visibleHostConversations,
 } from './workbench.ts';
 import { handleCaspa } from './caspa.ts';
 import { handleEstate } from './estate.ts';
@@ -289,7 +290,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HostOp
         return;
       }
       const projectId = urlQuery(req).get('projectId');
-      const conversations = await options.runtime.listConversations();
+      const conversations = visibleHostConversations(await options.runtime.listConversations());
       json(
         res,
         200,

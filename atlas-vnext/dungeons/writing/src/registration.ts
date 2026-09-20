@@ -14,6 +14,9 @@ export const CASPA_WRITING_DUNGEON: DungeonRegistration = {
     versions: '/api/documents/:id/versions',
     restore: '/api/documents/:id/restore',
     provenance: '/api/documents/:id/provenance',
+    storyBible: '/api/projects/:projectId/story-bible',
+    structure: '/api/documents/:id/structure',
+    quality: '/api/documents/:id/quality',
   },
   capabilities: ['artifact.read', 'artifact.write', 'project.read', 'file.read', 'conversation.write'],
   permissions: {

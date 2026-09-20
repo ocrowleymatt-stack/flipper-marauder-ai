@@ -53,6 +53,22 @@ describe('Wave 3 conversation result presentation', () => {
     expect(classifyAssistantResult('Hello. The kettle is copper.')).toBeNull();
   });
 
+  it('parses writing reports into a manuscript card without hashes as the name', () => {
+    const writing = `Writing: Lighthouse scene
+Manuscript: Lighthouse scene
+Revision: 1
+Status: committed
+Quality: pass
+Operation: create
+Document-id: doc_abc`;
+    const result = classifyAssistantResult(writing);
+    expect(result?.kind).toBe('writing');
+    expect(result?.headline).toBe('Lighthouse scene');
+    expect(result?.documentId).toBe('doc_abc');
+    expect(result?.qualityState).toBe('pass');
+    expect(result?.headline).not.toMatch(/cas:|sha256/i);
+  });
+
   it('binds durable findings to the matching OSINT scan, not the whole conversation', () => {
     const octocat = classifyAssistantResult(osint)!;
     const hubotReport = osint.replaceAll('octocat', 'hubot').replace('The Octocat GitHub profile repositories', 'Hubot automation GitHub profile');

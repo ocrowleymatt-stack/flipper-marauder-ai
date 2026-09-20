@@ -17,6 +17,19 @@ import type { ProjectService } from '@atlas-vnext/projects';
 import { FilesAccessError } from '@atlas-vnext/files';
 import { composeWritingPrompt, writingRouteRequirements } from './behaviour.ts';
 import { GENERIC_DENY, WritingError } from './errors.ts';
+import {
+  extractStoryBibleFact,
+  inferWritingOperation,
+  looksLikeGoldRequest,
+  looksLikeStoryBibleUpdate,
+  looksLikeWritingFollowup,
+  looksLikeWritingRequest,
+  titleFromWritingAsk,
+} from './intent.ts';
+import { assembleStoryBible, mergeStoryBible, parseStoryBiblePayload, type StoryBiblePayload } from './bible.ts';
+import { bindStructureByTitle, detectChapters, formatStructureForPrompt, type BoundChapter } from './chapters.ts';
+import { assessWritingQuality, formatQualityForPrompt, type QualityAssessment } from './quality.ts';
+import { composeWritingReport, manuscriptLibraryPath, isWritingRunConversation, writingRunConversationTitle } from './report.ts';
 
 export interface WritingActor extends PersistenceActor {
   principalId: string;
@@ -239,10 +252,11 @@ export class WritingService {
 
   async listCompanions(actor: WritingActor, documentId: string) {
     await this.requireDocument(actor, documentId, 'artifact.read');
-    return this.deps.persistence.forActor(actor).dungeonRecords.list(actor, {
+    const rows = await this.deps.persistence.forActor(actor).dungeonRecords.list(actor, {
       dungeon: 'writing',
       parentId: documentId,
     });
+    return rows.filter((row) => row.kind === 'outline' || row.kind === 'canon' || row.kind === 'claims' || row.kind === 'quality');
   }
 
   async commission(
@@ -277,6 +291,169 @@ export class WritingService {
       await jobs.fail(actor, claimed.id, this.failureFrom(err));
       throw err;
     }
+  }
+
+  async maybeRunFromConversation(
+    actor: WritingActor,
+    input: {
+      conversationId: string;
+      projectId: string | null;
+      question: string;
+      signal?: AbortSignal;
+    },
+  ): Promise<{ handled: boolean; text?: string; failed?: boolean }> {
+    if (!input.projectId) return { handled: false };
+    const isRequest = looksLikeWritingRequest(input.question);
+    const isFollowup = looksLikeWritingFollowup(input.question);
+    if (!isRequest && !isFollowup) return { handled: false };
+    await this.requireProject(actor, input.projectId, 'artifact.write');
+
+    if (looksLikeStoryBibleUpdate(input.question) && !/\b(write|draft|compose|chapter|scene)\b/i.test(input.question)) {
+      const fact = extractStoryBibleFact(input.question);
+      const bible = await this.upsertStoryBible(actor, input.projectId, {
+        facts: [fact],
+        continuity: [fact],
+      });
+      return {
+        handled: true,
+        text: composeWritingReport({
+          title: 'Story bible',
+          documentId: bible.id,
+          revision: bible.revision,
+          version: bible.revision,
+          status: 'committed',
+          quality: { blocking: false, state: 'pass', findings: [] },
+          operation: 'canon',
+          excerpt: fact,
+        }),
+      };
+    }
+
+    const existing = await this.documentForConversation(actor, input.projectId, input.conversationId);
+    if (isFollowup && !existing) return { handled: false };
+    const operation = inferWritingOperation(input.question, Boolean(existing));
+    const document =
+      existing ??
+      (await this.create(actor, {
+        projectId: input.projectId,
+        title: titleFromWritingAsk(input.question),
+        instruction: input.question,
+      }));
+    await this.bindConversation(actor, document.id, document.projectId, document.title, input.conversationId);
+
+    let latest = document;
+    let failed = false;
+    let failureMessage = '';
+    for await (const event of this.generate(actor, document.id, {
+      operation,
+      instruction: input.question,
+      expectedRevision: document.revision,
+      fileIds: [],
+    })) {
+      if (event.type === 'document') latest = event.document;
+      if (event.type === 'error') {
+        failed = true;
+        failureMessage = event.failure.message;
+      }
+    }
+    const quality = await this.getQuality(actor, latest.id);
+    return {
+      handled: true,
+      failed,
+      text: composeWritingReport({
+        title: latest.title,
+        documentId: latest.id,
+        revision: latest.revision,
+        version: latest.currentVersion,
+        status: latest.status,
+        quality,
+        operation,
+        excerpt: failed ? failureMessage : (latest.content || latest.draft || '').slice(0, 400),
+      }),
+    };
+  }
+
+  async getStoryBible(actor: WritingActor, projectId: string): Promise<StoryBiblePayload> {
+    const row = await this.storyBibleRow(actor, projectId, 'artifact.read');
+    return row ? parseStoryBiblePayload(row.payload) : parseStoryBiblePayload({});
+  }
+
+  async upsertStoryBible(actor: WritingActor, projectId: string, patch: StoryBiblePayload) {
+    const project = await this.requireProject(actor, projectId, 'artifact.write');
+    const existing = await this.storyBibleRow(actor, projectId, 'artifact.write');
+    const merged = mergeStoryBible(existing ? parseStoryBiblePayload(existing.payload) : parseStoryBiblePayload({}), patch);
+    const bound = this.deps.persistence.forActor(actor);
+    if (existing) {
+      return bound.dungeonRecords.update(actor, existing.id, {
+        payload: merged as unknown as Record<string, unknown>,
+        title: 'Story bible',
+        status: 'completed',
+        expectedRevision: existing.revision,
+      });
+    }
+    return bound.dungeonRecords.create(actor, {
+      workspaceId: project.id,
+      dungeon: 'writing',
+      kind: 'story_bible',
+      title: 'Story bible',
+      status: 'completed',
+      payload: merged as unknown as Record<string, unknown>,
+    });
+  }
+
+  async getStructure(actor: WritingActor, documentId: string): Promise<BoundChapter[]> {
+    await this.requireDocument(actor, documentId, 'artifact.read');
+    const rows = await this.deps.persistence.forActor(actor).dungeonRecords.list(actor, {
+      dungeon: 'writing',
+      parentId: documentId,
+      kind: 'structure',
+    });
+    const latest = rows[0];
+    const chapters = latest && Array.isArray(latest.payload.chapters) ? latest.payload.chapters : [];
+    return chapters.flatMap((item, index) => {
+      if (!item || typeof item !== 'object') return [];
+      const row = item as Record<string, unknown>;
+      const title = typeof row.title === 'string' ? row.title : '';
+      if (!title) return [];
+      return [
+        {
+          title,
+          order: typeof row.order === 'number' ? row.order : index,
+          wordCount: typeof row.wordCount === 'number' ? row.wordCount : 0,
+          documentId: typeof row.documentId === 'string' ? row.documentId : null,
+        },
+      ];
+    });
+  }
+
+  async getQuality(actor: WritingActor, documentId: string): Promise<QualityAssessment> {
+    await this.requireDocument(actor, documentId, 'artifact.read');
+    const rows = await this.deps.persistence.forActor(actor).dungeonRecords.list(actor, {
+      dungeon: 'writing',
+      parentId: documentId,
+      kind: 'quality_findings',
+    });
+    const latest = rows[0];
+    if (!latest) return { blocking: false, state: 'pass', findings: [] };
+    return {
+      blocking: latest.payload.blocking === true,
+      state: latest.payload.state === 'blocked' || latest.payload.state === 'advisory' ? latest.payload.state : 'pass',
+      findings: Array.isArray(latest.payload.findings)
+        ? latest.payload.findings
+            .map((item) => {
+              if (!item || typeof item !== 'object') return null;
+              const row = item as Record<string, unknown>;
+              if (typeof row.id !== 'string' || typeof row.message !== 'string') return null;
+              return {
+                id: row.id,
+                gate: typeof row.gate === 'string' ? row.gate : 'style',
+                severity: row.severity === 'block' ? 'block' : 'advisory',
+                message: row.message,
+              };
+            })
+            .filter((item): item is QualityAssessment['findings'][number] => Boolean(item))
+        : [],
+    };
   }
 
   async *generate(actor: WritingActor, id: string, input: WritingGenerateInput): AsyncGenerator<WritingStreamEvent> {
@@ -343,6 +520,7 @@ export class WritingService {
       return;
     }
 
+    const currentText = await this.readContent(actor, record);
     let assembledContext = '';
     const sourceInputs: string[] = [];
     if (policy.retrievalScope !== 'none') {
@@ -367,11 +545,22 @@ export class WritingService {
       }
     }
 
-    const currentText = await this.readContent(actor, record);
+    const bible = await this.getStoryBible(actor, record.workspaceId);
+    const bibleText = assembleStoryBible({
+      bible,
+      instruction,
+      currentDocument: currentText,
+    });
+    const structureText = formatStructureForPrompt(await this.getStructure(actor, record.id));
+    const priorQuality =
+      operation === 'refine' || operation === 'correct' || operation === 'tone' || looksLikeGoldRequest(instruction)
+        ? formatQualityForPrompt((await this.getQuality(actor, record.id)).findings)
+        : '';
+    const projectContext = [assembledContext, bibleText.text, structureText, priorQuality].filter((item) => item.trim()).join('\n\n');
     const behaviour = await this.deps.persistence.forActor(actor).behaviour.resolve(actor.tenantId);
     const composed = composeWritingPrompt({
       behaviour,
-      projectContext: assembledContext,
+      projectContext,
       operation,
       instruction,
       currentDocument: currentText,
@@ -385,9 +574,10 @@ export class WritingService {
     });
 
     let conversationId = record.conversationId;
-    if (!conversationId) {
+    const existingRun = conversationId ? await this.deps.runtime.getSnapshot(conversationId) : null;
+    if (!conversationId || !existingRun || !isWritingRunConversation(existingRun.conversation.title)) {
       const conversation = await this.deps.runtime.createConversation({
-        title: record.title,
+        title: writingRunConversationTitle(record.id),
         projectId: record.workspaceId,
       });
       conversationId = conversation.id;
@@ -550,6 +740,18 @@ export class WritingService {
       yield { type: 'document', document: await this.present(actor, record, { content: currentText, draft }) };
 
       if (input.commit === false) {
+        yield { type: 'done' };
+        return;
+      }
+
+      const assessment = assessWritingQuality(draft);
+      await this.persistQuality(actor, record.id, record.workspaceId, assessment);
+      if (assessment.blocking) {
+        const sealed = await sealFailure(
+          failure('invalid_output', assessment.findings[0]?.message ?? 'Unusable manuscript text.', false),
+        );
+        yield { type: 'document', document: await this.present(actor, sealed, { content: currentText, draft }) };
+        yield { type: 'error', failure: sealed.failure ?? failure('invalid_output', 'Unusable manuscript text.', false) };
         yield { type: 'done' };
         return;
       }
@@ -835,7 +1037,148 @@ export class WritingService {
       });
       return versioned;
     });
-    return this.present(actor, committed.document, { content: input.text });
+    const presented = await this.present(actor, committed.document, { content: input.text });
+    await this.persistStructure(actor, presented.id, presented.projectId, presented.content);
+    await this.publishLibraryFile(actor, presented);
+    return presented;
+  }
+
+  private async storyBibleRow(actor: WritingActor, projectId: string, capability: 'artifact.read' | 'artifact.write') {
+    await this.requireProject(actor, projectId, capability);
+    const rows = await this.deps.persistence.forActor(actor).dungeonRecords.list(actor, {
+      workspaceId: projectId,
+      dungeon: 'writing',
+      kind: 'story_bible',
+    });
+    return rows[0] ?? null;
+  }
+
+  private async documentForConversation(actor: WritingActor, projectId: string, conversationId: string) {
+    const rows = await this.deps.persistence.forActor(actor).dungeonRecords.list(actor, {
+      workspaceId: projectId,
+      dungeon: 'writing',
+      kind: 'conversation_link',
+    });
+    const match = rows
+      .filter((row) => row.conversationId === conversationId && row.parentId)
+      .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0];
+    if (!match?.parentId) return null;
+    try {
+      return await this.get(actor, match.parentId);
+    } catch {
+      return null;
+    }
+  }
+
+  private async bindConversation(
+    actor: WritingActor,
+    documentId: string,
+    projectId: string,
+    title: string,
+    conversationId: string,
+  ) {
+    const bound = this.deps.persistence.forActor(actor);
+    const rows = await bound.dungeonRecords.list(actor, {
+      workspaceId: projectId,
+      dungeon: 'writing',
+      kind: 'conversation_link',
+    });
+    const existing = rows.find((row) => row.conversationId === conversationId && row.parentId === documentId);
+    if (existing) return existing;
+    return bound.dungeonRecords.create(actor, {
+      workspaceId: projectId,
+      dungeon: 'writing',
+      kind: 'conversation_link',
+      title,
+      status: 'completed',
+      parentId: documentId,
+      conversationId,
+      payload: { documentId },
+    });
+  }
+
+  private async persistStructure(actor: WritingActor, documentId: string, projectId: string, text: string) {
+    const detected = detectChapters(text);
+    const previous = await this.getStructure(actor, documentId);
+    const chapters = bindStructureByTitle(detected, previous);
+    const bound = this.deps.persistence.forActor(actor);
+    const rows = await bound.dungeonRecords.list(actor, {
+      dungeon: 'writing',
+      parentId: documentId,
+      kind: 'structure',
+    });
+    const payload = { chapters };
+    const latest = rows[0];
+    if (latest) {
+      await bound.dungeonRecords.update(actor, latest.id, {
+        payload,
+        title: 'Chapter structure',
+        status: 'completed',
+        expectedRevision: latest.revision,
+      });
+      return;
+    }
+    await bound.dungeonRecords.create(actor, {
+      workspaceId: projectId,
+      dungeon: 'writing',
+      kind: 'structure',
+      title: 'Chapter structure',
+      status: 'completed',
+      parentId: documentId,
+      payload,
+    });
+  }
+
+  private async persistQuality(actor: WritingActor, documentId: string, projectId: string, assessment: QualityAssessment) {
+    const bound = this.deps.persistence.forActor(actor);
+    const rows = await bound.dungeonRecords.list(actor, {
+      dungeon: 'writing',
+      parentId: documentId,
+      kind: 'quality_findings',
+    });
+    const payload = {
+      blocking: assessment.blocking,
+      state: assessment.state,
+      findings: assessment.findings,
+    };
+    const latest = rows[0];
+    if (latest) {
+      await bound.dungeonRecords.update(actor, latest.id, {
+        payload,
+        title: 'Quality',
+        status: assessment.blocking ? 'failed' : 'completed',
+        expectedRevision: latest.revision,
+      });
+      return;
+    }
+    await bound.dungeonRecords.create(actor, {
+      workspaceId: projectId,
+      dungeon: 'writing',
+      kind: 'quality_findings',
+      title: 'Quality',
+      status: assessment.blocking ? 'failed' : 'completed',
+      parentId: documentId,
+      payload,
+    });
+  }
+
+  private async publishLibraryFile(
+    actor: WritingActor,
+    document: { id: string; projectId: string; title: string; currentContentHash: string | null; content: string },
+  ) {
+    if (!document.currentContentHash) return;
+    const latest = await this.store(actor).get(actor, document.id);
+    if (!latest?.currentArtefactId || !latest.currentContentHash) return;
+    const artefact = await this.deps.persistence.artefacts.get(actor, latest.currentArtefactId);
+    await this.deps.files.publishArtefactFile(actor, {
+      projectId: document.projectId,
+      path: manuscriptLibraryPath(document.id),
+      displayName: document.title,
+      artefactId: latest.currentArtefactId,
+      contentHash: latest.currentContentHash,
+      mimeType: artefact?.mimeType ?? 'text/plain',
+      sizeBytes: artefact?.sizeBytes ?? new TextEncoder().encode(document.content).byteLength,
+    });
   }
 
   private async present(

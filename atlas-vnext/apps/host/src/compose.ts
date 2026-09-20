@@ -43,7 +43,7 @@ import {
   ToolEngine,
   ToolRegistry,
 } from '@atlas-vnext/tools';
-import { WritingService } from '@atlas-vnext/dungeon-writing';
+import { WritingService, WritingError, looksLikeWritingFollowup, looksLikeWritingRequest, isWritingRunConversation } from '@atlas-vnext/dungeon-writing';
 import { OsintService, DungeonError, looksLikeOsintFollowup } from '@atlas-vnext/dungeon-osint';
 import { InvestigationService } from '@atlas-vnext/dungeon-investigation';
 import { ResearchError, ResearchService } from '@atlas-vnext/dungeon-research';
@@ -422,6 +422,8 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       const actorPrincipal = input.principalId?.trim();
       if (!actorPrincipal) return { handled: false };
       const actor = { tenantId: input.tenantId?.trim() || tenantId, principalId: actorPrincipal };
+      const runTitle = (await runtime.getSnapshot(input.conversationId))?.conversation.title;
+      if (isWritingRunConversation(runTitle)) return { handled: false };
       if (looksLikeOsintQuestion(input.content) || looksLikeOsintFollowup(input.content)) {
         try {
           const osintResult = await osint!.maybeRunFromConversation(actor, {
@@ -436,6 +438,25 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
             return { handled: true, failed: true, text: err.message };
           }
           if (err instanceof DungeonError && err.code === 'not_found') {
+            return { handled: false };
+          }
+          throw err;
+        }
+      }
+      if (looksLikeWritingRequest(input.content) || looksLikeWritingFollowup(input.content)) {
+        try {
+          const writingResult = await writing!.maybeRunFromConversation(actor, {
+            conversationId: input.conversationId,
+            projectId: input.projectId,
+            question: input.content,
+            signal: input.signal,
+          });
+          if (writingResult.handled) return writingResult;
+        } catch (err) {
+          if (err instanceof WritingError && (err.code === 'permission_denied' || err.code === 'invalid_output')) {
+            return { handled: true, failed: true, text: err.message };
+          }
+          if (err instanceof WritingError && err.code === 'not_found') {
             return { handled: false };
           }
           throw err;

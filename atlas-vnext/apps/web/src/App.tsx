@@ -118,6 +118,7 @@ export function App() {
   const [selectedFinding, setSelectedFinding] = useState<ParsedFinding | null>(null);
   const [selectedFile, setSelectedFile] = useState<ProjectFile | null>(null);
   const [selectedResult, setSelectedResult] = useState<ParsedResult | null>(null);
+  const [caspaDocumentId, setCaspaDocumentId] = useState<string | null>(null);
   const [osintFindings, setOsintFindings] = useState<DungeonRecord[]>([]);
   const [osintTargets, setOsintTargets] = useState<DungeonRecord[]>([]);
   const [researchBriefs, setResearchBriefs] = useState<DungeonRecord[]>([]);
@@ -464,6 +465,7 @@ export function App() {
       }
       await loadConversation(conversationId);
       setConversations(projectId ? await listProjectConversations(projectId) : await listConversations());
+      if (projectId) setFiles(await listFiles(projectId).catch(() => []));
       playCue('complete');
       setStatus('Completed.');
     } catch (err) {
@@ -579,7 +581,19 @@ export function App() {
     playCue('activate');
   }
 
+  function openManuscript(documentId: string) {
+    setCaspaDocumentId(documentId);
+    closePanel();
+    setSurface('writing');
+    setNavOpen(false);
+    playCue('activate');
+  }
+
   function openFileDetails(file: ProjectFile) {
+    if (file.documentId) {
+      openManuscript(file.documentId);
+      return;
+    }
     setSelectedFile(file);
     setSelectedFinding(null);
     setSelectedResult(null);
@@ -688,7 +702,7 @@ export function App() {
       </a>
       <header className="topbar">
         <div className="brand-row">
-          <button type="button" className="ghost nav-toggle" onClick={() => setNavOpen((open) => !open)} aria-expanded={navOpen}>
+          <button type="button" className="ghost nav-toggle" data-testid="nav-toggle" onClick={() => setNavOpen((open) => !open)} aria-expanded={navOpen}>
             {navOpen ? 'Close menu' : 'Menu'}
           </button>
           <p className="eyebrow">Atlas</p>
@@ -876,7 +890,15 @@ export function App() {
         {surface === 'writing' && projectId ? (
           <section className="workspace-wrap">
             <SurfaceBack onBack={goToConversation} label="Caspa" />
-            <CaspaPanel projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={setStatus} onError={setError} />
+            <CaspaPanel
+              projectId={projectId}
+              files={files}
+              busy={busy}
+              setBusy={setBusy}
+              onStatus={setStatus}
+              onError={setError}
+              documentId={caspaDocumentId}
+            />
           </section>
         ) : surface === 'files' ? (
           <FilesSurface
@@ -976,6 +998,7 @@ export function App() {
                           result={card}
                           onOpenFinding={(finding) => openFinding(finding, card)}
                           onOpenSources={() => openSources(card)}
+                          onOpenManuscript={card.documentId ? () => openManuscript(card.documentId!) : undefined}
                         />
                       ) : null}
                       {message.role === 'assistant' && message.content ? (
@@ -1138,19 +1161,28 @@ function ResultCard({
   result,
   onOpenFinding,
   onOpenSources,
+  onOpenManuscript,
 }: {
   result: ParsedResult;
   onOpenFinding: (finding: ParsedFinding) => void;
   onOpenSources: () => void;
+  onOpenManuscript?: () => void;
 }) {
+  const eyebrow = result.kind === 'osint' ? 'OSINT' : result.kind === 'writing' ? 'Writing' : 'Research';
   return (
-    <section className="result-card" data-testid={`result-card-${result.kind}`} data-scan-id={result.scanId ?? ''} aria-label={`${result.kind} result`}>
+    <section className="result-card" data-testid={`result-card-${result.kind}`} data-scan-id={result.scanId ?? ''} data-document-id={result.documentId ?? ''} aria-label={`${result.kind} result`}>
       <div className="result-card-head">
-        <p className="eyebrow">{result.kind === 'osint' ? 'OSINT' : 'Research'}</p>
+        <p className="eyebrow">{eyebrow}</p>
         <p className="meta">{result.state}</p>
       </div>
-      {result.strongest ? <p className="result-strongest">{result.strongest}</p> : null}
-      {result.findings.length > 0 ? (
+      {result.kind === 'writing' ? <p className="result-strongest">{result.headline}</p> : null}
+      {result.kind !== 'writing' && result.strongest ? <p className="result-strongest">{result.strongest}</p> : null}
+      {result.kind === 'writing' && result.qualityState ? (
+        <p className="meta" data-testid="writing-quality">
+          Quality {result.qualityState}
+        </p>
+      ) : null}
+      {result.findings.length > 0 && result.kind !== 'writing' ? (
         <ul className="plain result-findings">
           {result.findings.slice(0, 6).map((finding) => (
             <li key={finding.id}>
@@ -1162,10 +1194,24 @@ function ResultCard({
           ))}
         </ul>
       ) : null}
+      {result.kind === 'writing' && result.findings.length > 0 ? (
+        <ul className="plain result-findings" data-testid="writing-quality-findings">
+          {result.findings.slice(0, 6).map((finding) => (
+            <li key={finding.id}>
+              <strong>{finding.title}</strong>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="row result-actions">
         {result.sources.length > 0 ? (
           <button type="button" className="ghost compact" data-testid="open-sources" onClick={onOpenSources}>
             Sources
+          </button>
+        ) : null}
+        {onOpenManuscript ? (
+          <button type="button" className="ghost compact" data-testid="open-manuscript" onClick={onOpenManuscript}>
+            Open manuscript
           </button>
         ) : null}
       </div>
@@ -1175,7 +1221,7 @@ function ResultCard({
 
 function originLabel(origin: ProjectFile['origin']): string {
   if (origin === 'uploaded') return 'Uploaded';
-  if (origin === 'generated') return 'Atlas-generated';
+  if (origin === 'generated') return 'Generated';
   if (origin === 'result') return 'Result';
   return 'Unknown';
 }

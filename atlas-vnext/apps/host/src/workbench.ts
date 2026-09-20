@@ -165,7 +165,10 @@ export async function handleWorkbench(
           return true;
         }
         const files = await requireFiles(options).list(actor, projectId);
-        json(res, 200, files.map(publicFile));
+        const presented = await Promise.all(
+          files.map(async (file) => publicFile(file, await requireFiles(options).originFor(actor, file))),
+        );
+        json(res, 200, presented);
         return true;
       }
       if (req.method === 'POST' && projectFiles) {
@@ -191,7 +194,7 @@ export async function handleWorkbench(
           // Ingest is durable even if extraction is still pending.
         }
         const latest = (await requireFiles(options).getMetadata(actor, file.id)) ?? file;
-        json(res, 201, publicFile(latest));
+        json(res, 201, publicFile(latest, await requireFiles(options).originFor(actor, latest)));
         return true;
       }
       const projectConversations = pathname.match(/^\/api\/projects\/([^/]+)\/conversations$/);
@@ -255,7 +258,7 @@ export async function handleWorkbench(
           json(res, 404, { error: 'File not found.' });
           return true;
         }
-        json(res, 200, publicFile(file));
+        json(res, 200, publicFile(file, await requireFiles(options).originFor(actor, file)));
         return true;
       }
       const attachMatch = pathname.match(/^\/api\/files\/([^/]+)\/attach$/);

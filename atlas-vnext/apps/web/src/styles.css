@@ -263,6 +263,12 @@ input {
   gap: 8px;
 }
 
+.nav-end {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
 .diagnostics {
   border-left: 1px solid var(--line);
 }
@@ -276,7 +282,8 @@ input {
   gap: 8px;
 }
 
-.conversation-list button {
+.conversation-list button,
+.project-list button {
   display: grid;
   gap: 4px;
   align-items: start;
@@ -334,6 +341,48 @@ input {
   margin: 0;
   font-size: 22px;
   font-weight: 600;
+}
+
+.result-card {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(42, 36, 28, 0.65);
+  display: grid;
+  gap: 10px;
+}
+
+.result-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.result-strongest {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.finding-open {
+  display: flex !important;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.context-panel .facts {
+  margin-bottom: 16px;
+}
+
+.empty .eyebrow {
+  margin-bottom: 8px;
+}
+
+.compact-form {
+  margin-top: 4px;
 }
 
 .hint,
@@ -731,6 +780,9 @@ select,
     inset: 0 0 0 0;
     max-width: min(360px, 92vw);
     z-index: 5;
+  }
+  .layout.nav-open .nav {
+    z-index: 6;
   }
   .diagnostics {
     left: auto;

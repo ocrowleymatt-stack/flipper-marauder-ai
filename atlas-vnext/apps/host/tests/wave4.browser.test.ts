@@ -131,7 +131,10 @@ describe.skipIf(!enabled)('Wave 4 Caspa writing recovery', { timeout: 300_000 },
 
       await page.getByTestId('open-manuscript').click();
       await page.getByTestId('caspa-panel').waitFor();
-      expect(await page.locator('#doc-body').inputValue()).toMatch(/scar over her left eye|lighthouse keeper|voice from the fog/i);
+      await page.getByTestId('doc-body').waitFor({ timeout: 20_000 });
+      await expect
+        .poll(async () => page.getByTestId('doc-body').inputValue(), { timeout: 20_000 })
+        .toMatch(/scar over her left eye|lighthouse keeper|voice from the fog/i);
       await page.getByTestId('back-to-conversation').click();
 
       await page.getByTestId('composer-draft').fill('Make the final paragraph more restrained.');

@@ -82,6 +82,7 @@ export function CaspaPanel({
   const openDocument = useCallback(async (id: string) => {
     const document = await getDocument(id);
     setActive(document);
+    setEditor(document.content || document.draft || '');
     const [nextVersions, nextProvenance, nextCompanions] = await Promise.all([
       listDocumentVersions(id).catch(() => []),
       getDocumentProvenance(id).catch(() => []),
@@ -90,7 +91,6 @@ export function CaspaPanel({
     setVersions(nextVersions);
     setProvenance(nextProvenance);
     setCompanions(nextCompanions);
-    setEditor(document.content || document.draft || '');
     const [nextStructure, nextQuality] = await Promise.all([
       getDocumentStructure(id).catch(() => []),
       getDocumentQuality(id).catch(() => null),
@@ -302,7 +302,7 @@ export function CaspaPanel({
   }
 
   const streaming = active?.status === 'streaming' || active?.status === 'candidate';
-  const body = streaming ? (active?.draft ?? active?.content ?? '') : editor;
+  const body = streaming ? (active?.draft ?? active?.content ?? '') : editor || active?.content || '';
 
   return (
     <main className="workspace caspa" aria-label="Caspa writing" data-testid="caspa-panel">
@@ -351,6 +351,7 @@ export function CaspaPanel({
               <label htmlFor="doc-body">Current revision</label>
               <textarea
                 id="doc-body"
+                data-testid="doc-body"
                 value={body}
                 readOnly={streaming || busy}
                 onChange={(event) => setEditor(event.target.value)}

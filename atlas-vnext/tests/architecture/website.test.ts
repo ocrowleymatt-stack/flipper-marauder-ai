@@ -48,6 +48,8 @@ describe('Website Studio architecture boundaries', () => {
     expect(host.indexOf('if (looksLikeWebsiteRequest')).toBeGreaterThan(host.indexOf('if (looksLikeWritingRequest'));
     expect(host.indexOf('if (looksLikeWebsiteRequest')).toBeLessThan(host.indexOf('research!.maybeRunFromConversation'));
     expect(generatePort).toMatch(/onAttempt\(\)/);
+    expect(generatePort).toMatch(/beginRun/);
+    expect(generatePort).toMatch(/assertGeneratedOutput/);
     expect(generatePort).not.toMatch(/failover after visible|visibleOutputAlready:\s*true/);
   });
 });

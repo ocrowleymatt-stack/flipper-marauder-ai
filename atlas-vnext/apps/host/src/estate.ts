@@ -9,6 +9,7 @@ import { WebsiteError, WebsiteStudioService } from '@atlas-vnext/dungeon-website
 import { MusicError, MusicService } from '@atlas-vnext/dungeon-music';
 import { PrivacyError, PrivacyService } from '@atlas-vnext/dungeon-privacy';
 import { json, readJson, urlPath } from './http.ts';
+import { PlatformHttpError } from './errors.ts';
 import { resolveActor, type WorkbenchHostOptions } from './workbench.ts';
 
 export interface EstateHostOptions extends WorkbenchHostOptions {
@@ -462,6 +463,10 @@ function writeEstateError(res: ServerResponse, err: unknown): true {
   }
   if (err instanceof AuthenticationError) {
     json(res, err.code === 'unauthenticated' ? 401 : 403, { error: err.message });
+    return true;
+  }
+  if (err instanceof PlatformHttpError) {
+    json(res, err.httpStatus, { error: err.message, code: err.code });
     return true;
   }
   throw err;

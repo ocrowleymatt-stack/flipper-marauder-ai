@@ -413,7 +413,7 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       files,
       authority,
       policy,
-      generate: new NodeSiteGenerate(router, plane.broker),
+      generate: new NodeSiteGenerate(router, plane.broker, resources),
     });
     investigation = new InvestigationService({ persistence, projects, files, runtime, authority, policy, context });
     research = new ResearchService({

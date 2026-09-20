@@ -288,4 +288,35 @@ describe('Website Studio dungeon', () => {
     await expect(website.generate(other, site.id, 'steal')).rejects.toMatchObject({ httpStatus: 404 });
     await expect(website.generate(reader, site.id, 'no write')).rejects.toMatchObject({ httpStatus: 404 });
   });
+
+  it('does not steal manuscript or research publish prompts as website follow-ups', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    const website = new WebsiteStudioService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      authority: stack.authority,
+      policy: stack.policy,
+    });
+    const created = await website.maybeRunFromConversation(stack.actor, {
+      conversationId: 'con_site',
+      projectId: stack.project.id,
+      question: 'Build a website about a neighbourhood circus with tents, tickets, and cocoa.',
+    });
+    expect(created.handled).toBe(true);
+    const manuscript = await website.maybeRunFromConversation(stack.actor, {
+      conversationId: 'con_site',
+      projectId: stack.project.id,
+      question: 'Publish my manuscript',
+    });
+    expect(manuscript.handled).toBe(false);
+    const published = await website.maybeRunFromConversation(stack.actor, {
+      conversationId: 'con_site',
+      projectId: stack.project.id,
+      question: 'Publish the site',
+    });
+    expect(published.handled).toBe(true);
+    expect(published.text).toMatch(/Publishing is an owner action/i);
+  });
 });

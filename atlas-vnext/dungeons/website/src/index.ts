@@ -172,7 +172,13 @@ export class WebsiteStudioService {
     if (!write.allowed) throw new WebsiteError('permission_denied', GENERIC_DENY, 404);
 
     const priorHtml = options.previousHtml ?? (await this.currentHtml(actor, site));
-    const produced = await this.produceHtml(brief, options.signal, this.deps.policy.runtimePrivacy(policy), priorHtml);
+    const produced = await this.produceHtml(
+      actor.tenantId,
+      brief,
+      options.signal,
+      this.deps.policy.runtimePrivacy(policy),
+      priorHtml,
+    );
     if (options.signal?.aborted) throw abortError();
 
     const artefact = await this.deps.files.createTextArtefact(actor, {
@@ -384,6 +390,7 @@ export class WebsiteStudioService {
   }
 
   private async produceHtml(
+    tenantId: string,
     brief: string,
     signal: AbortSignal | undefined,
     privacy: 'any' | 'local_only',
@@ -400,6 +407,7 @@ export class WebsiteStudioService {
           previousHtml,
           signal,
           privacy,
+          tenantId,
         });
         if (signal?.aborted) throw abortError();
         html = sanitizeSiteHtml(generated.html);

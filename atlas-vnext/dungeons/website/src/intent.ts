@@ -32,7 +32,7 @@ export function looksLikeWebsiteFollowup(text: string): boolean {
   if (/\bwrite a (scene|chapter|story|manuscript)\b/i.test(t)) return false;
   return (
     /\b(open|show|see)\b.{0,24}\b(preview|site|page)\b/i.test(t) ||
-    /\b(publish|promote)\b.{0,16}\b(it|site|preview)?\b/i.test(t) ||
+    /\b(publish|promote)\b.{0,16}\b(it|site|preview)\b/i.test(t) ||
     /\b(what files|which files|the html|the preview)\b/i.test(t) ||
     /\b(regenerate|rebuild)\b.{0,20}\b(site|page|it|preview)?\b/i.test(t) ||
     /\btry again\b.{0,24}\b(site|page|preview)\b/i.test(t) ||

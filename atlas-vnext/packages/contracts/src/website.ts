@@ -8,5 +8,6 @@ export interface SiteGeneratePort {
     previousHtml?: string | null;
     signal?: AbortSignal;
     privacy?: 'any' | 'local_only';
+    tenantId?: string;
   }): Promise<{ html: string }>;
 }

@@ -35,6 +35,12 @@ describe('website conversation classifier', () => {
     expect(looksLikeWebsiteFollowup('Try again')).toBe(false);
     expect(looksLikeWebsiteFollowup('Try again on the site')).toBe(true);
     expect(looksLikeWebsiteFollowup('Regenerate the site')).toBe(true);
+    expect(looksLikeWebsiteFollowup('Publish the site')).toBe(true);
+    expect(looksLikeWebsiteFollowup('Publish it')).toBe(true);
+    expect(looksLikeWebsiteFollowup('Publish the preview')).toBe(true);
+    expect(looksLikeWebsiteFollowup('Publish my manuscript')).toBe(false);
+    expect(looksLikeWebsiteFollowup('publish the research')).toBe(false);
+    expect(looksLikeWebsiteFollowup('promote Alice')).toBe(false);
   });
 
   it('titles from the about-clause', () => {

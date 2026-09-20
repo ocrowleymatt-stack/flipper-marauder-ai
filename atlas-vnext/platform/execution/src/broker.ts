@@ -8,6 +8,10 @@ import type { ExecutionContext, ExecutionObserver, HealthObserver, ProviderAdapt
  * Execution broker: HOW a RouteDecision runs.
  * Owns retries, circuit breakers, streaming, and transactional tool buffering.
  * Does not choose routes (that's Nexus).
+ *
+ * Circuit-open is Execution HOW. It must not be copied into Nexus routing
+ * eligibility: that made every model on the provider unroutable, so execute()
+ * never ran to observe the cooldown and only a process restart recovered.
  */
 export class ExecutionBroker {
   private readonly adapters = new Map<string, ProviderAdapter>();
@@ -15,7 +19,7 @@ export class ExecutionBroker {
 
   constructor(
     attemptsPerCandidate = DEFAULT_ATTEMPTS_PER_CANDIDATE,
-    private readonly options: { health?: HealthObserver } = {},
+    private readonly options: { health?: HealthObserver; now?: () => number } = {},
   ) {
     this.attemptsPerCandidate = Math.min(
       Math.max(1, attemptsPerCandidate),
@@ -36,7 +40,7 @@ export class ExecutionBroker {
   breaker(providerId: string): CircuitBreaker {
     let breaker = this.breakers.get(providerId);
     if (!breaker) {
-      breaker = new CircuitBreaker();
+      breaker = new CircuitBreaker(3, 60_000, this.options.now);
       this.breakers.set(providerId, breaker);
     }
     return breaker;
@@ -102,15 +106,15 @@ export class ExecutionBroker {
       const breaker = this.breaker(provider);
       if (breaker.isOpen()) {
         attemptIndex += 1;
+        lastError = new Error(`Circuit open for ${provider}.`);
         observer?.onAttempt({
           index: attemptIndex,
           provider,
           model,
           outcome: 'skipped',
-          error: failure('circuit_open', `Circuit open for ${provider}.`, true),
+          error: failure('circuit_open', lastError.message, true),
           emittedVisibleOutput: false,
         });
-        this.options.health?.onProviderHealth(provider, 'unhealthy', 'circuit_open');
         continue;
       }
 
@@ -185,8 +189,6 @@ export class ExecutionBroker {
           if (code === 'authentication_failure') {
             authFailedProviders.add(provider);
             this.options.health?.onProviderHealth(provider, 'authentication_failure');
-          } else if (breaker.isOpen()) {
-            this.options.health?.onProviderHealth(provider, 'unhealthy', 'circuit_open');
           }
 
           if (visibleOutput || aborted) {

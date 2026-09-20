@@ -9,11 +9,12 @@ export class CircuitBreaker {
   constructor(
     private readonly threshold = 3,
     private readonly resetTimeoutMs = 60_000,
+    private readonly now: () => number = Date.now,
   ) {}
 
   isOpen(): boolean {
     if (this.failures < this.threshold) return false;
-    if (Date.now() - this.openedAt > this.resetTimeoutMs) {
+    if (this.now() - this.openedAt > this.resetTimeoutMs) {
       this.failures = 0;
       return false;
     }
@@ -27,7 +28,7 @@ export class CircuitBreaker {
   failure(): void {
     this.failures += 1;
     if (this.failures >= this.threshold) {
-      this.openedAt = Date.now();
+      this.openedAt = this.now();
     }
   }
 }

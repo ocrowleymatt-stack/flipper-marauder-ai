@@ -183,8 +183,11 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
     runtimeStatePath:
       options.runtimeStatePath ?? (mode === 'live' ? join(dirname(options.dataPath), 'runtime.json') : null),
     health: {
-      onProviderHealth(provider, health) {
-        // Observe probe results; Nexus `isRoutable` still honours the kill list.
+      onProviderHealth(provider, health, detail) {
+        // Observe probe results and auth failures; Nexus `isRoutable` still
+        // honours the kill list. Execution circuit-open is HOW (skip +
+        // cooldown) and must not become WHERE (routing eligibility).
+        if (detail === 'circuit_open') return;
         registry.setHealth(provider, health);
         recordProviderHealth(provider, health);
       },

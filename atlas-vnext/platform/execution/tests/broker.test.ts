@@ -367,4 +367,38 @@ describe('Execution broker (transport, retry, streaming)', () => {
     expect(health.some((entry) => entry.health === 'authentication_failure')).toBe(false);
     expect(health.some((entry) => entry.provider === 'ollama' && entry.health === 'healthy')).toBe(true);
   });
+
+  it('does not report circuit_open as Nexus provider health', async () => {
+    const health: Array<{ provider: string; health: string; detail?: string }> = [];
+    const broker = new ExecutionBroker(1, {
+      health: {
+        onProviderHealth(provider, status, detail) {
+          health.push({ provider, health: status, detail });
+        },
+      },
+    });
+    broker.register({
+      providerId: 'xai',
+      async *stream() {
+        throw new Error('Request timed out after 60000ms.');
+      },
+    });
+    for (let i = 0; i < 3; i += 1) {
+      await expect(async () => {
+        for await (const _chunk of broker.execute(decision(['xai/grok-4.20-fast']), { prompt: 'score' })) {
+          // drain
+        }
+      }).rejects.toThrow(/timed out|Execution failed/);
+    }
+    expect(broker.breaker('xai').isOpen()).toBe(true);
+    expect(health.some((entry) => entry.health === 'unhealthy')).toBe(false);
+    expect(health.some((entry) => entry.detail === 'circuit_open')).toBe(false);
+
+    await expect(async () => {
+      for await (const _chunk of broker.execute(decision(['xai/grok-4.20-fast']), { prompt: 'pong' })) {
+        // drain
+      }
+    }).rejects.toThrow(/Circuit open for xai/);
+    expect(health.some((entry) => entry.detail === 'circuit_open')).toBe(false);
+  });
 });

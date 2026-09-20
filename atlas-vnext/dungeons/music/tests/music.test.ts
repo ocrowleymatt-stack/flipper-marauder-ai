@@ -198,6 +198,59 @@ describe('Music dungeon', () => {
     expect(files.some((file) => file.path.endsWith('.wav'))).toBe(false);
   });
 
+  it('B/F/J: a score-generation timeout fails cleanly and does not claim playable audio', async () => {
+    const stack = await openDungeonStack();
+    persistences.push(stack.persistence);
+    let fail = true;
+    const generate: MusicScorePort = {
+      async generateScore() {
+        if (fail) {
+          const error = new Error('Request timed out after 60000ms.') as Error & { code: string };
+          error.code = 'transient';
+          throw error;
+        }
+        return { score: fixtureScore('Recovered') };
+      },
+    };
+    const music = new MusicService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      authority: stack.authority,
+      policy: stack.policy,
+      generate,
+    });
+    const timedOut = await music.maybeRunFromConversation(stack.actor, {
+      conversationId: 'con_timeout',
+      projectId: stack.project.id,
+      question: 'Compose a 30-second piano piece in A minor, 90 BPM.',
+    });
+    expect(timedOut.handled).toBe(true);
+    expect(timedOut.failed).toBe(true);
+    expect(timedOut.text).toMatch(/timed out/i);
+    expect(timedOut.text).toMatch(/no playable audio/i);
+    expect(timedOut.text).not.toMatch(/Status: playable/i);
+    expect(timedOut.text).not.toMatch(/runpod|ace-step|provider/i);
+    const afterTimeout = await music.list(stack.actor, stack.project.id);
+    expect(afterTimeout.every((row) => row.status !== 'completed')).toBe(true);
+    expect((await stack.files.list(stack.actor, stack.project.id)).some((file) => file.path.endsWith('.wav'))).toBe(
+      false,
+    );
+
+    fail = false;
+    const recovered = await music.maybeRunFromConversation(stack.actor, {
+      conversationId: 'con_timeout_recovered',
+      projectId: stack.project.id,
+      question: 'Compose a short recovered piano piece.',
+    });
+    expect(recovered.failed).not.toBe(true);
+    expect(recovered.text).toMatch(/^Music:/);
+    expect(recovered.text).toMatch(/playable/i);
+    const recoveredId = recovered.text?.match(/^Composition:\s+(cmp_\S+)/m)?.[1];
+    expect(recoveredId).toBeTruthy();
+    expect((await music.get(stack.actor, recoveredId!)).status).toBe('completed');
+  });
+
   it('refuses compose when stored autonomyCeiling is suggest', async () => {
     const stack = await openDungeonStack();
     persistences.push(stack.persistence);

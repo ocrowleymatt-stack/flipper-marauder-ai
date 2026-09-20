@@ -101,19 +101,22 @@ export function serveStatic(res: ServerResponse, staticDir: string, pathname: st
   return true;
 }
 
-export function publicFile(file: {
-  id: string;
-  path: string;
-  displayName: string;
-  mimeType: string;
-  sizeBytes: number;
-  contentHash: string;
-  status: string;
-  version: number;
-  createdAt: string;
-  updatedAt: string;
-  workspaceId: string;
-}): Record<string, unknown> {
+export function publicFile(
+  file: {
+    id: string;
+    path: string;
+    displayName: string;
+    mimeType: string;
+    sizeBytes: number;
+    contentHash: string;
+    status: string;
+    version: number;
+    createdAt: string;
+    updatedAt: string;
+    workspaceId: string;
+  },
+  origin: 'uploaded' | 'generated' | 'result' | 'unknown' = 'unknown',
+): Record<string, unknown> {
   return {
     id: file.id,
     path: file.path,
@@ -126,5 +129,6 @@ export function publicFile(file: {
     createdAt: file.createdAt,
     updatedAt: file.updatedAt,
     projectId: file.workspaceId,
+    origin,
   };
 }

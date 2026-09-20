@@ -46,10 +46,8 @@ import { MarkdownBody } from './markdown';
 import { playCue, prefersReducedMotion } from './experience';
 import {
   classifyAssistantResult,
-  displayAssistantText,
-  findingsForOsintReport,
-  libraryFileOrigin,
-  type OsintScanBundle,
+  bindOsintResult,
+  stripPrimaryHashes,
   type ParsedFinding,
   type ParsedResult,
 } from './results';
@@ -120,7 +118,8 @@ export function App() {
   const [selectedFinding, setSelectedFinding] = useState<ParsedFinding | null>(null);
   const [selectedFile, setSelectedFile] = useState<ProjectFile | null>(null);
   const [selectedResult, setSelectedResult] = useState<ParsedResult | null>(null);
-  const [osintScans, setOsintScans] = useState<OsintScanBundle[]>([]);
+  const [osintFindings, setOsintFindings] = useState<DungeonRecord[]>([]);
+  const [osintTargets, setOsintTargets] = useState<DungeonRecord[]>([]);
   const [researchBriefs, setResearchBriefs] = useState<DungeonRecord[]>([]);
   const bottom = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLElement>(null);
@@ -138,6 +137,16 @@ export function App() {
   const currentProject = projects.find((item) => item.id === projectId) ?? null;
   const doctorView = doctorVisible && doctor ? doctorTone(doctor.state, doctor.checks) : null;
   const panelOpen = panelMode !== 'closed' || diagnosticsOpen;
+  const messageCards = useMemo(() => {
+    const claimed = new Set<string>();
+    return (snapshot?.messages ?? []).map((message) => {
+      const parsed = message.role === 'assistant' && message.content ? classifyAssistantResult(message.content) : null;
+      if (parsed?.kind === 'osint' && message.content) {
+        return bindOsintResult(parsed, message.content, osintTargets, osintFindings, claimed);
+      }
+      return parsed;
+    });
+  }, [snapshot, osintTargets, osintFindings]);
 
   const loadProjects = useCallback(async () => {
     const items = await listProjects();
@@ -162,13 +171,9 @@ export function App() {
     setContext(assembled);
     setApprovals(pending);
     const mine = targets.filter((row) => row.conversationId === conversationId);
-    const scans = await Promise.all(
-      mine.map(async (target) => ({
-        target,
-        findings: await listOsintFindings(target.id).catch(() => []),
-      })),
-    );
-    setOsintScans(scans);
+    const findingsNested = await Promise.all(mine.map((target) => listOsintFindings(target.id).catch(() => [])));
+    setOsintTargets(mine);
+    setOsintFindings(findingsNested.flat());
     setResearchBriefs(briefs.filter((row) => row.conversationId === conversationId));
     const executionId = nextSnapshot.executions.at(-1)?.id;
     if (executionId) {
@@ -195,7 +200,8 @@ export function App() {
         setTools([]);
         setContext(null);
         setInspection(null);
-        setOsintScans([]);
+        setOsintFindings([]);
+        setOsintTargets([]);
         setResearchBriefs([]);
       }
     },
@@ -326,12 +332,12 @@ export function App() {
     const name = projectName.trim();
     if (!name) return;
     setError(null);
+    closePanel();
     try {
       const project = await createProject(name);
       setProjectName('');
       const items = await loadProjects();
       setProjects(items);
-      closePanel();
       setProjectId(project.id);
       await loadProject(project.id);
       goToConversation();
@@ -342,9 +348,9 @@ export function App() {
   }
 
   async function onSelectProject(id: string) {
-    closePanel();
     setProjectId(id);
     setError(null);
+    closePanel();
     try {
       await loadProject(id);
       goToConversation();
@@ -357,6 +363,7 @@ export function App() {
   async function onCreateConversation() {
     if (projectsAvailable && !projectId) return;
     setError(null);
+    closePanel();
     try {
       const conversation = await createConversation(projectId);
       setConversations((current) => [conversation, ...current.filter((item) => item.id !== conversation.id)]);
@@ -364,9 +371,9 @@ export function App() {
       setView(emptyView(conversation));
       setTools([]);
       setInspection(null);
-      setOsintScans([]);
+      setOsintFindings([]);
+      setOsintTargets([]);
       setResearchBriefs([]);
-      closePanel();
       goToConversation();
       setStatus('New conversation.');
     } catch (err) {
@@ -375,9 +382,9 @@ export function App() {
   }
 
   async function onOpenConversation(id: string) {
-    closePanel();
     setActiveConversationId(id);
     setError(null);
+    closePanel();
     goToConversation();
     try {
       await loadConversation(id);
@@ -548,7 +555,7 @@ export function App() {
     setSurface(next);
     setNavOpen(false);
     setPaletteOpen(false);
-    if (next === 'conversation') setDiagnosticsOpen(false);
+    closePanel();
     playCue('activate');
   }
 
@@ -939,12 +946,8 @@ export function App() {
                   <p>Talk here. Research, OSINT, files, and later specialist work return to this conversation.</p>
                 </div>
               ) : (
-                snapshot.messages.map((message) => {
-                  const parsed = message.role === 'assistant' && message.content ? classifyAssistantResult(message.content) : null;
-                  const card =
-                    parsed?.kind === 'osint'
-                      ? { ...parsed, findings: findingsForOsintReport(parsed.findings, message.content, osintScans) }
-                      : parsed;
+                snapshot.messages.map((message, index) => {
+                  const card = messageCards[index] ?? null;
                   return (
                     <article
                       key={message.id}
@@ -956,7 +959,9 @@ export function App() {
                       <div className="body" data-testid={message.role === 'assistant' ? 'assistant-output' : 'user-turn'}>
                         {message.role === 'assistant' ? (
                           message.content ? (
-                            <MarkdownBody text={displayAssistantText(message.content)} />
+                            <MarkdownBody
+                              text={card?.kind === 'osint' ? stripPrimaryHashes(message.content) : message.content}
+                            />
                           ) : busy ? (
                             'Generating…'
                           ) : (
@@ -1139,7 +1144,7 @@ function ResultCard({
   onOpenSources: () => void;
 }) {
   return (
-    <section className="result-card" data-testid={`result-card-${result.kind}`} aria-label={`${result.kind} result`}>
+    <section className="result-card" data-testid={`result-card-${result.kind}`} data-scan-id={result.scanId ?? ''} aria-label={`${result.kind} result`}>
       <div className="result-card-head">
         <p className="eyebrow">{result.kind === 'osint' ? 'OSINT' : 'Research'}</p>
         <p className="meta">{result.state}</p>
@@ -1150,8 +1155,8 @@ function ResultCard({
           {result.findings.slice(0, 6).map((finding) => (
             <li key={finding.id}>
               <button type="button" className="finding-open" data-testid="open-finding" onClick={() => onOpenFinding(finding)}>
-                <strong>{finding.source ?? finding.title}</strong>
-                <span className="meta">{finding.status ?? finding.confidence ?? 'observed'}</span>
+                <strong>{finding.title}</strong>
+                <span className="meta">{finding.source ?? finding.status ?? finding.confidence ?? 'observed'}</span>
               </button>
             </li>
           ))}
@@ -1168,8 +1173,11 @@ function ResultCard({
   );
 }
 
-function fileOrigin(file: ProjectFile): string {
-  return libraryFileOrigin(file.path);
+function originLabel(origin: ProjectFile['origin']): string {
+  if (origin === 'uploaded') return 'Uploaded';
+  if (origin === 'generated') return 'Atlas-generated';
+  if (origin === 'result') return 'Result';
+  return 'Unknown';
 }
 
 function SurfaceBack({ onBack, label }: { onBack: () => void; label: string }) {
@@ -1243,7 +1251,7 @@ function FilesSurface({
                 <div>
                   <strong>{file.displayName}</strong>
                   <span className="meta">
-                    {fileOrigin(file)} · {projectName}
+                    {originLabel(file.origin)} · {projectName}
                     {canAttach ? ` · ${conversationTitle}` : ''}
                   </span>
                 </div>
@@ -1428,7 +1436,7 @@ function ContextPanel({
           </div>
           <div>
             <dt>Origin</dt>
-            <dd>{fileOrigin(file)}</dd>
+            <dd data-testid="file-origin">{originLabel(file.origin)}</dd>
           </div>
           <div>
             <dt>Project</dt>

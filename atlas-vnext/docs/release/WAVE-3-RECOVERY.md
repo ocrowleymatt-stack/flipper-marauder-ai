@@ -110,10 +110,20 @@ Do not describe the entire Atlas product as SAME-OR-BETTER because the shell is 
 - Overall OSINT same-or-better: **FAIL** (Wave 2 ledger unchanged)
 - Full WCAG certification: **FAIL** (not tested)
 
+## Owner Delegate findings (corrective pass)
+
+| Finding | Disposition |
+|---|---|
+| P1 durable OSINT findings bleed across scans in one conversation | **RESOLVED BY CURRENT CODE** — each card binds to one target via `payload.reportText` / scan id; findings merge only where `parentId` matches that scan |
+| P2 `stripPrimaryHashes` mutates ordinary assistant text | **RESOLVED BY CURRENT CODE** — hash suppression is only applied to classified OSINT report markdown |
+| P2 detail panel survives project/conversation switch | **RESOLVED BY CURRENT CODE** — panel state clears immediately on project select/create, conversation open/create, and Library/Skills surface change; mobile nav sits above the panel so project switch remains reachable at 390 |
+| P2 Library origin guessed from path | **RESOLVED BY CURRENT CODE** — origin is computed from Files/CAS provenance on the host and rendered as an enum |
+
 ## Tests
 
-- `apps/web/src/results.test.ts`
-- `apps/host/tests/wave3.browser.test.ts` (`ATLAS_BROWSER_TEST=1`)
+- `apps/web/src/results.test.ts` (includes two-scan isolation)
+- `platform/files/tests/origin.test.ts`
+- `apps/host/tests/wave3.browser.test.ts` (`ATLAS_BROWSER_TEST=1`) — journeys A–H plus multi-scan / hash / panel / origin
 - Existing `workbench.browser.test.ts` and `wave1.browser.test.ts` must still pass
 
 Do not deploy. Do not change public production.

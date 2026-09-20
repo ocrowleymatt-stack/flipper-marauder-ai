@@ -189,4 +189,21 @@ describe('files ingest, retrieval, context, artefacts', () => {
     expect(new TextDecoder().decode(await files.readBytes(actor, stored.id))).toBe('harbour original');
     await persistence.close();
   });
+
+  it('exposes ingest origin from provenance, not from the file path', async () => {
+    const persistence = openMemoryPersistence();
+    const cas = new MemoryCas();
+    const files = new FilesService(persistence, cas);
+    const projects = new ProjectService(persistence);
+    const actor = { tenantId: 'tenant_a' };
+    await persistence.ensureTenant({ id: 'tenant_a', name: 'A' });
+    const project = await projects.create(actor, { name: 'Library', dungeon: 'research' });
+    const uploaded = await files.ingest(actor, {
+      projectId: project.id,
+      path: 'research/notes.md',
+      bytes: new TextEncoder().encode('Path looks generated. Provenance says ingest.'),
+    });
+    expect(await files.originFor(actor, uploaded)).toBe('uploaded');
+    await persistence.close();
+  });
 });

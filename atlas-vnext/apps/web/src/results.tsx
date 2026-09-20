@@ -12,12 +12,7 @@ export interface ParsedFinding {
   epistemicKind?: string;
   confidence?: string;
   evidenceHash?: string | null;
-  parentId?: string | null;
-}
-
-export interface OsintScanBundle {
-  target: DungeonRecord;
-  findings: DungeonRecord[];
+  scanId?: string;
 }
 
 export interface ParsedSource {
@@ -34,6 +29,7 @@ export interface ParsedResult {
   findings: ParsedFinding[];
   sources: ParsedSource[];
   errors: string[];
+  scanId?: string;
 }
 
 const HASH_TAIL = /\s+hash=[a-f0-9]{8,}\b/gi;
@@ -162,7 +158,7 @@ export function findingsFromRecords(records: DungeonRecord[]): ParsedFinding[] {
       epistemicKind: typeof row.payload.epistemicKind === 'string' ? row.payload.epistemicKind : 'observation',
       confidence: typeof row.payload.confidence === 'string' ? row.payload.confidence : undefined,
       evidenceHash: typeof row.payload.contentHash === 'string' ? row.payload.contentHash : row.contentHash,
-      parentId: row.parentId,
+      scanId: row.parentId ?? undefined,
     }));
 }
 
@@ -182,45 +178,38 @@ export function mergeFindings(parsed: ParsedFinding[], durable: ParsedFinding[])
   });
 }
 
-export function displayAssistantText(text: string): string {
-  return classifyAssistantResult(text) ? stripPrimaryHashes(text) : text;
+export function associateOsintScan(
+  messageContent: string,
+  targets: DungeonRecord[],
+  claimedIds: Set<string>,
+): DungeonRecord | null {
+  const unused = [...targets]
+    .filter((row) => !claimedIds.has(row.id))
+    .sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '') || a.id.localeCompare(b.id));
+  const exact = unused.filter((row) => row.payload.reportText === messageContent);
+  if (exact[0]) return exact[0];
+  const value = messageContent.match(/^OSINT\s+\S+\s+scan of `([^`]+)`/i)?.[1];
+  if (!value) return null;
+  const named = unused.filter((row) => row.title === value || row.payload.value === value);
+  return named[0] ?? null;
 }
 
-export function libraryFileOrigin(path: string): 'Acquired' | 'Uploaded' {
-  if (path === 'acquisition' || path.startsWith('acquisition/')) return 'Acquired';
-  return 'Uploaded';
-}
-
-export function osintSubjectFromHeadline(headline: string): string | null {
-  const match = headline.match(/^OSINT\s+\w+\s+scan of\s+`([^`]+)`/i);
-  return match?.[1]?.trim() || null;
-}
-
-export function findingsForOsintReport(
-  parsed: ParsedFinding[],
-  reportText: string,
-  scans: OsintScanBundle[],
-): ParsedFinding[] {
-  const matched = matchOsintScan(reportText, scans);
-  return mergeFindings(parsed, findingsFromRecords(matched?.findings ?? []));
-}
-
-export function matchOsintScan(reportText: string, scans: OsintScanBundle[]): OsintScanBundle | undefined {
-  const trimmed = reportText.trim();
-  const exact = scans.find((scan) => String(scan.target.payload.reportText ?? '').trim() === trimmed);
-  if (exact) return exact;
-  const subject = osintSubjectFromHeadline(trimmed.split('\n')[0] ?? '');
-  if (!subject) return undefined;
-  const matches = scans.filter(
-    (scan) => String(scan.target.payload.value ?? scan.target.title).toLowerCase() === subject.toLowerCase(),
-  );
-  if (matches.length <= 1) return matches[0];
-  return (
-    matches.find((scan) => {
-      const report = String(scan.target.payload.reportText ?? '').trim();
-      return report.length > 0 && trimmed.startsWith(report.slice(0, Math.min(80, report.length)));
-    }) ?? matches.at(-1)
-  );
+export function bindOsintResult(
+  parsed: ParsedResult,
+  messageContent: string,
+  targets: DungeonRecord[],
+  findings: DungeonRecord[],
+  claimedIds: Set<string>,
+): ParsedResult {
+  const scan = associateOsintScan(messageContent, targets, claimedIds);
+  if (!scan) return parsed;
+  claimedIds.add(scan.id);
+  const durable = findingsFromRecords(findings.filter((row) => row.parentId === scan.id));
+  return {
+    ...parsed,
+    scanId: scan.id,
+    findings: mergeFindings(parsed.findings, durable),
+  };
 }
 
 function parseBullet(line: string): { source?: string; title: string; url?: string; hash?: string } | null {

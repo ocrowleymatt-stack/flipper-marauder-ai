@@ -100,6 +100,7 @@ export interface ProjectFile {
   createdAt: string;
   updatedAt: string;
   projectId: string;
+  origin?: 'uploaded' | 'generated' | 'result' | 'unknown';
 }
 
 export interface Citation {
@@ -457,6 +458,7 @@ export interface DungeonRecord {
   revision: number;
   conversationId?: string | null;
   workspaceId?: string | null;
+  createdAt?: string;
 }
 
 export interface EffectivePolicyView {

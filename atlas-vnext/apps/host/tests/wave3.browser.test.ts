@@ -60,6 +60,9 @@ function octocatInspect(): SourceInspectPort {
       if (url.includes('github.com/octocat')) {
         status = 200;
         text = 'The Octocat GitHub profile repositories';
+      } else if (url.includes('github.com/hubot')) {
+        status = 200;
+        text = 'Hubot automation GitHub profile';
       } else if (url.includes('example.com')) {
         status = 200;
         text = 'Example Domain This domain is for use in illustrative examples in documents.';
@@ -141,6 +144,16 @@ async function launchPage(url: string, viewport = { width: 1440, height: 900 }) 
   return { browser, page };
 }
 
+async function waitComposerReady(page: Awaited<ReturnType<typeof launchPage>>['page']) {
+  // composer-send is replaced by composer-stop while busy. After a completed
+  // turn the send button exists but is disabled until the draft is filled.
+  await page.waitForFunction(
+    () => Boolean(document.querySelector('[data-testid="composer-send"]')),
+    undefined,
+    { timeout: 30_000 },
+  );
+}
+
 describe.skipIf(!enabled)('Wave 3 Atlas experience', { timeout: 300_000 }, () => {
   it('A/D/E/F/G/H: Atlas home, project, library, skill, persistence, advanced, narrower viewport', async () => {
     const { url } = await startUi();
@@ -172,14 +185,15 @@ describe.skipIf(!enabled)('Wave 3 Atlas experience', { timeout: 300_000 }, () =>
 
       await page.getByTestId('surface-files').click();
       await page.getByTestId('file-path').waitFor();
-      await page.getByTestId('file-path').fill('brief.md');
+      await page.getByTestId('file-path').fill('research/notes.md');
       await page.getByTestId('file-text').fill('Copper kettle notes.');
       await page.getByTestId('upload-file').click();
       await page.getByRole('button', { name: 'Open' }).first().waitFor({ timeout: 15_000 });
       await page.getByTestId('open-file').first().click();
       await page.getByTestId('file-details').waitFor();
       expect(await page.getByTestId('file-details').innerText()).toMatch(/Wave3 workspace/);
-      expect(await page.getByTestId('file-details').innerText()).not.toMatch(/contentHash|cas:/i);
+      expect(await page.getByTestId('file-origin').innerText()).toBe('Uploaded');
+      expect(await page.getByTestId('file-details').innerText()).not.toMatch(/contentHash|cas:|Generated/i);
       await page.getByTestId('panel-back-to-chat').click();
       await page.getByTestId('conversation-thread').waitFor();
       expect(await page.getByTestId('conversation-thread').innerText()).toContain('WAVE3 CHAT MARKER');
@@ -256,6 +270,120 @@ describe.skipIf(!enabled)('Wave 3 Atlas experience', { timeout: 300_000 }, () =>
       const composer = await page.getByTestId('composer').boundingBox();
       expect(composer?.y ?? 0).toBeGreaterThan(80);
       await page.screenshot({ path: join(shotDir, '10-wave3-osint-mobile.png'), fullPage: true });
+    } finally {
+      await browser.close();
+    }
+  });
+
+  it('isolates two OSINT scans, preserves hash text, and clears the panel on context switch', async () => {
+    const { url } = await startUi();
+    const { browser, page } = await launchPage(url);
+    try {
+      await page.getByTestId('new-project-name').fill('Wave3 isolation');
+      await page.getByTestId('create-project').click();
+      await page.getByTestId('composer-draft').waitFor({ timeout: 20_000 });
+      await page.getByTestId('new-conversation').click();
+
+      await page.getByTestId('composer-draft').fill('Reply with exactly: Use hash=abc123 in the configuration. Keep hash=abcdef1234567890 visible.');
+      await page.getByTestId('composer-send').click();
+      await page.getByTestId('assistant-output').filter({ hasText: 'Use hash=abc123 in the configuration.' }).waitFor({ timeout: 45_000 });
+      await waitComposerReady(page);
+      expect(await page.getByTestId('result-card-osint').count()).toBe(0);
+      expect(await page.getByTestId('assistant-output').innerText()).toContain('hash=abc123');
+      expect(await page.getByTestId('assistant-output').innerText()).toContain('hash=abcdef1234567890');
+
+      await page.getByTestId('composer-draft').fill('Run OSINT on octocat');
+      await page.getByTestId('composer-send').click();
+      await page.getByTestId('assistant-output').filter({ hasText: /OSINT username scan of\s+octocat/i }).last().waitFor({ timeout: 90_000 });
+      await page.getByTestId('result-card-osint').waitFor({ timeout: 15_000 });
+      await waitComposerReady(page);
+
+      await page.getByTestId('composer-draft').fill('Run OSINT on hubot');
+      await page.getByTestId('composer-send').click();
+      await page.getByTestId('assistant-output').filter({ hasText: /OSINT username scan of\s+hubot/i }).last().waitFor({ timeout: 90_000 });
+      await page.getByTestId('result-card-osint').filter({ hasText: /Hubot/i }).waitFor({ timeout: 15_000 });
+      await waitComposerReady(page);
+      expect(await page.getByTestId('result-card-osint').count()).toBe(2);
+
+      const cardA = page.getByTestId('result-card-osint').nth(0);
+      const cardB = page.getByTestId('result-card-osint').nth(1);
+      expect(await cardA.innerText()).toMatch(/Octocat/i);
+      expect(await cardA.innerText()).not.toMatch(/Hubot/i);
+      expect(await cardB.innerText()).toMatch(/Hubot/i);
+      expect(await cardB.innerText()).not.toMatch(/Octocat/i);
+
+      await cardA.getByTestId('open-finding').first().click();
+      await page.getByTestId('finding-details').waitFor();
+      expect(await page.getByTestId('finding-details').innerText()).toMatch(/Octocat/i);
+      expect(await page.getByTestId('finding-details').innerText()).not.toMatch(/Hubot/i);
+      await page.getByTestId('panel-back-to-chat').click();
+
+      await cardB.getByTestId('open-finding').first().click();
+      await page.getByTestId('finding-details').waitFor();
+      expect(await page.getByTestId('finding-details').innerText()).toMatch(/Hubot/i);
+      expect(await page.getByTestId('finding-details').innerText()).not.toMatch(/Octocat/i);
+      await page.getByTestId('panel-back-to-chat').click();
+      await waitComposerReady(page);
+      const assistantCount = await page.getByTestId('assistant-output').count();
+      await page.getByTestId('composer-draft').fill('Which of those findings is strongest?');
+      await page.getByTestId('composer-send').click();
+      const followup = page.getByTestId('assistant-output').nth(assistantCount);
+      await followup.waitFor({ timeout: 45_000 });
+      expect(await followup.innerText()).toMatch(/Hubot/i);
+      expect(await followup.innerText()).not.toMatch(/Octocat/i);
+
+      await cardA.getByTestId('open-finding').first().click();
+      await page.getByTestId('finding-details').waitFor();
+      expect(await page.getByTestId('finding-details').innerText()).toMatch(/Octocat/i);
+      expect(await page.getByTestId('finding-details').innerText()).not.toMatch(/Hubot/i);
+
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.getByTestId('workbench-shell').waitFor({ timeout: 30_000 });
+      await page.getByTestId('result-card-osint').nth(1).waitFor({ timeout: 20_000 });
+      expect(await page.getByTestId('result-card-osint').nth(0).innerText()).toMatch(/Octocat/i);
+      expect(await page.getByTestId('result-card-osint').nth(0).innerText()).not.toMatch(/Hubot/i);
+      expect(await page.getByTestId('result-card-osint').nth(1).innerText()).toMatch(/Hubot/i);
+      expect(await page.getByTestId('result-card-osint').nth(1).innerText()).not.toMatch(/Octocat/i);
+      expect(await page.getByTestId('assistant-output').filter({ hasText: 'hash=abc123' }).count()).toBeGreaterThan(0);
+      expect(await page.getByTestId('assistant-output').filter({ hasText: 'hash=abcdef1234567890' }).count()).toBeGreaterThan(0);
+
+      await page.getByTestId('result-card-osint').nth(0).getByTestId('open-finding').first().click();
+      await page.getByTestId('finding-details').waitFor();
+      await page.getByTestId('new-conversation').click();
+      await page.getByTestId('empty-conversation').waitFor({ timeout: 20_000 });
+      expect(await page.getByTestId('finding-details').count()).toBe(0);
+      expect(await page.getByTestId('context-panel').count()).toBe(0);
+
+      await page.getByTestId('surface-files').click();
+      await page.getByTestId('file-path').waitFor();
+      await page.getByTestId('file-path').fill('research/notes.md');
+      await page.getByTestId('file-text').fill('Not a generated result.');
+      await page.getByTestId('upload-file').click();
+      await page.getByTestId('open-file').first().waitFor({ timeout: 15_000 });
+      await page.getByTestId('open-file').first().click();
+      await page.getByTestId('file-details').waitFor();
+      expect(await page.getByTestId('file-origin').innerText()).toBe('Uploaded');
+
+      await page.getByTestId('new-project-name').fill('Wave3 other workspace');
+      await page.getByTestId('create-project').click();
+      await page.getByTestId('empty-conversation').waitFor({ timeout: 20_000 });
+      expect(await page.getByTestId('file-details').count()).toBe(0);
+      expect(await page.getByTestId('context-panel').count()).toBe(0);
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.getByRole('button', { name: 'Menu' }).click();
+      await page.getByTestId('surface-files').click();
+      await page.getByTestId('file-path').fill('narrow.md');
+      await page.getByTestId('file-text').fill('Narrow viewport file.');
+      await page.getByTestId('upload-file').click();
+      await page.getByTestId('open-file').first().waitFor({ timeout: 15_000 });
+      await page.getByTestId('open-file').first().click();
+      await page.getByTestId('file-details').waitFor();
+      await page.getByRole('button', { name: 'Menu' }).click();
+      await page.getByRole('button', { name: 'Wave3 isolation' }).click();
+      await page.getByTestId('composer-draft').waitFor({ timeout: 20_000 });
+      await page.getByTestId('context-panel').waitFor({ state: 'detached', timeout: 10_000 });
+      expect(await page.getByTestId('file-details').count()).toBe(0);
     } finally {
       await browser.close();
     }

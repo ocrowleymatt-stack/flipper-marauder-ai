@@ -14,8 +14,8 @@ export { extractBytes, EXTRACTOR_ID, EXTRACTOR_VERSION, estimateTokens, buildSim
 export type { ExtractedBlock, ExtractionResult } from './extract/index.ts';
 export { chunkBlocks, CHUNKER_ID, CHUNKER_VERSION, CHUNK_MAX_CHARS } from './chunk.ts';
 export type { PreparedChunk } from './chunk.ts';
-export { FilesService, FILE_JOB_DUNGEON, FILE_JOB_INGEST, STORAGE_JOB_GC, STORAGE_JOB_RETAIN } from './service.ts';
-export type { IngestInput, FilesJobOutcome } from './service.ts';
+export { FilesService, FILE_JOB_DUNGEON, FILE_JOB_INGEST, STORAGE_JOB_GC, STORAGE_JOB_RETAIN, originFromProvenance } from './service.ts';
+export type { IngestInput, FilesJobOutcome, FileOrigin } from './service.ts';
 export {
   SiteService,
   DEFAULT_SITE_RETENTION,

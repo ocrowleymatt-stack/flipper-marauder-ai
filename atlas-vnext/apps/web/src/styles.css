@@ -781,6 +781,9 @@ select,
     max-width: min(360px, 92vw);
     z-index: 5;
   }
+  .layout.nav-open .nav {
+    z-index: 6;
+  }
   .diagnostics {
     left: auto;
     width: min(360px, 100%);

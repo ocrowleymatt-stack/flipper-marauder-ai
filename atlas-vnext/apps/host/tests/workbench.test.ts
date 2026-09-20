@@ -226,8 +226,9 @@ describe('Atlas Workbench host', () => {
       body: JSON.stringify({ path: 'brief.md', text: 'The copper kettle is the source of truth.' }),
     });
     expect(uploaded.status).toBe(201);
-    const file = (await uploaded.json()) as { id: string; contentHash: string; path: string };
+    const file = (await uploaded.json()) as { id: string; contentHash: string; path: string; origin?: string };
     expect(file.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(file.origin).toBe('uploaded');
     expect(JSON.stringify(file)).not.toMatch(/The copper kettle/);
     const conversation = (await (
       await fetch(`${url}/api/projects/${project.id}/conversations`, {

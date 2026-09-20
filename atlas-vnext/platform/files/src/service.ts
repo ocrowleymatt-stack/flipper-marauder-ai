@@ -9,6 +9,7 @@ import { CHUNKER_ID, CHUNKER_VERSION, chunkBlocks } from './chunk.ts';
 import { CasMissingError, FilesAccessError, IngestionError } from './errors.ts';
 import { EXTRACTOR_ID, EXTRACTOR_VERSION, extractBytes, estimateTokens } from './extract/index.ts';
 import { resolveMime, sniffMime, type AllowedMime } from './mime.ts';
+import { originFromProvenance, type FileOrigin } from './origin.ts';
 import { displayNameFromPath, isAcquisitionStoredPath, sanitiseRelPath } from './path.ts';
 import {
   DEFAULT_SITE_RETENTION,
@@ -22,6 +23,8 @@ export const FILE_JOB_DUNGEON = 'platform';
 export const FILE_JOB_INGEST = 'files.ingest';
 export { STORAGE_JOB_DUNGEON, STORAGE_JOB_GC, STORAGE_JOB_RETAIN } from './sites.ts';
 
+export { originFromProvenance } from './origin.ts';
+export type { FileOrigin } from './origin.ts';
 export type FilesJobOutcome =
   | FileRecord
   | { kind: 'storage.retain'; expiredRevisionIds: string[] }
@@ -485,6 +488,13 @@ export class FilesService {
     const file = await this.persistence.forActor(scoped).files.get(scoped, fileId);
     if (!file || file.deletedAt) return null;
     return file;
+  }
+
+  async originFor(actor: PersistenceActor, file: FileRecord): Promise<FileOrigin> {
+    const scoped = this.scoped(actor, 'read file origin');
+    if (!file.artefactId) return 'unknown';
+    const entries = await this.persistence.forActor(scoped).provenance.forArtefact(file.artefactId);
+    return originFromProvenance(entries);
   }
 
   async listAttachments(actor: PersistenceActor, conversationId: string) {

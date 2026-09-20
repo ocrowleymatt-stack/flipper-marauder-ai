@@ -22,7 +22,19 @@
 - A single-region outage of Postgres without WAL archive is data loss of metadata since last dump. CAS without replica is data loss of blobs.
 - Conversation history is not required to restore projects.
 
-Automated restore drill (CI, PostgreSQL present): reopen the schema and copy the CAS directory, then read project, file bytes, provenance, conversation, pending approval, and Caspa document/version. See [PRODUCTION.md](./PRODUCTION.md).
+Automated restore drill (CI, PostgreSQL present): reopen the schema and copy the CAS directory, then read project, file bytes, provenance, conversation, pending approval, Caspa document/version, dungeon_records, and generated WAV artefacts. See [PRODUCTION.md](./PRODUCTION.md).
+
+Operator commands (never against live production without an explicit allow flag):
+
+```bash
+ATLAS_ALLOW_BACKUP=1 ATLAS_BACKUP_DIR=/var/backups/atlas/$STAMP \
+  ATLAS_DATABASE_URL=... ATLAS_CAS_ROOT=... npm run backup
+
+ATLAS_ALLOW_RESTORE=1 ATLAS_RESTORE_NEW_CLUSTER=1 ATLAS_RESTORE_DIR=... \
+  ATLAS_DATABASE_URL=... ATLAS_CAS_ROOT=... npm run restore
+```
+
+Restore overlays are refused unless `ATLAS_RESTORE_NEW_CLUSTER=1`. Production env additionally requires `ATLAS_ALLOW_RESTORE=1`.
 
 ## Migration rollback
 

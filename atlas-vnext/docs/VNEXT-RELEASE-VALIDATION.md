@@ -1,10 +1,10 @@
 # Atlas vNext release validation
 
-Accepted development baseline: `0af67f19f2349a7ac4430364165af254caf4aa96`
+Accepted development baseline: `09b8c2d11312bc8b48b296cfdb85ed5587667814`
 
-Status: **READY FOR PRODUCTION CUTOVER**. Production cutover is not authorised or performed by this document.
+Status: **PRODUCTION-READINESS CANDIDATE**. Production cutover is not authorised or performed by this document. Public production remains `68603a465f39ff20804f221b5db6e3faf1cdfb11`.
 
-Release candidate (immutable for the cutover window): `757b77a9518ccbd595d1d3a3698915f3a94b045c`
+Release candidate: the exact head of `cursor/vnext-production-readiness` once its CI is green.
 
 Exact-head GitHub CI: workflow run `35174760899` (`verify` SUCCESS) on that SHA.
 

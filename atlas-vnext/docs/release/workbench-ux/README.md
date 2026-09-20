@@ -15,6 +15,8 @@ Captured by `apps/host/tests/workbench.browser.test.ts` against a local mock hos
 | `13-wave5-mobile.png` | Wave 5 390px website card, preview, composer still usable |
 | `14-wave6-desktop.png` | Wave 6 Ask Atlas music result, player, Library reopen |
 | `15-wave6-mobile.png` | Wave 6 390px music card, player, composer still usable |
+| `16-production-desktop.png` | Production-readiness native login then Conversation / Research / OSINT / Writing / Website / Music |
+| `17-production-mobile.png` | Production-readiness 390px after native login |
 
 Run:
 

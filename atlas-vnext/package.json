@@ -30,10 +30,13 @@
     "config:validate": "tsx scripts/validate-config.ts",
     "auth:provision": "tsx scripts/provision-login.ts",
     "advisories:classify": "node scripts/classify-advisories.mjs",
-    "test:browser": "ATLAS_BROWSER_TEST=1 vitest run apps/host/tests/workbench.browser.test.ts apps/host/tests/wave1.browser.test.ts apps/host/tests/wave3.browser.test.ts apps/host/tests/wave4.browser.test.ts apps/host/tests/wave5.browser.test.ts apps/host/tests/wave6.browser.test.ts",
+    "test:browser": "ATLAS_BROWSER_TEST=1 vitest run apps/host/tests/workbench.browser.test.ts apps/host/tests/wave1.browser.test.ts apps/host/tests/wave3.browser.test.ts apps/host/tests/wave4.browser.test.ts apps/host/tests/wave5.browser.test.ts apps/host/tests/wave6.browser.test.ts apps/host/tests/production-readiness.browser.test.ts",
     "test:compat": "vitest run tests/compat",
     "test:live": "vitest run tests/live",
     "smoke:live": "tsx scripts/live-smoke.ts",
+    "backup": "tsx scripts/backup-atlas.ts",
+    "restore": "tsx scripts/restore-atlas.ts",
+    "cutover:preflight": "tsx scripts/cutover-preflight.ts",
     "build": "tsc -p tsconfig.json --noEmit && tsc -p apps/web/tsconfig.json --noEmit && npm run build -w @atlas-vnext/web"
   },
   "devDependencies": {

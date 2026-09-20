@@ -91,4 +91,57 @@ describe.skipIf(!hasPostgres)('backup restore drill', () => {
     expect((await rebound.toolInvocations.get(actor.tenantId, pending.invocation.id))?.status).toBe('awaiting_approval');
     expect((await rebound.toolApprovals.getByInvocation(actor.tenantId, pending.invocation.id))?.decision).toBe('pending');
   });
+
+  it('restores dungeon_records and generated WAV artefacts after CAS copy', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'atlas-restore-music-'));
+    const casRoot = join(dir, 'cas');
+    const first = await openTestKernel();
+    cleanups.push(first.close);
+    await first.kernel.ensureTenant({ id: 'tenant_a', name: 'A' });
+    await first.kernel.ensurePrincipal({ id: 'principal_a' });
+    const actor = { tenantId: 'tenant_a', principalId: 'principal_a' };
+    const project = await first.kernel.ensureWorkspace(actor, { name: 'Restore music', dungeon: 'music' });
+    const cas = await openFilesystemCas(casRoot);
+    const files = new FilesService(first.kernel, cas);
+    const wav = new Uint8Array([
+      0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 0x10, 0x00, 0x00,
+      0x00, 0x01, 0x00, 0x02, 0x00, 0x22, 0x56, 0x00, 0x00, 0x88, 0x58, 0x01, 0x00, 0x04, 0x00, 0x10, 0x00, 0x64, 0x61,
+      0x74, 0x61, 0x00, 0x00, 0x00, 0x00,
+    ]);
+    const artefact = await files.createBinaryArtefact(actor, {
+      projectId: project.id,
+      bytes: wav,
+      mimeType: 'audio/wav',
+      type: 'audition',
+    });
+    const record = await first.kernel.forActor(actor).dungeonRecords.create(actor, {
+      id: 'cmp_restore_keep',
+      workspaceId: project.id,
+      dungeon: 'music',
+      kind: 'composition',
+      title: 'Restored harbour',
+      status: 'completed',
+      artefactId: artefact.id,
+      contentHash: artefact.contentHash,
+      payload: { revision: 1, tempoBpm: 90 },
+    });
+
+    const replica = join(dir, 'cas-replica');
+    cpSync(casRoot, replica, { recursive: true });
+    await first.kernel.close();
+
+    const second = await openTestKernel(first.schema);
+    cleanups.push(async () => {
+      await second.kernel.close();
+    });
+    const restoredCas = await openFilesystemCas(replica);
+    const restoredFiles = new FilesService(second.kernel, restoredCas);
+    const rebound = second.kernel.forActor(actor);
+    const restored = await rebound.dungeonRecords.get(actor, record.id);
+    expect(restored?.title).toBe('Restored harbour');
+    expect(restored?.artefactId).toBe(artefact.id);
+    const bytes = await restoredFiles.readArtefactBytes(actor, artefact.id);
+    expect(Buffer.from(bytes.subarray(0, 4)).toString('ascii')).toBe('RIFF');
+    expect(Buffer.from(bytes).equals(Buffer.from(wav))).toBe(true);
+  });
 });

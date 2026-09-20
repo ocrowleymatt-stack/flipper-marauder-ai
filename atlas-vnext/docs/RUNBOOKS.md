@@ -65,9 +65,9 @@ Do not scale the Node host horizontally in production. Extra processes multiply 
 
 | Layer | How | Not |
 |---|---|---|
-| App | Point the process at the previous git SHA / image | “git revert” on a live schema that already migrated |
-| Schema | Restore PG from the pre-migration dump | Reverse DROP of additive tables as a casual undo |
-| Data | Restore PG dump + CAS generation together | Restore PG without matching CAS (or the reverse) |
+| App | Point the process at `68603a465f39ff20804f221b5db6e3faf1cdfb11` (or the previous git SHA / image). Schema is still v9, so freeze-era app code can read current rows. | “git revert” on a live schema that already migrated |
+| Schema | Restore PG from the pre-cutover dump. There is no reverse migration; Waves 1–6 added no SQL. | Reverse DROP of additive tables as a casual undo |
+| Data | Restore PG dump + CAS generation together (`npm run restore` onto a **new** cluster) | Restore PG without matching CAS (or the reverse) |
 | Cutover | Leave DNS/load balancer on the previous system | Switching back after deleting legacy data |
 
 ## Feature kill switches

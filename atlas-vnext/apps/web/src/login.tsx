@@ -34,10 +34,10 @@ export function LoginForm(props: { onAuthenticated: (session: SessionState) => P
   }
 
   return (
-    <main className="boot login-screen" aria-labelledby="login-title">
+    <main className="boot login-screen" aria-labelledby="login-title" data-testid="login-screen">
       <h1 id="login-title">Atlas</h1>
       <p className="muted">Sign in with your operator-provisioned credential.</p>
-      <form className="login-form" onSubmit={(event) => void onSubmit(event)}>
+      <form className="login-form" onSubmit={(event) => void onSubmit(event)} data-testid="login-form">
         <label htmlFor={loginId}>Login</label>
         <input
           id={loginId}
@@ -49,6 +49,7 @@ export function LoginForm(props: { onAuthenticated: (session: SessionState) => P
           value={login}
           onChange={(event) => setLogin(event.target.value)}
           required
+          data-testid="login-username"
         />
         <label htmlFor={passwordId}>Password</label>
         <input
@@ -59,8 +60,9 @@ export function LoginForm(props: { onAuthenticated: (session: SessionState) => P
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           required
+          data-testid="login-password"
         />
-        <button type="submit" className="primary" disabled={busy || !login.trim() || !password}>
+        <button type="submit" className="primary" disabled={busy || !login.trim() || !password} data-testid="login-submit">
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
         {error ? (

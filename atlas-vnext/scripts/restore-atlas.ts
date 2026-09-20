@@ -1,7 +1,8 @@
 #!/usr/bin/env tsx
 /**
  * Restore PostgreSQL + CAS onto a NEW cluster. Refuses to overlay a live
- * schema unless ATLAS_RESTORE_NEW_CLUSTER=1 is set.
+ * schema unless ATLAS_RESTORE_NEW_CLUSTER=1 is set. After copy, every
+ * restored metadata CAS pointer is hash-verified before success.
  *
  *   ATLAS_DATABASE_URL=... ATLAS_CAS_ROOT=... ATLAS_RESTORE_DIR=... \
  *     ATLAS_RESTORE_NEW_CLUSTER=1 npx tsx scripts/restore-atlas.ts
@@ -12,8 +13,9 @@ import { join } from 'node:path';
 import pg from 'pg';
 import { isProductionEnv } from '../apps/host/src/production-config.ts';
 import type { BackupManifest } from './backup-atlas.ts';
+import { listCasHashes, verifyCasObjects } from './cas-integrity.ts';
 
-export async function runRestore(env: Record<string, string | undefined> = process.env): Promise<{ ok: true }> {
+export async function runRestore(env: Record<string, string | undefined> = process.env): Promise<{ ok: true; schemaVersion: number; casObjects: number }> {
   const restoreDir = env.ATLAS_RESTORE_DIR?.trim();
   const databaseUrl = env.ATLAS_DATABASE_URL?.trim() || env.DATABASE_URL?.trim();
   const casRoot = env.ATLAS_CAS_ROOT?.trim();
@@ -57,7 +59,16 @@ export async function runRestore(env: Record<string, string | undefined> = proce
     throw new Error(`psql restore failed: ${restore.stderr || restore.stdout || restore.status}`);
   }
   cpSync(casDir, casRoot, { recursive: true });
-  return { ok: true, schemaVersion: manifest.schemaVersion } as { ok: true };
+  const restored = new pg.Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 5_000 });
+  const client = await restored.connect();
+  try {
+    const hashes = [...new Set([...(manifest.casHashes ?? []), ...(await listCasHashes(client))])].sort();
+    await verifyCasObjects(casRoot, hashes);
+    return { ok: true, schemaVersion: manifest.schemaVersion, casObjects: hashes.length };
+  } finally {
+    client.release();
+    await restored.end();
+  }
 }
 
 const invoked = process.argv[1]?.includes('restore-atlas');

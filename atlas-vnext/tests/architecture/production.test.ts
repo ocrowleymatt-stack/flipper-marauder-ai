@@ -35,5 +35,11 @@ describe('production-readiness architecture freeze', () => {
     const preflight = readFileSync(join(root, 'scripts/cutover-preflight.ts'), 'utf8');
     expect(preflight).not.toMatch(/visibleOutputAlready:\s*true/);
     expect(preflight).toMatch(/llm-only/);
+    expect(preflight).toMatch(/readDeployedSchemaVersion/);
+    const backup = readFileSync(join(root, 'scripts/backup-atlas.ts'), 'utf8');
+    expect(backup).toMatch(/pg_export_snapshot/);
+    expect(backup).toMatch(/verifyCasObjects/);
+    const restore = readFileSync(join(root, 'scripts/restore-atlas.ts'), 'utf8');
+    expect(restore).toMatch(/verifyCasObjects/);
   });
 });

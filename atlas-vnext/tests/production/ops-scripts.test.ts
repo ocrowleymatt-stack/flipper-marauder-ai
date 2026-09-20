@@ -4,20 +4,22 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runBackup } from '../../scripts/backup-atlas.ts';
 import { runRestore } from '../../scripts/restore-atlas.ts';
+import { postgresUrl } from '../../platform/persistence/tests/postgres/harness.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const hasPostgres = Boolean(process.env.ATLAS_DATABASE_URL || process.env.DATABASE_URL || postgresUrl());
 
 describe('operator backup/restore/preflight scripts', () => {
-  it('backup refuses missing destinations and production without an explicit allow', () => {
-    expect(() => runBackup({})).toThrow(/ATLAS_BACKUP_DIR/);
-    expect(() =>
+  it('backup refuses missing destinations and production without an explicit allow', async () => {
+    await expect(runBackup({})).rejects.toThrow(/ATLAS_BACKUP_DIR/);
+    await expect(
       runBackup({
         ATLAS_BACKUP_DIR: '/tmp/atlas-backup-test',
         ATLAS_DATABASE_URL: 'postgres://atlas:x@127.0.0.1/atlas',
         ATLAS_CAS_ROOT: '/tmp/missing-cas',
         NODE_ENV: 'production',
       }),
-    ).toThrow(/ATLAS_ALLOW_BACKUP/);
+    ).rejects.toThrow(/ATLAS_ALLOW_BACKUP/);
   });
 
   it('restore refuses overlay without ATLAS_RESTORE_NEW_CLUSTER', async () => {
@@ -54,11 +56,11 @@ describe('operator backup/restore/preflight scripts', () => {
     expect(`${result.stderr}${result.stdout}`).toMatch(/ACE-Step|Music GPU/i);
   });
 
-  it('cutover preflight accepts the production contract without Music GPU', () => {
+  it('cutover preflight fails when the deployed schema cannot be read', () => {
     const env: Record<string, string | undefined> = {
       ...process.env,
       ATLAS_PERSISTENCE: 'postgres',
-      ATLAS_DATABASE_URL: 'postgres://atlas:x@127.0.0.1/atlas',
+      ATLAS_DATABASE_URL: 'postgres://atlas:x@127.0.0.1:1/atlas-missing',
       ATLAS_TENANT_ID: 'tenant_prod',
       ATLAS_SESSION_SECRET: 'session-secret-value-not-real',
       ATLAS_ALLOWED_ORIGINS: 'https://atlas.example',
@@ -74,11 +76,36 @@ describe('operator backup/restore/preflight scripts', () => {
       [resolve(root, 'scripts/cutover-preflight.ts'), '--production'],
       { cwd: root, encoding: 'utf8', env },
     );
-    expect(result.status, result.stderr + result.stdout).toBe(0);
-    const body = JSON.parse(result.stdout) as { ok: boolean; aceStep: string; runpod: string; schemaVersion: number };
-    expect(body.ok).toBe(true);
-    expect(body.aceStep).toBe('absent');
-    expect(body.runpod).toBe('llm-only');
-    expect(body.schemaVersion).toBe(9);
+    expect(result.status).not.toBe(0);
+    expect(`${result.stderr}${result.stdout}`).not.toMatch(/"schemaVersion": 9/);
+    expect(`${result.stderr}${result.stdout}`).toMatch(/ok": false/);
+  });
+
+  it.skipIf(!hasPostgres)('cutover preflight reads schema_migrations from ATLAS_DATABASE_URL', async () => {
+    const { openTestKernel } = await import('../../platform/persistence/tests/postgres/harness.ts');
+    const { CURRENT_SCHEMA_VERSION } = await import('../../platform/persistence/src/postgres/migrate.ts');
+    const { runCutoverPreflight } = await import('../../scripts/cutover-preflight.ts');
+    const kernel = await openTestKernel();
+    try {
+      const url = new URL(postgresUrl());
+      url.searchParams.set('options', `-c search_path=${kernel.schema}`);
+      const report = (await runCutoverPreflight(
+        {
+          ATLAS_PERSISTENCE: 'postgres',
+          ATLAS_DATABASE_URL: url.toString(),
+          ATLAS_TENANT_ID: 'tenant_prod',
+          ATLAS_SESSION_SECRET: 'session-secret-value-not-real',
+          ATLAS_ALLOWED_ORIGINS: 'https://atlas.example',
+          ATLAS_CAS_ROOT: '/var/lib/atlas/cas',
+        },
+        { production: true },
+      )) as { ok: boolean; schemaVersion: number; aceStep: string; runpod: string };
+      expect(report.ok).toBe(true);
+      expect(report.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+      expect(report.aceStep).toBe('absent');
+      expect(report.runpod).toBe('llm-only');
+    } finally {
+      await kernel.close();
+    }
   });
 });

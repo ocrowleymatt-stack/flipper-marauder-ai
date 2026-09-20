@@ -56,4 +56,16 @@ describe('Music architecture boundaries', () => {
     expect(estate).toMatch(/admitRun:\s*true/);
     expect(blobs).toMatch(/admitRun \? actor\.tenantId : undefined/);
   });
+
+  it('does not copy Execution circuit-open into Nexus routing eligibility', () => {
+    const compose = readFileSync(join(root, 'apps/host/src/compose.ts'), 'utf8');
+    const handlerStart = compose.indexOf('onProviderHealth(provider, health');
+    const handlerEnd = compose.indexOf('for (const [provider, health] of Object.entries(plane.health)');
+    expect(handlerStart).toBeGreaterThan(0);
+    expect(handlerEnd).toBeGreaterThan(handlerStart);
+    const handler = compose.slice(handlerStart, handlerEnd);
+    expect(handler).toMatch(/detail === 'circuit_open'/);
+    expect(handler.indexOf("detail === 'circuit_open'")).toBeLessThan(handler.indexOf('registry.setHealth'));
+    expect(handler).toMatch(/recordProviderHealth/);
+  });
 });

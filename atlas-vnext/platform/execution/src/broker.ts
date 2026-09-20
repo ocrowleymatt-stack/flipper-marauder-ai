@@ -8,6 +8,10 @@ import type { ExecutionContext, ExecutionObserver, HealthObserver, ProviderAdapt
  * Execution broker: HOW a RouteDecision runs.
  * Owns retries, circuit breakers, streaming, and transactional tool buffering.
  * Does not choose routes (that's Nexus).
+ *
+ * Circuit-open is reported to the health observer as Execution HOW. Host
+ * compose must not copy it into NexusRegistry: that made every model on the
+ * provider unroutable, so execute() never ran to observe the cooldown.
  */
 export class ExecutionBroker {
   private readonly adapters = new Map<string, ProviderAdapter>();
@@ -15,7 +19,7 @@ export class ExecutionBroker {
 
   constructor(
     attemptsPerCandidate = DEFAULT_ATTEMPTS_PER_CANDIDATE,
-    private readonly options: { health?: HealthObserver } = {},
+    private readonly options: { health?: HealthObserver; now?: () => number } = {},
   ) {
     this.attemptsPerCandidate = Math.min(
       Math.max(1, attemptsPerCandidate),
@@ -36,7 +40,7 @@ export class ExecutionBroker {
   breaker(providerId: string): CircuitBreaker {
     let breaker = this.breakers.get(providerId);
     if (!breaker) {
-      breaker = new CircuitBreaker();
+      breaker = new CircuitBreaker(3, 60_000, this.options.now);
       this.breakers.set(providerId, breaker);
     }
     return breaker;
@@ -102,6 +106,9 @@ export class ExecutionBroker {
       const breaker = this.breaker(provider);
       if (breaker.isOpen()) {
         attemptIndex += 1;
+        // Do not replace a timeout (or other failure) from earlier candidates.
+        // Later same-provider models skip HOW; the terminal error stays the cause.
+        lastError ??= new Error(`Circuit open for ${provider}.`);
         observer?.onAttempt({
           index: attemptIndex,
           provider,

@@ -81,6 +81,42 @@ export const PRODUCTION_CONFIG_CATALOGUE: ConfigVarSpec[] = [
   { name: 'VENICE_API_KEY', classification: 'secret', production: 'optional', description: 'Optional provider credential.' },
   { name: 'RUNPOD_API_KEY', classification: 'secret', production: 'optional', description: 'Optional RunPod credential.' },
   { name: 'FORGE_API_KEY', classification: 'secret', production: 'optional', description: 'Optional Forge credential.' },
+  {
+    name: 'ATLAS_MUSIC_GPU',
+    classification: 'dev',
+    production: 'forbidden',
+    description: 'Forbidden. ACE-Step / a dedicated Music GPU is not part of this host. The LLM RunPod stays LLM-only.',
+  },
+  {
+    name: 'ATLAS_MUSIC_GPU_URL',
+    classification: 'dev',
+    production: 'forbidden',
+    description: 'Forbidden. Do not point this host at an ACE-Step or Music GPU runtime.',
+  },
+  {
+    name: 'ATLAS_ACE_STEP',
+    classification: 'dev',
+    production: 'forbidden',
+    description: 'Forbidden. ACE-Step is absent from the production host contract.',
+  },
+  {
+    name: 'ACE_STEP_URL',
+    classification: 'dev',
+    production: 'forbidden',
+    description: 'Forbidden. ACE-Step URLs must not be configured on the LLM host.',
+  },
+  {
+    name: 'RUNPOD_MUSIC_POD_ID',
+    classification: 'dev',
+    production: 'forbidden',
+    description: 'Forbidden. Do not retarget RunPod as a Music GPU from this host.',
+  },
+  {
+    name: 'ATLAS_MUSIC_RUNTIME',
+    classification: 'optional',
+    production: 'optional',
+    description: 'If set, must be score/host/deterministic. ACE-Step values are refused.',
+  },
 ];
 
 export class ProductionConfigError extends Error {
@@ -104,6 +140,15 @@ export interface TimeoutContract {
 
 export const ACCEPTED_PRODUCTION_TOPOLOGY = 'single-instance' as const;
 export type DeploymentTopology = typeof ACCEPTED_PRODUCTION_TOPOLOGY;
+
+/** Env vars that would retarget this host as an ACE-Step / Music GPU. Forbidden in production. */
+export const FORBIDDEN_PRODUCTION_MUSIC_GPU_VARS = [
+  'ATLAS_MUSIC_GPU',
+  'ATLAS_MUSIC_GPU_URL',
+  'ATLAS_ACE_STEP',
+  'ACE_STEP_URL',
+  'RUNPOD_MUSIC_POD_ID',
+] as const;
 
 export interface TopologyContract {
   topology: DeploymentTopology;
@@ -214,6 +259,7 @@ export function readProductionHostConfig(
     if (allowedOrigins.includes('*')) {
       throw new ProductionConfigError('Production forbids wildcard CORS origins.');
     }
+    assertNoMusicGpuOnLlmHost(env);
     assertSingleInstanceTopology(env);
   }
 
@@ -259,6 +305,23 @@ export function publicConfigView(config: ProductionHostConfig): Record<string, u
     runpodScheduler: config.topology.runpodScheduler,
     tracingExporter: config.topology.tracingExporter,
   };
+}
+
+export function assertNoMusicGpuOnLlmHost(
+  env: Record<string, string | undefined> = process.env,
+): void {
+  const present = FORBIDDEN_PRODUCTION_MUSIC_GPU_VARS.filter((name) => Boolean(trim(env[name])));
+  if (present.length) {
+    throw new ProductionConfigError(
+      `Production forbids Music GPU / ACE-Step configuration on the LLM host (${present.join(', ')}). Keep the current RunPod as LLM inference. Do not install ACE-Step here.`,
+    );
+  }
+  const runtime = trim(env.ATLAS_MUSIC_RUNTIME)?.toLowerCase();
+  if (runtime && runtime !== 'score' && runtime !== 'host' && runtime !== 'deterministic') {
+    throw new ProductionConfigError(
+      `Production forbids ATLAS_MUSIC_RUNTIME=${runtime}. Score-first host rendering is the only Music runtime on this host.`,
+    );
+  }
 }
 
 export function assertSingleInstanceTopology(

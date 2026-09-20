@@ -65,6 +65,20 @@ jobs:
           ATLAS_CAS_ROOT=/tmp/atlas-ci-cas \
           ATLAS_DEPLOYMENT_TOPOLOGY=single-instance \
           npm run config:validate -- --production
+          NODE_ENV=production \
+          ATLAS_PERSISTENCE=postgres \
+          ATLAS_DATABASE_URL=postgres://atlas:atlas@localhost:5432/atlas_vnext \
+          ATLAS_ALLOW_MIGRATE=1 \
+          npm run migrate
+          NODE_ENV=production \
+          ATLAS_PERSISTENCE=postgres \
+          ATLAS_DATABASE_URL=postgres://atlas:atlas@localhost:5432/atlas_vnext \
+          ATLAS_TENANT_ID=tenant_ci \
+          ATLAS_SESSION_SECRET=ci-session-secret-not-used-in-prod \
+          ATLAS_ALLOWED_ORIGINS=http://127.0.0.1:8787 \
+          ATLAS_CAS_ROOT=/tmp/atlas-ci-cas \
+          ATLAS_DEPLOYMENT_TOPOLOGY=single-instance \
+          npm run cutover:preflight -- --production
       - name: Production refuses claimed HA topology
         run: |
           if NODE_ENV=production \
@@ -89,6 +103,18 @@ jobs:
             ATLAS_REPLICAS=2 \
             npm run config:validate -- --production; then
             echo "Production config must refuse ATLAS_REPLICAS=2" >&2
+            exit 1
+          fi
+          if NODE_ENV=production \
+            ATLAS_PERSISTENCE=postgres \
+            ATLAS_DATABASE_URL=postgres://atlas:atlas@localhost:5432/atlas_vnext \
+            ATLAS_TENANT_ID=tenant_ci \
+            ATLAS_SESSION_SECRET=ci-session-secret-not-used-in-prod \
+            ATLAS_ALLOWED_ORIGINS=http://127.0.0.1:8787 \
+            ATLAS_CAS_ROOT=/tmp/atlas-ci-cas \
+            ATLAS_ACE_STEP=1 \
+            npm run config:validate -- --production; then
+            echo "Production config must refuse ATLAS_ACE_STEP=1" >&2
             exit 1
           fi
       - name: Classify dependency advisories

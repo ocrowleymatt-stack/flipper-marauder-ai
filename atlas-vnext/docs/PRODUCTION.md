@@ -154,7 +154,7 @@ See [RUNBOOKS.md](./RUNBOOKS.md) and the cutover section below. Dual-write is **
 
 `ATLAS_FLAG_TOOLS`, `ATLAS_FLAG_GENERATION`, `ATLAS_FLAG_DUNGEON_WRITING`, `ATLAS_KILL_PROVIDERS`. Disable surfaces; they do **not** grant Authority.
 
-## 43. Smoke sequence (automated in `tests/production/smoke.test.ts`)
+## 43. Smoke sequence (automated in `tests/production/smoke.test.ts` and `product-acceptance.test.ts`)
 
 1. Liveness  
 2. Readiness  
@@ -173,6 +173,15 @@ See [RUNBOOKS.md](./RUNBOOKS.md) and the cutover section below. Dual-write is **
 15. Liveness still true  
 16. Timeout contract present  
 17. Kill switches default on  
+18. Native login; bootstrap 401 in production  
+19. Conversation result-return  
+20. Research cited brief  
+21. OSINT public-source report  
+22. Writing manuscript  
+23. Website sandboxed preview  
+24. Music audition WAV (authenticated Range)  
+25. Projects/Library listing  
+26. Cross-tenant generic 404  
 
 ## 44. Performance baseline
 

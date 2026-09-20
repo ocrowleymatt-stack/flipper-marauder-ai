@@ -57,6 +57,30 @@ describe('production configuration contract', () => {
         ATLAS_USE_MOCK_PROVIDERS: '1',
       }),
     ).toThrow(/MOCK_PROVIDERS/);
+    expect(() =>
+      readProductionHostConfig({
+        NODE_ENV: 'production',
+        ATLAS_PERSISTENCE: 'postgres',
+        ATLAS_DATABASE_URL: 'postgres://atlas:x@127.0.0.1/atlas',
+        ATLAS_TENANT_ID: 'tenant_prod',
+        ATLAS_SESSION_SECRET: 'session-secret-value-not-real',
+        ATLAS_ALLOWED_ORIGINS: 'https://atlas.example',
+        ATLAS_CAS_ROOT: '/var/lib/atlas/cas',
+        ATLAS_MUSIC_GPU: '1',
+      }),
+    ).toThrow(/Music GPU|ACE-Step/);
+    expect(() =>
+      readProductionHostConfig({
+        NODE_ENV: 'production',
+        ATLAS_PERSISTENCE: 'postgres',
+        ATLAS_DATABASE_URL: 'postgres://atlas:x@127.0.0.1/atlas',
+        ATLAS_TENANT_ID: 'tenant_prod',
+        ATLAS_SESSION_SECRET: 'session-secret-value-not-real',
+        ATLAS_ALLOWED_ORIGINS: 'https://atlas.example',
+        ATLAS_CAS_ROOT: '/var/lib/atlas/cas',
+        ATLAS_MUSIC_RUNTIME: 'acestep',
+      }),
+    ).toThrow(/ATLAS_MUSIC_RUNTIME/);
   });
 
   it('accepts a complete production contract without echoing secrets', () => {

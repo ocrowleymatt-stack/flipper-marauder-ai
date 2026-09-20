@@ -8,7 +8,7 @@ import { ResearchError, ResearchService } from '@atlas-vnext/dungeon-research';
 import { WebsiteError, WebsiteStudioService } from '@atlas-vnext/dungeon-website';
 import { MusicError, MusicService } from '@atlas-vnext/dungeon-music';
 import { PrivacyError, PrivacyService } from '@atlas-vnext/dungeon-privacy';
-import { json, readJson, urlPath } from './http.ts';
+import { json, readJson, sendBytes, urlPath } from './http.ts';
 import { PlatformHttpError } from './errors.ts';
 import { resolveActor, type WorkbenchHostOptions } from './workbench.ts';
 
@@ -328,7 +328,9 @@ async function handleMusic(
   const list = pathname.match(/^\/api\/projects\/([^/]+)\/compositions$/);
   const item = pathname.match(/^\/api\/compositions\/([^/]+)$/);
   const compose = pathname.match(/^\/api\/compositions\/([^/]+)\/compose$/);
-  if (!list && !item && !compose) return false;
+  const audition = pathname.match(/^\/api\/compositions\/([^/]+)\/audition$/);
+  const midi = pathname.match(/^\/api\/compositions\/([^/]+)\/midi$/);
+  if (!list && !item && !compose && !audition && !midi) return false;
   const resolved = requireActor(actor);
   const service = requireService(options.music, 'music');
   const writingActor = { tenantId: resolved.tenantId, principalId: resolved.principalId };
@@ -354,7 +356,23 @@ async function handleMusic(
     return true;
   }
   if (req.method === 'POST' && compose) {
-    json(res, 200, await service.compose(writingActor, decodeURIComponent(compose[1]!)));
+    const body = await readJson(req, options.maxRequestBytes);
+    const generated = await service.compose(writingActor, decodeURIComponent(compose[1]!), {
+      brief: typeof body.brief === 'string' ? body.brief : undefined,
+      conversationId: typeof body.conversationId === 'string' ? body.conversationId : null,
+      admitRun: true,
+    });
+    json(res, 200, { ...generated.record, reportText: generated.reportText, libraryOk: generated.libraryOk });
+    return true;
+  }
+  if (req.method === 'GET' && audition) {
+    const body = await service.auditionBytes(writingActor, decodeURIComponent(audition[1]!));
+    sendBytes(req, res, body.bytes, body.mimeType);
+    return true;
+  }
+  if (req.method === 'GET' && midi) {
+    const body = await service.midiBytes(writingActor, decodeURIComponent(midi[1]!));
+    sendBytes(req, res, body.bytes, body.mimeType);
     return true;
   }
   json(res, 404, { error: 'Not found.' });

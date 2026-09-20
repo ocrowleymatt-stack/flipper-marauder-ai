@@ -1,5 +1,7 @@
 # Music dungeon
 
-Domain: composition, stems, release verification.
+Domain: structured score, deterministic MIDI, audition WAV, conversation result-return.
 
-GPU runtimes belong in `runtimes/`, not in Nexus. Product code is not in this PR.
+Nexus still owns WHERE; Execution owns HOW. The dungeon does not `sendMessage`, create a second conversation, or lease GPUs. Score JSON is canonical identity. MIDI and WAV are derived.
+
+Wave 6 restores conversation-first Music inside Atlas. A later owner-authorized tranche may add a genuine Music GPU renderer against the same composition identity. Not this tranche.

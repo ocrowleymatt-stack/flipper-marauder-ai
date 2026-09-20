@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PathSafetyError,
   UnsupportedMediaError,
+  ALLOWED_MIME_TYPES,
   isAcquisitionStoredPath,
   resolveMime,
   sanitiseRelPath,
@@ -33,5 +34,12 @@ describe('path sanitisation and MIME', () => {
         declared: 'application/javascript',
       }),
     ).toThrow(/data/i);
+  });
+
+  it('does not admit generated audio through the ingest allowlist', () => {
+    expect(ALLOWED_MIME_TYPES).not.toContain('audio/wav');
+    expect(ALLOWED_MIME_TYPES).not.toContain('audio/midi');
+    const riff = Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45]);
+    expect(() => resolveMime({ bytes: riff, filename: 'audition.wav', declared: 'audio/wav' })).toThrow(UnsupportedMediaError);
   });
 });

@@ -48,7 +48,7 @@ import { OsintService, DungeonError, looksLikeOsintFollowup } from '@atlas-vnext
 import { InvestigationService } from '@atlas-vnext/dungeon-investigation';
 import { ResearchError, ResearchService } from '@atlas-vnext/dungeon-research';
 import { WebsiteError, WebsiteStudioService, looksLikeWebsiteFollowup, looksLikeWebsiteRequest } from '@atlas-vnext/dungeon-website';
-import { MusicService } from '@atlas-vnext/dungeon-music';
+import { MusicError, MusicService, looksLikeMusicFollowup, looksLikeMusicRequest } from '@atlas-vnext/dungeon-music';
 import { PrivacyService } from '@atlas-vnext/dungeon-privacy';
 import { EnvFlagStore, type KillSwitchState } from '@atlas-vnext/flags';
 import { AuthorityEngine, EffectivePolicyEngine } from '@atlas-vnext/permissions';
@@ -65,6 +65,7 @@ import { NodeFederatedSearch, searchEnginesFromEnv } from './search.ts';
 import { FixtureInspect, NodeSourceInspect } from './inspect.ts';
 import { productionToolAdapters } from './web-tools.ts';
 import { NodeSiteGenerate } from './site-generate.ts';
+import { NodeMusicScore } from './music-score.ts';
 
 export interface Spine {
   runtime: ConversationRuntime;
@@ -415,6 +416,14 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
       policy,
       generate: new NodeSiteGenerate(router, plane.broker, resources),
     });
+    music = new MusicService({
+      persistence,
+      projects,
+      files,
+      authority,
+      policy,
+      generate: new NodeMusicScore(router, plane.broker, resources),
+    });
     investigation = new InvestigationService({ persistence, projects, files, runtime, authority, policy, context });
     research = new ResearchService({
       persistence,
@@ -487,6 +496,22 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
           throw err;
         }
       }
+      if (looksLikeMusicRequest(input.content) || looksLikeMusicFollowup(input.content)) {
+        try {
+          const musicResult = await music!.maybeRunFromConversation(actor, {
+            conversationId: input.conversationId,
+            projectId: input.projectId,
+            question: input.content,
+            signal: input.signal,
+          });
+          if (musicResult.handled) return musicResult;
+        } catch (err) {
+          if (err instanceof MusicError && (err.code === 'permission_denied' || err.code === 'not_found')) {
+            return { handled: true, failed: true, text: err.message };
+          }
+          throw err;
+        }
+      }
       try {
         return await research!.maybeRunFromConversation(actor, {
           conversationId: input.conversationId,
@@ -507,7 +532,6 @@ export async function composeSpine(options: ComposeOptions): Promise<Spine> {
         throw err;
       }
     });
-    music = new MusicService({ persistence, projects, files, runtime, authority, policy });
   } else {
     store = openDurableStore(options.dataPath);
     tools = new ToolEngine({

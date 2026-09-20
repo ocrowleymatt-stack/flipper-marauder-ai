@@ -7,6 +7,8 @@ const OSINT_COLLISION =
   /\b(osint|digital footprint|username scan|who\(\)|enumerate (usernames?|accounts?))\b/i;
 const WRITING_COLLISION =
   /\b(write a\b|draft chapter|manuscript|story bible|caspa gold)\b/i;
+const MUSIC_COLLISION =
+  /\b(compose|write|arrange|score)\b.{0,40}\b(song|track|tune|beat|instrumental|piano piece|soundtrack|composition)\b/i;
 const RESEARCH_COLLISION =
   /\busing multiple independent\b|^research(ing)?\b|\bresearch (the )?(history|sources|web)\b/i;
 const MEMORY_QUESTION = /\bwhat did i say\b|\bdog['’]?s name\b/i;
@@ -17,6 +19,9 @@ export function looksLikeWebsiteRequest(text: string): boolean {
   if (MEMORY_QUESTION.test(t) || OSINT_COLLISION.test(t)) return false;
   if (RESEARCH_COLLISION.test(t) && !WEBSITE_VERB.test(t)) return false;
   if (WRITING_COLLISION.test(t) && !WEBSITE_NOUN.test(t)) return false;
+  if (MUSIC_COLLISION.test(t) && !/\b(build|create|generate|design)\b.{0,24}\b((web\s*)?site|webpage|landing\s*page)\b/i.test(t)) {
+    return false;
+  }
   if (/\bwrite a (scene|chapter|story|manuscript|poem|essay|novel)\b/i.test(t)) return false;
   if (WEBSITE_VERB.test(t) && WEBSITE_NOUN.test(t)) return true;
   if (/\b(website|web site|landing page)\s+(about|for|on)\b/i.test(t)) return true;

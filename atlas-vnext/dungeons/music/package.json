@@ -6,7 +6,6 @@
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
     "@atlas-vnext/contracts": "*",
-    "@atlas-vnext/conversation": "*",
     "@atlas-vnext/files": "*",
     "@atlas-vnext/persistence": "*",
     "@atlas-vnext/permissions": "*",

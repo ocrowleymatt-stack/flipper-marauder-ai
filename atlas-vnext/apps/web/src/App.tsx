@@ -120,6 +120,7 @@ export function App() {
   const [selectedResult, setSelectedResult] = useState<ParsedResult | null>(null);
   const [caspaDocumentId, setCaspaDocumentId] = useState<string | null>(null);
   const [websiteSiteId, setWebsiteSiteId] = useState<string | null>(null);
+  const [musicCompositionId, setMusicCompositionId] = useState<string | null>(null);
   const [osintFindings, setOsintFindings] = useState<DungeonRecord[]>([]);
   const [osintTargets, setOsintTargets] = useState<DungeonRecord[]>([]);
   const [researchBriefs, setResearchBriefs] = useState<DungeonRecord[]>([]);
@@ -598,6 +599,14 @@ export function App() {
     playCue('activate');
   }
 
+  function openMusic(compositionId: string) {
+    setMusicCompositionId(compositionId);
+    closePanel();
+    setSurface('music');
+    setNavOpen(false);
+    playCue('activate');
+  }
+
   function openFileDetails(file: ProjectFile) {
     if (file.documentId) {
       openManuscript(file.documentId);
@@ -606,6 +615,11 @@ export function App() {
     const siteMatch = file.path.match(/^sites\/(site_[^/]+)\/index\.html$/);
     if (siteMatch?.[1]) {
       openWebsite(siteMatch[1]);
+      return;
+    }
+    const musicMatch = file.path.match(/^compositions\/(cmp_[^/]+)\//) ?? (file.compositionId ? [file.path, file.compositionId] : null);
+    if (musicMatch?.[1]) {
+      openMusic(musicMatch[1]);
       return;
     }
     setSelectedFile(file);
@@ -951,7 +965,7 @@ export function App() {
         ) : surface !== 'conversation' ? (
           <section className="workspace-wrap">
             <SurfaceBack onBack={goToConversation} label={dungeons.find((item) => item.id === surface)?.navLabel.replace(/Studio/i, '').trim() ?? 'Skill'} />
-            <EstatePanel dungeonId={surface} projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={setStatus} onError={setError} selectedSiteId={websiteSiteId} />
+            <EstatePanel dungeonId={surface} projectId={projectId} files={files} busy={busy} setBusy={setBusy} onStatus={setStatus} onError={setError} selectedSiteId={websiteSiteId} selectedCompositionId={musicCompositionId} />
           </section>
         ) : (
           <main className="workspace" aria-label="Conversation">
@@ -1014,6 +1028,7 @@ export function App() {
                           onOpenSources={() => openSources(card)}
                           onOpenManuscript={card.documentId ? () => openManuscript(card.documentId!) : undefined}
                           onOpenWebsite={card.siteId ? () => openWebsite(card.siteId!) : undefined}
+                          onOpenMusic={card.compositionId ? () => openMusic(card.compositionId!) : undefined}
                         />
                       ) : null}
                       {message.role === 'assistant' && message.content ? (
@@ -1178,23 +1193,45 @@ function ResultCard({
   onOpenSources,
   onOpenManuscript,
   onOpenWebsite,
+  onOpenMusic,
 }: {
   result: ParsedResult;
   onOpenFinding: (finding: ParsedFinding) => void;
   onOpenSources: () => void;
   onOpenManuscript?: () => void;
   onOpenWebsite?: () => void;
+  onOpenMusic?: () => void;
 }) {
   const eyebrow =
-    result.kind === 'osint' ? 'OSINT' : result.kind === 'writing' ? 'Writing' : result.kind === 'website' ? 'Website' : 'Research';
+    result.kind === 'osint'
+      ? 'OSINT'
+      : result.kind === 'writing'
+        ? 'Writing'
+        : result.kind === 'website'
+          ? 'Website'
+          : result.kind === 'music'
+            ? 'Music'
+            : 'Research';
   return (
-    <section className="result-card" data-testid={`result-card-${result.kind}`} data-scan-id={result.scanId ?? ''} data-document-id={result.documentId ?? ''} data-site-id={result.siteId ?? ''} aria-label={`${result.kind} result`}>
+    <section
+      className="result-card"
+      data-testid={`result-card-${result.kind}`}
+      data-scan-id={result.scanId ?? ''}
+      data-document-id={result.documentId ?? ''}
+      data-site-id={result.siteId ?? ''}
+      data-composition-id={result.compositionId ?? ''}
+      aria-label={`${result.kind} result`}
+    >
       <div className="result-card-head">
         <p className="eyebrow">{eyebrow}</p>
         <p className="meta">{result.state}</p>
       </div>
-      {result.kind === 'writing' || result.kind === 'website' ? <p className="result-strongest">{result.headline}</p> : null}
-      {result.kind !== 'writing' && result.kind !== 'website' && result.strongest ? <p className="result-strongest">{result.strongest}</p> : null}
+      {result.kind === 'writing' || result.kind === 'website' || result.kind === 'music' ? (
+        <p className="result-strongest">{result.headline}</p>
+      ) : null}
+      {result.kind !== 'writing' && result.kind !== 'website' && result.kind !== 'music' && result.strongest ? (
+        <p className="result-strongest">{result.strongest}</p>
+      ) : null}
       {result.kind === 'writing' && result.qualityState ? (
         <p className="meta" data-testid="writing-quality">
           Quality {result.qualityState}
@@ -1204,6 +1241,13 @@ function ResultCard({
         <p className="meta" data-testid="website-source">
           {result.strongest}
         </p>
+      ) : null}
+      {result.kind === 'music' ? (
+        <MusicPlayer
+          compositionId={result.compositionId}
+          durationSeconds={result.durationSeconds}
+          detail={result.strongest}
+        />
       ) : null}
       {result.findings.length > 0 && result.kind !== 'writing' ? (
         <ul className="plain result-findings">
@@ -1242,8 +1286,72 @@ function ResultCard({
             Open preview
           </button>
         ) : null}
+        {onOpenMusic ? (
+          <button type="button" className="ghost compact" data-testid="open-music" onClick={onOpenMusic}>
+            Open
+          </button>
+        ) : null}
+        {result.compositionId ? (
+          <>
+            <a className="ghost compact" data-testid="download-wav" href={`/api/compositions/${encodeURIComponent(result.compositionId)}/audition`} download>
+              Download WAV
+            </a>
+            <a className="ghost compact" data-testid="download-midi" href={`/api/compositions/${encodeURIComponent(result.compositionId)}/midi`} download>
+              Download MIDI
+            </a>
+          </>
+        ) : null}
       </div>
     </section>
+  );
+}
+
+function MusicPlayer({
+  compositionId,
+  durationSeconds,
+  detail,
+}: {
+  compositionId?: string;
+  durationSeconds?: number;
+  detail?: string;
+}) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  if (!compositionId) return null;
+  const src = `/api/compositions/${encodeURIComponent(compositionId)}/audition`;
+  return (
+    <div className="music-player" data-testid="music-player">
+      {detail ? <p className="meta">{detail}</p> : null}
+      {typeof durationSeconds === 'number' ? (
+        <p className="meta" data-testid="music-duration">
+          {durationSeconds.toFixed(1)}s
+        </p>
+      ) : null}
+      <audio
+        ref={audioRef}
+        data-testid="music-audio"
+        src={src}
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+      />
+      <div className="row result-actions">
+        <button
+          type="button"
+          className="primary compact"
+          data-testid="music-play"
+          onClick={() => {
+            const node = audioRef.current;
+            if (!node) return;
+            if (node.paused) void node.play();
+            else node.pause();
+          }}
+        >
+          {playing ? 'Pause' : 'Play'}
+        </button>
+      </div>
+    </div>
   );
 }
 

@@ -366,6 +366,33 @@ input {
   line-height: 1.5;
 }
 
+.music-player {
+  display: grid;
+  gap: 8px;
+}
+
+.music-player audio {
+  width: 100%;
+  max-width: 100%;
+}
+
+.result-card .row,
+.result-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.result-actions a.ghost {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 12px;
+  text-decoration: none;
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
 .finding-open {
   display: flex !important;
   justify-content: space-between;

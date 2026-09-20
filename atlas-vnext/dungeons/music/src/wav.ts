@@ -14,6 +14,9 @@ export function renderScoreToWav(score: MusicScore, maxSeconds = MUSIC_BOUNDS.ma
   const twoPi = Math.PI * 2;
   const tracks = score.tracks;
   const ampScale = 0.22 / Math.sqrt(Math.max(1, tracks.length));
+  const maxSampleWrites = frames * MUSIC_BOUNDS.maxEffectivePolyphony;
+  let sampleWrites = 0;
+  const windows: Array<{ start: number; end: number; hz: number; peak: number; leftGain: number; rightGain: number }> = [];
 
   for (let t = 0; t < tracks.length; t += 1) {
     const track = tracks[t]!;
@@ -27,20 +30,33 @@ export function renderScoreToWav(score: MusicScore, maxSeconds = MUSIC_BOUNDS.ma
         start + Math.max(8, Math.floor((note.durationBeats * 60 * SAMPLE_RATE) / score.tempoBpm)),
       );
       if (start >= frames || end <= start) continue;
-      const hz = midiToHz(note.pitch);
-      const peak = (note.velocity / 127) * ampScale;
-      const attack = Math.max(4, Math.round(SAMPLE_RATE * 0.008));
-      const release = Math.max(8, Math.round(SAMPLE_RATE * 0.05));
-      for (let i = start; i < end; i += 1) {
-        const local = i - start;
-        const length = end - start;
-        let env = 1;
-        if (local < attack) env = local / attack;
-        else if (local > length - release) env = Math.max(0, (length - local) / release);
-        const sample = Math.sin(twoPi * hz * (i / SAMPLE_RATE)) * peak * env;
-        left[i] = (left[i] ?? 0) + sample * leftGain;
-        right[i] = (right[i] ?? 0) + sample * rightGain;
+      sampleWrites += end - start;
+      if (sampleWrites > maxSampleWrites) {
+        throw Object.assign(new Error('Score exceeds the audition synthesis bound.'), { code: 'render_failed' });
       }
+      windows.push({
+        start,
+        end,
+        hz: midiToHz(note.pitch),
+        peak: (note.velocity / 127) * ampScale,
+        leftGain,
+        rightGain,
+      });
+    }
+  }
+
+  const attack = Math.max(4, Math.round(SAMPLE_RATE * 0.008));
+  const release = Math.max(8, Math.round(SAMPLE_RATE * 0.05));
+  for (const note of windows) {
+    for (let i = note.start; i < note.end; i += 1) {
+      const local = i - note.start;
+      const length = note.end - note.start;
+      let env = 1;
+      if (local < attack) env = local / attack;
+      else if (local > length - release) env = Math.max(0, (length - local) / release);
+      const sample = Math.sin(twoPi * note.hz * (i / SAMPLE_RATE)) * note.peak * env;
+      left[i] = (left[i] ?? 0) + sample * note.leftGain;
+      right[i] = (right[i] ?? 0) + sample * note.rightGain;
     }
   }
 

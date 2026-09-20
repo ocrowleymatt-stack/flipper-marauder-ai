@@ -11,6 +11,7 @@ export const MUSIC_BOUNDS = {
   maxTracks: 16,
   maxNotes: 1200,
   maxAuditionSeconds: 180,
+  maxEffectivePolyphony: 16,
   ppq: 480,
   minPitch: 0,
   maxPitch: 127,

@@ -62,12 +62,12 @@ function noteTrack(
     const duration = Math.max(1, Math.round(note.durationBeats * ppq));
     events.push({
       tick: start,
-      order: 1,
+      order: 2,
       bytes: [0x90 | channel, note.pitch & 0x7f, note.velocity & 0x7f],
     });
     events.push({
       tick: start + duration,
-      order: 2,
+      order: 1,
       bytes: [0x80 | channel, note.pitch & 0x7f, 0x40],
     });
   }

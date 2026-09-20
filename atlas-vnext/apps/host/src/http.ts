@@ -101,6 +101,28 @@ export function serveStatic(res: ServerResponse, staticDir: string, pathname: st
   return true;
 }
 
+/** Parse a single RFC 7233 bytes range spec (`0-499`, `500-`, `-500`). */
+export function parseByteRange(spec: string, total: number): { start: number; end: number } | null {
+  if (total <= 0) return null;
+  const dash = spec.indexOf('-');
+  if (dash < 0) return null;
+  const startRaw = spec.slice(0, dash);
+  const endRaw = spec.slice(dash + 1);
+  let start: number;
+  let end: number;
+  if (startRaw === '') {
+    const suffix = Number(endRaw);
+    if (!Number.isFinite(suffix) || suffix <= 0) return null;
+    start = suffix >= total ? 0 : total - suffix;
+    end = total - 1;
+  } else {
+    start = Number(startRaw);
+    end = endRaw === '' ? total - 1 : Number(endRaw);
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= total || end < start) return null;
+  return { start, end: Math.min(end, total - 1) };
+}
+
 export function sendBytes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -121,15 +143,13 @@ export function sendBytes(
     return;
   }
   const spec = range.replace(/^bytes=/i, '').split(',')[0] ?? '';
-  const [startRaw, endRaw] = spec.split('-');
-  let start = startRaw ? Number(startRaw) : 0;
-  let end = endRaw ? Number(endRaw) : total - 1;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= total || end < start) {
+  const parsed = parseByteRange(spec, total);
+  if (!parsed) {
     res.writeHead(416, { ...base, 'Content-Range': `bytes */${total}` });
     res.end();
     return;
   }
-  end = Math.min(end, total - 1);
+  const { start, end } = parsed;
   const slice = Buffer.from(bytes.subarray(start, end + 1));
   res.writeHead(206, {
     ...base,

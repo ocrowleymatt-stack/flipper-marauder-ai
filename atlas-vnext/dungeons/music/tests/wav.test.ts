@@ -32,4 +32,26 @@ describe('WAV audition renderer', () => {
     expect(bits).toBe(16);
     expect(wavPeakAbs(bytes)).toBeGreaterThan(0.05);
   });
+
+  it('rejects overlapping notes whose aggregate sample work exceeds the polyphony bound', () => {
+    const dense = parseMusicScore({
+      title: 'Dense overlap',
+      tempoBpm: 20,
+      timeSignature: [4, 4],
+      tracks: [
+        {
+          name: 'Pad',
+          channel: 0,
+          program: 48,
+          notes: Array.from({ length: 17 }, (_, i) => ({
+            pitch: 48 + (i % 12),
+            startBeat: 0,
+            durationBeats: 80,
+            velocity: 40,
+          })),
+        },
+      ],
+    });
+    expect(() => renderScoreToWav(dense)).toThrow(/synthesis bound/i);
+  });
 });

@@ -21,6 +21,7 @@ describe('website conversation classifier', () => {
     expect(looksLikeWebsiteRequest('Write a 500-word scene about a lighthouse keeper hearing a voice from the fog.')).toBe(false);
     expect(looksLikeWebsiteRequest('Write a song about rain')).toBe(false);
     expect(looksLikeWebsiteRequest('Compose a 30-second piano piece in A minor, 90 BPM.')).toBe(false);
+    expect(looksLikeWebsiteRequest('Compose a song for my website')).toBe(false);
     expect(looksLikeWebsiteRequest('What did I say my dog’s name was?')).toBe(false);
     expect(looksLikeWebsiteFollowup('Which of those findings is strongest?')).toBe(false);
   });

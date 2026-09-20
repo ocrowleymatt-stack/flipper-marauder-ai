@@ -12,6 +12,7 @@ describe('music conversation classifier', () => {
     expect(looksLikeMusicRequest('Compose a 30-second piano piece in A minor, 90 BPM.')).toBe(true);
     expect(looksLikeMusicRequest('Write a song about rain')).toBe(true);
     expect(looksLikeMusicRequest('Create an instrumental soundtrack for the harbour.')).toBe(true);
+    expect(looksLikeMusicRequest('Compose a song for my website')).toBe(true);
   });
 
   it('does not steal writing, website, research, or OSINT', () => {

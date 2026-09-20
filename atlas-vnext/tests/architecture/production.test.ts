@@ -23,6 +23,7 @@ describe('production-readiness architecture freeze', () => {
       'scripts/cutover-preflight.ts',
       'scripts/backup-atlas.ts',
       'scripts/restore-atlas.ts',
+      'scripts/migrate-atlas.ts',
     ].map((rel) => readFileSync(join(root, rel), 'utf8'));
     const blob = files.join('\n');
     expect(blob).not.toMatch(/docker pull|helm install|apt-get install/);
@@ -36,6 +37,9 @@ describe('production-readiness architecture freeze', () => {
     expect(preflight).not.toMatch(/visibleOutputAlready:\s*true/);
     expect(preflight).toMatch(/llm-only/);
     expect(preflight).toMatch(/readDeployedSchemaVersion/);
+    const ci = readFileSync(join(root, '../.github/workflows/ci.yml'), 'utf8');
+    expect(ci).toMatch(/npm run migrate/);
+    expect(ci.indexOf('npm run migrate')).toBeLessThan(ci.indexOf('npm run cutover:preflight -- --production'));
     const backup = readFileSync(join(root, 'scripts/backup-atlas.ts'), 'utf8');
     expect(backup).toMatch(/pg_export_snapshot/);
     expect(backup).toMatch(/verifyCasObjects/);

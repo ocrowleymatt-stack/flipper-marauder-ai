@@ -43,6 +43,7 @@ export function EstatePanel({
   onStatus,
   onError,
   selectedSiteId,
+  selectedCompositionId,
 }: {
   dungeonId: string;
   projectId: string | null;
@@ -52,6 +53,7 @@ export function EstatePanel({
   onStatus: (value: string) => void;
   onError: (value: string | null) => void;
   selectedSiteId?: string | null;
+  selectedCompositionId?: string | null;
 }) {
   if (dungeonId === 'privacy') {
     return <PrivacyPanel busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
@@ -88,7 +90,18 @@ export function EstatePanel({
       />
     );
   }
-  if (dungeonId === 'music') return <MusicPanel projectId={projectId} busy={busy} setBusy={setBusy} onStatus={onStatus} onError={onError} />;
+  if (dungeonId === 'music') {
+    return (
+      <MusicPanel
+        projectId={projectId}
+        busy={busy}
+        setBusy={setBusy}
+        onStatus={onStatus}
+        onError={onError}
+        selectedCompositionId={selectedCompositionId ?? null}
+      />
+    );
+  }
   return (
     <main className="workspace" aria-label="Dungeon">
       <div className="empty">
@@ -729,16 +742,19 @@ function MusicPanel({
   setBusy,
   onStatus,
   onError,
+  selectedCompositionId,
 }: {
   projectId: string;
   busy: boolean;
   setBusy: (value: boolean) => void;
   onStatus: (value: string) => void;
   onError: (value: string | null) => void;
+  selectedCompositionId: string | null;
 }) {
   const [title, setTitle] = useState('');
   const [brief, setBrief] = useState('');
   const [items, setItems] = useState<DungeonRecord[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(selectedCompositionId);
 
   const reload = useCallback(async () => {
     setItems(await listCompositions(projectId));
@@ -748,6 +764,10 @@ function MusicPanel({
     void reload().catch((err) => onError(err instanceof Error ? err.message : String(err)));
   }, [reload, onError]);
 
+  useEffect(() => {
+    if (selectedCompositionId) setActiveId(selectedCompositionId);
+  }, [selectedCompositionId]);
+
   async function onCreate(event: FormEvent) {
     event.preventDefault();
     if (!brief.trim() || busy) return;
@@ -755,10 +775,11 @@ function MusicPanel({
     try {
       playCue('tool');
       const created = await createComposition(projectId, title.trim() || 'Untitled composition', brief.trim());
-      await composeMusic(created.id);
+      const composed = await composeMusic(created.id);
+      setActiveId(composed.id);
       await reload();
       playCue('complete');
-      onStatus('Composition packet stored. GPU runtimes stay in Execution.');
+      onStatus('Composition stored. Ask Atlas from chat to keep the result in the same conversation.');
     } catch (err) {
       playCue('warn');
       onError(err instanceof Error ? err.message : String(err));
@@ -767,12 +788,14 @@ function MusicPanel({
     }
   }
 
+  const active = items.find((item) => item.id === activeId) ?? items[0] ?? null;
+
   return (
-    <main className="workspace estate" aria-label="Music">
+    <main className="workspace estate" aria-label="Music" data-testid="music-panel">
       <header className="thread-header">
         <div>
           <h2>Music</h2>
-          <p className="hint">Structure and lyrics through Nexus. This surface does not lease GPUs.</p>
+          <p className="hint">Working surface only. Ask Atlas to compose; the requesting conversation receives the playable card. This is not a second Music product.</p>
         </div>
       </header>
       <section className="estate-body">
@@ -785,7 +808,29 @@ function MusicPanel({
             {busy ? 'Composing' : 'Compose'}
           </button>
         </form>
-        <RecordList title="Compositions" items={items} />
+        <ul className="plain">
+          {items.map((item) => (
+            <li key={item.id}>
+              <button type="button" className={item.id === active?.id ? 'active' : ''} onClick={() => setActiveId(item.id)}>
+                {item.title}
+                <span className="conv-meta">{typeof item.payload.revision === 'number' ? `rev ${item.payload.revision}` : item.status}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+        {active?.status === 'completed' ? (
+          <div className="music-player" data-testid="music-panel-player">
+            <audio data-testid="music-panel-audio" src={`/api/compositions/${encodeURIComponent(active.id)}/audition`} controls preload="metadata" />
+            <div className="row result-actions">
+              <a className="ghost compact" href={`/api/compositions/${encodeURIComponent(active.id)}/audition`} download>
+                WAV
+              </a>
+              <a className="ghost compact" href={`/api/compositions/${encodeURIComponent(active.id)}/midi`} download>
+                MIDI
+              </a>
+            </div>
+          </div>
+        ) : null}
       </section>
     </main>
   );

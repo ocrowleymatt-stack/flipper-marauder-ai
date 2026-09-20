@@ -11,7 +11,7 @@ import type { ProjectService } from '@atlas-vnext/projects';
 import { ToolError, type ToolEngine } from '@atlas-vnext/tools';
 import { DEFAULT_OPERATIONAL_LIMITS } from '@atlas-vnext/contracts';
 import { isWritingRunConversation } from '@atlas-vnext/dungeon-writing';
-import { header, isMutating, json, publicFile, readJson, readRaw, urlPath, urlQuery } from './http.ts';
+import { header, isMutating, json, publicFile, readJson, readRaw, sendBytes, urlPath, urlQuery } from './http.ts';
 import { loginClientAddress } from './limits.ts';
 
 export interface WorkbenchHostOptions {
@@ -266,6 +266,18 @@ export async function handleWorkbench(
           return true;
         }
         json(res, 200, publicFile(file, await requireFiles(options).originFor(actor, file)));
+        return true;
+      }
+      const fileContent = pathname.match(/^\/api\/files\/([^/]+)\/content$/);
+      if (req.method === 'GET' && fileContent) {
+        const fileId = decodeURIComponent(fileContent[1]!);
+        const file = await requireFiles(options).getMetadata(actor, fileId);
+        if (!file) {
+          json(res, 404, { error: 'File not found.' });
+          return true;
+        }
+        const bytes = await requireFiles(options).readBytes(actor, fileId);
+        sendBytes(req, res, bytes, file.mimeType || 'application/octet-stream');
         return true;
       }
       const attachMatch = pathname.match(/^\/api\/files\/([^/]+)\/attach$/);

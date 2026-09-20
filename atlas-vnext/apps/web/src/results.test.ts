@@ -84,6 +84,23 @@ Excerpt: tents tickets cocoa`;
     expect(result?.revision).toBe(2);
   });
 
+  it('parses music reports into a playable card', () => {
+    const music = `Music: Rain
+Composition: cmp_abc
+Revision: 1
+Status: playable
+Duration: 8.0s
+Tempo: 90 BPM
+Key: A minor`;
+    const result = classifyAssistantResult(music);
+    expect(result?.kind).toBe('music');
+    expect(result?.headline).toBe('Rain');
+    expect(result?.compositionId).toBe('cmp_abc');
+    expect(result?.revision).toBe(1);
+    expect(result?.durationSeconds).toBe(8);
+    expect(result?.strongest).toMatch(/90 BPM/);
+  });
+
   it('binds durable findings to the matching OSINT scan, not the whole conversation', () => {
     const octocat = classifyAssistantResult(osint)!;
     const hubotReport = osint.replaceAll('octocat', 'hubot').replace('The Octocat GitHub profile repositories', 'Hubot automation GitHub profile');

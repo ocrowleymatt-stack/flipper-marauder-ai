@@ -101,6 +101,44 @@ export function serveStatic(res: ServerResponse, staticDir: string, pathname: st
   return true;
 }
 
+export function sendBytes(
+  req: IncomingMessage,
+  res: ServerResponse,
+  bytes: Uint8Array,
+  mime: string,
+): void {
+  const total = bytes.byteLength;
+  const range = header(req, 'range');
+  const base: Record<string, string> = {
+    'Content-Type': mime,
+    'Accept-Ranges': 'bytes',
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'private, no-store',
+  };
+  if (!range || !/^bytes=/i.test(range)) {
+    res.writeHead(200, { ...base, 'Content-Length': String(total) });
+    res.end(Buffer.from(bytes));
+    return;
+  }
+  const spec = range.replace(/^bytes=/i, '').split(',')[0] ?? '';
+  const [startRaw, endRaw] = spec.split('-');
+  let start = startRaw ? Number(startRaw) : 0;
+  let end = endRaw ? Number(endRaw) : total - 1;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= total || end < start) {
+    res.writeHead(416, { ...base, 'Content-Range': `bytes */${total}` });
+    res.end();
+    return;
+  }
+  end = Math.min(end, total - 1);
+  const slice = Buffer.from(bytes.subarray(start, end + 1));
+  res.writeHead(206, {
+    ...base,
+    'Content-Length': String(slice.byteLength),
+    'Content-Range': `bytes ${start}-${end}/${total}`,
+  });
+  res.end(slice);
+}
+
 export function publicFile(
   file: {
     id: string;
@@ -131,10 +169,16 @@ export function publicFile(
     projectId: file.workspaceId,
     origin,
     documentId: manuscriptDocumentId(file.path),
+    compositionId: compositionIdFromPath(file.path),
   };
 }
 
 function manuscriptDocumentId(path: string): string | undefined {
   const match = path.match(/^manuscripts\/([^/]+)\.md$/);
+  return match?.[1];
+}
+
+function compositionIdFromPath(path: string): string | undefined {
+  const match = path.match(/^compositions\/(cmp_[^/]+)\//);
   return match?.[1];
 }

@@ -39,5 +39,6 @@ describe('file origin from provenance', () => {
   it('classifies OSINT and writing from provider/capability, not path', () => {
     expect(originFromProvenance([entry({ provider: 'atlas.osint', capability: 'osint' })])).toBe('result');
     expect(originFromProvenance([entry({ provider: 'atlas.writing', capability: 'writing' })])).toBe('generated');
+    expect(originFromProvenance([entry({ provider: 'atlas.music', capability: 'music' })])).toBe('generated');
   });
 });

@@ -526,6 +526,59 @@ export class FilesService {
     return this.persistence.forActor(scoped).attachments.detach(scoped, attachmentId);
   }
 
+  async createBinaryArtefact(
+    actor: PersistenceActor,
+    input: { projectId: string; bytes: Uint8Array; mimeType: string; type?: string; id?: string },
+  ): Promise<ArtefactMetadata> {
+    const scoped = this.scoped(actor, 'create binary artefact');
+    const workspace = await this.requireProject(scoped, input.projectId);
+    const mime = generatedMime(input.mimeType, input.bytes);
+    const put = await this.cas.put(input.bytes);
+    return this.persistence.run(async () => {
+      const bound = this.persistence.forActor(scoped);
+      await bound.casRefs.ensureObject(put.sha256, put.sizeBytes);
+      const artefact = await this.persistence.artefacts.record(scoped, {
+        id: input.id ?? `art_${randomUUID()}`,
+        workspaceId: workspace.id,
+        type: input.type ?? 'binary',
+        version: 1,
+        parentId: null,
+        contentHash: put.sha256,
+        mimeType: mime,
+        sizeBytes: put.sizeBytes,
+      });
+      await bound.casRefs.addRef(scoped, {
+        sha256: put.sha256,
+        workspaceId: workspace.id,
+        kind: 'artefact',
+        ownerId: artefact.id,
+      });
+      await bound.provenance.record({
+        artefactId: artefact.id,
+        projectId: workspace.id,
+        sourceInputs: [put.sha256],
+        inputManifestHash: workspace.rootManifestHash,
+        provider: 'atlas.files',
+        model: 'artefact.v1',
+        toolCalls: [],
+        jobId: null,
+        timestamp: this.clock(),
+        traceId: artefact.id,
+        capability: 'files.artefact',
+      });
+      return artefact;
+    });
+  }
+
+  async readArtefactBytes(actor: PersistenceActor, artefactId: string): Promise<Uint8Array> {
+    const scoped = this.scoped(actor, 'read artefact bytes');
+    const artefact = await this.persistence.artefacts.get(scoped, artefactId);
+    if (!artefact?.contentHash) throw new FilesAccessError(`Artefact ${artefactId} is not visible.`);
+    const allowed = await this.persistence.forActor(scoped).casRefs.hasTenantAccess(scoped, artefact.contentHash);
+    if (!allowed) throw new FilesAccessError('Fail-closed: hash does not grant artefact access.');
+    return this.readCas(artefact.contentHash);
+  }
+
   async createTextArtefact(
     actor: PersistenceActor,
     input: { projectId: string; text: string; type?: string; id?: string },
@@ -703,4 +756,23 @@ export class FilesService {
       capability: `files.${stage}`,
     };
   }
+}
+
+const GENERATED_MIME_TYPES = new Set(['audio/wav', 'audio/midi', 'application/json', 'text/plain']);
+
+function generatedMime(declared: string, bytes: Uint8Array): string {
+  const mime = declared.split(';')[0]?.trim().toLowerCase() ?? '';
+  if (!GENERATED_MIME_TYPES.has(mime)) {
+    throw new IngestionError(`Generated artefact MIME ${declared} is not permitted.`);
+  }
+  if (mime === 'audio/wav') {
+    const riff = bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46;
+    const wave = bytes.length >= 12 && bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45;
+    if (!riff || !wave) throw new IngestionError('Generated WAV failed RIFF/WAVE magic validation.');
+  }
+  if (mime === 'audio/midi') {
+    const mthd = bytes.length >= 4 && bytes[0] === 0x4d && bytes[1] === 0x54 && bytes[2] === 0x68 && bytes[3] === 0x64;
+    if (!mthd) throw new IngestionError('Generated MIDI failed MThd magic validation.');
+  }
+  return mime;
 }

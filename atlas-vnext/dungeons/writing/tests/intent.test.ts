@@ -10,6 +10,7 @@ import {
 describe('writing conversation classifier', () => {
   it('routes explicit writing asks', () => {
     expect(looksLikeWritingRequest('Write a 500-word scene about a lighthouse keeper hearing a voice from the fog.')).toBe(true);
+    expect(looksLikeWritingRequest('Write a musical scene about the harbour choir.')).toBe(true);
     expect(looksLikeWritingRequest('Draft chapter two of the harbour novel.')).toBe(true);
     expect(looksLikeWritingRequest('Refine this with Caspa Gold.')).toBe(true);
     expect(looksLikeGoldRequest('Give this chapter the full editorial pass.')).toBe(true);
@@ -26,6 +27,8 @@ describe('writing conversation classifier', () => {
     expect(looksLikeWritingRequest('Capability policy: Nexus decides WHERE\nCurrent document:\nWrite a scene')).toBe(false);
     expect(looksLikeWritingRequest('Build a website about a neighbourhood circus.')).toBe(false);
     expect(looksLikeWritingRequest('Write a website about cocoa tents.')).toBe(false);
+    expect(looksLikeWritingRequest('Write a song about rain')).toBe(false);
+    expect(looksLikeWritingRequest('Compose a 30-second piano piece in A minor, 90 BPM.')).toBe(false);
   });
 
   it('treats restrained-paragraph edits as follow-ups, not new manuscripts', () => {

@@ -102,6 +102,7 @@ export interface ProjectFile {
   projectId: string;
   origin?: 'uploaded' | 'generated' | 'result' | 'unknown';
   documentId?: string;
+  compositionId?: string;
 }
 
 export interface Citation {
@@ -931,6 +932,22 @@ export async function composeMusic(id: string): Promise<DungeonRecord> {
       body: '{}',
     }),
   );
+}
+
+export async function getComposition(id: string): Promise<DungeonRecord> {
+  return parseJson(await fetch(`/api/compositions/${encodeURIComponent(id)}`, { credentials: 'include' }));
+}
+
+export function compositionAuditionUrl(id: string): string {
+  return `/api/compositions/${encodeURIComponent(id)}/audition`;
+}
+
+export function compositionMidiUrl(id: string): string {
+  return `/api/compositions/${encodeURIComponent(id)}/midi`;
+}
+
+export function fileContentUrl(id: string): string {
+  return `/api/files/${encodeURIComponent(id)}/content`;
 }
 
 export async function getEffectivePolicy(dungeon?: string): Promise<EffectivePolicyView> {

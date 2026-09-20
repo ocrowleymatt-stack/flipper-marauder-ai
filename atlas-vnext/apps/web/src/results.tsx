@@ -1,6 +1,6 @@
 import type { DungeonRecord } from './api';
 
-export type ResultKind = 'osint' | 'research' | 'writing' | 'website';
+export type ResultKind = 'osint' | 'research' | 'writing' | 'website' | 'music';
 
 export interface ParsedFinding {
   id: string;
@@ -32,7 +32,9 @@ export interface ParsedResult {
   scanId?: string;
   documentId?: string;
   siteId?: string;
+  compositionId?: string;
   revision?: number;
+  durationSeconds?: number;
   qualityState?: string;
 }
 
@@ -56,6 +58,9 @@ export function classifyAssistantResult(text: string): ParsedResult | null {
   }
   if (/^Website:\s+/i.test(trimmed) || /^Site:\s+site_/im.test(trimmed)) {
     return parseWebsiteReport(trimmed);
+  }
+  if (/^Music:\s+/i.test(trimmed) || /^Composition:\s+cmp_/im.test(trimmed)) {
+    return parseMusicReport(trimmed);
   }
   return null;
 }
@@ -108,6 +113,29 @@ export function parseWebsiteReport(text: string): ParsedResult {
     errors: [],
     siteId,
     revision: Number.isFinite(revision) ? revision : undefined,
+  };
+}
+
+export function parseMusicReport(text: string): ParsedResult {
+  const title = matchLine(text, /^Music:\s*(.+)$/im) ?? 'Composition';
+  const compositionId = matchLine(text, /^Composition:\s*(.+)$/im) ?? undefined;
+  const revision = Number(matchLine(text, /^Revision:\s*(\d+)/im) ?? '0');
+  const status = matchLine(text, /^Status:\s*(.+)$/im) ?? 'playable';
+  const durationLine = matchLine(text, /^Duration:\s*([0-9.]+)s/im);
+  const tempo = matchLine(text, /^Tempo:\s*(.+)$/im);
+  const key = matchLine(text, /^Key:\s*(.+)$/im);
+  const durationSeconds = durationLine ? Number(durationLine) : undefined;
+  return {
+    kind: 'music',
+    headline: title,
+    state: `Revision ${Number.isFinite(revision) ? revision : 0} · ${status}`,
+    strongest: [tempo, key].filter(Boolean).join(' · ') || undefined,
+    findings: [],
+    sources: [],
+    errors: [],
+    compositionId,
+    revision: Number.isFinite(revision) ? revision : undefined,
+    durationSeconds: durationSeconds && Number.isFinite(durationSeconds) ? durationSeconds : undefined,
   };
 }
 

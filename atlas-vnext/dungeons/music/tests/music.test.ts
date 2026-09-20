@@ -237,6 +237,33 @@ describe('Music dungeon', () => {
       false,
     );
 
+    const circuitOpen = new Error(
+      'Execution failed for xai/grok-4.20-reason → xai/grok-4.6 → xai/grok-4.20-fast: Circuit open for xai.',
+    ) as Error & { code: string };
+    circuitOpen.code = 'provider_error';
+    const circuitMusic = new MusicService({
+      persistence: stack.persistence,
+      projects: stack.projects,
+      files: stack.files,
+      authority: stack.authority,
+      policy: stack.policy,
+      generate: {
+        async generateScore() {
+          throw circuitOpen;
+        },
+      },
+    });
+    const skipped = await circuitMusic.maybeRunFromConversation(stack.actor, {
+      conversationId: 'con_circuit_open',
+      projectId: stack.project.id,
+      question: 'Compose a 30-second piano piece in A minor, 90 BPM.',
+    });
+    expect(skipped.handled).toBe(true);
+    expect(skipped.failed).toBe(true);
+    expect(skipped.text).toMatch(/timed out/i);
+    expect(skipped.text).toMatch(/no playable audio/i);
+    expect(skipped.text).not.toMatch(/circuit open|provider_error|xai/i);
+
     fail = false;
     const recovered = await music.maybeRunFromConversation(stack.actor, {
       conversationId: 'con_timeout_recovered',

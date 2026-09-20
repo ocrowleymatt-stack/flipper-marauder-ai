@@ -106,13 +106,15 @@ export class ExecutionBroker {
       const breaker = this.breaker(provider);
       if (breaker.isOpen()) {
         attemptIndex += 1;
-        lastError = new Error(`Circuit open for ${provider}.`);
+        // Do not replace a timeout (or other failure) from earlier candidates.
+        // Later same-provider models skip HOW; the terminal error stays the cause.
+        lastError ??= new Error(`Circuit open for ${provider}.`);
         observer?.onAttempt({
           index: attemptIndex,
           provider,
           model,
           outcome: 'skipped',
-          error: failure('circuit_open', lastError.message, true),
+          error: failure('circuit_open', `Circuit open for ${provider}.`, true),
           emittedVisibleOutput: false,
         });
         continue;

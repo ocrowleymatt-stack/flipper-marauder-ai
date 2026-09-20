@@ -441,7 +441,11 @@ export class MusicService {
         throw new MusicError('invalid_score', 'The model declined this brief. No audio was stored.', 400);
       }
       const message = err instanceof Error ? err.message : String(err);
-      if (code === 'timeout' || /timed out after|\btimeout\b|etimedout/i.test(message)) {
+      if (
+        code === 'timeout' ||
+        code === 'circuit_open' ||
+        /timed out after|\btimeout\b|etimedout|circuit open/i.test(message)
+      ) {
         throw new MusicError(
           'timeout',
           'Music score generation timed out. No playable audio was stored.',

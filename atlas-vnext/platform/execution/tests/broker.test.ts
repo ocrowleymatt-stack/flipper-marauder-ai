@@ -401,4 +401,23 @@ describe('Execution broker (transport, retry, streaming)', () => {
     }).rejects.toThrow(/Circuit open for xai/);
     expect(health.some((entry) => entry.detail === 'circuit_open')).toBe(false);
   });
+
+  it('preserves an earlier timeout when later same-provider candidates skip an open circuit', async () => {
+    const broker = new ExecutionBroker(2);
+    broker.register({
+      providerId: 'xai',
+      async *stream() {
+        throw new Error('Request timed out after 60000ms.');
+      },
+    });
+    await expect(async () => {
+      for await (const _chunk of broker.execute(
+        decision(['xai/grok-4.20-reason', 'xai/grok-4.6', 'xai/grok-4.20-fast']),
+        { prompt: 'compose a score' },
+      )) {
+        // drain
+      }
+    }).rejects.toThrow(/timed out after 60000ms/);
+    expect(broker.breaker('xai').isOpen()).toBe(true);
+  });
 });

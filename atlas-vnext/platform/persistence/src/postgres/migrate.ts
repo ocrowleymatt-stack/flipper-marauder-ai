@@ -15,7 +15,7 @@ export interface MigrationFile {
   checksum: string;
 }
 
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 /**
  * Session-level lock shared by every Atlas process on this database.
@@ -48,19 +48,7 @@ export function loadMigrations(dir = defaultMigrationsDir()): MigrationFile[] {
       throw new MigrationError(`Invalid migration filename ${filename}`);
     }
     const sql = readFileSync(join(dir, filename), 'utf8');
-    loaded.push({
-      version,
-      name: filename.replace(/\.sql$/, ''),
-      filename,
-      sql,
-      checksum: checksumSql(sql),
-    });
-  }
-  for (let i = 0; i < loaded.length; i += 1) {
-    const expected = i + 1;
-    if (loaded[i]?.version !== expected) {
-      throw new MigrationError(`Migrations must be contiguous from 1; expected ${expected}, got ${String(loaded[i]?.version)}`);
-    }
+    loaded.push({ version, name: filename.replace(/^\d+_/, '').replace(/\.sql$/, ''), filename, sql, checksum: checksumSql(sql) });
   }
   return loaded;
 }
@@ -69,113 +57,35 @@ export function checksumSql(sql: string): string {
   return createHash('sha256').update(sql).digest('hex');
 }
 
-export async function migrate(poolOrClient: pg.Pool | pg.PoolClient, migrations = loadMigrations()): Promise<{
-  applied: number[];
-  skipped: number[];
-}> {
-  const ownsClient = isPool(poolOrClient);
-  const client = ownsClient ? await poolOrClient.connect() : poolOrClient;
-  try {
-    return await migrateOnClient(client, migrations);
-  } finally {
-    if (ownsClient) client.release();
-  }
-}
-
-function isPool(value: pg.Pool | pg.PoolClient): value is pg.Pool {
-  return 'totalCount' in value;
-}
-
-async function migrateOnClient(client: pg.PoolClient, migrations: MigrationFile[]): Promise<{
-  applied: number[];
-  skipped: number[];
-}> {
-  logPlatform('migration.start', { count: migrations.length });
-  return withPostgresDdlLock(client, () => migrateWhileLocked(client, migrations));
-}
-
-async function migrateWhileLocked(client: pg.PoolClient, migrations: MigrationFile[]): Promise<{
-  applied: number[];
-  skipped: number[];
-}> {
-  try {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        checksum TEXT NOT NULL
-      )
-    `);
-    const appliedRows = await client.query<{ version: number; checksum: string; name: string }>(
-      'SELECT version, checksum, name FROM schema_migrations ORDER BY version',
-    );
-    const appliedMap = new Map(appliedRows.rows.map((row) => [Number(row.version), row]));
-    const applied: number[] = [];
-    const skipped: number[] = [];
-
+export async function migrate(client: pg.PoolClient, migrations = loadMigrations()): Promise<{ applied: number[]; skipped: number[] }> {
+  const applied: number[] = [];
+  const skipped: number[] = [];
+  await withPostgresDdlLock(client, async () => {
+    await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      checksum TEXT NOT NULL
+    )`);
     for (const migration of migrations) {
-      const existing = appliedMap.get(migration.version);
-      if (existing) {
-        if (existing.checksum !== migration.checksum) {
-          throw new MigrationError(
-            `Migration ${migration.version} checksum mismatch; refusing to mutate an applied schema.`,
-            migration.version,
-          );
-        }
+      const existing = await client.query<{ checksum: string }>('SELECT checksum FROM schema_migrations WHERE version = $1', [migration.version]);
+      if (existing.rowCount) {
+        if (existing.rows[0]?.checksum !== migration.checksum) throw new MigrationError(`Migration ${migration.version} checksum mismatch`);
         skipped.push(migration.version);
         continue;
       }
+      await client.query('BEGIN');
       try {
-        await client.query('BEGIN');
         await client.query(migration.sql);
-        await client.query(
-          'INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, $2, $3)',
-          [migration.version, migration.name, migration.checksum],
-        );
+        await client.query('INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, $2, $3)', [migration.version, migration.name, migration.checksum]);
         await client.query('COMMIT');
         applied.push(migration.version);
-        logPlatform('migration.success', { version: migration.version, name: migration.name });
-      } catch (err) {
-        try {
-          await client.query('ROLLBACK');
-        } catch {
-          // ignore
-        }
-        logPlatform(
-          'migration.failure',
-          {
-            version: migration.version,
-            name: migration.name,
-            error: err instanceof Error ? err.message : String(err),
-          },
-          'error',
-        );
-        throw new MigrationError(
-          `Migration ${migration.version} (${migration.name}) failed: ${err instanceof Error ? err.message : String(err)}`,
-          migration.version,
-        );
+        logPlatform('info', 'persistence.migration.applied', { version: migration.version, name: migration.name });
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
       }
     }
-    return { applied, skipped };
-  } catch (err) {
-    if (err instanceof MigrationError) throw err;
-    logPlatform('migration.failure', { error: err instanceof Error ? err.message : String(err) }, 'error');
-    throw err;
-  }
-}
-
-export async function ensureSchema(client: pg.Pool | pg.PoolClient, schema: string): Promise<void> {
-  const ident = assertIdent(schema);
-  const sql = `CREATE SCHEMA IF NOT EXISTS ${ident}`;
-  if (isPool(client)) {
-    const leased = await client.connect();
-    try {
-      await withPostgresDdlLock(leased, () => leased.query(sql));
-    } finally {
-      leased.release();
-    }
-    return;
-  }
-  await withPostgresDdlLock(client, () => client.query(sql));
+  });
+  return { applied, skipped };
 }

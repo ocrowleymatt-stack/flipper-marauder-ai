@@ -14,14 +14,14 @@ CREATE TABLE IF NOT EXISTS intelligence_cases (
 );
 CREATE INDEX IF NOT EXISTS intelligence_cases_scope_idx ON intelligence_cases(tenant_id, workspace_id);
 
--- Sources point at canonical Atlas artefacts/CAS where available. external_ref remains
+-- Sources point at canonical Atlas artefact metadata/CAS where available. external_ref remains
 -- for web/API evidence which has not yet been materialised into an artefact.
 CREATE TABLE IF NOT EXISTS intelligence_sources (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
   workspace_id TEXT NOT NULL REFERENCES workspaces(id),
   case_id TEXT REFERENCES intelligence_cases(id) ON DELETE CASCADE,
-  artefact_id TEXT REFERENCES artefacts(id) ON DELETE SET NULL,
+  artefact_id TEXT REFERENCES artefact_metadata(id) ON DELETE SET NULL,
   source_type TEXT NOT NULL,
   title TEXT NOT NULL,
   content_hash TEXT,
